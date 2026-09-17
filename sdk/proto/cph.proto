@@ -1,0 +1,351 @@
+syntax = "proto3";
+
+package cph.v1;
+
+option go_package = "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1;cphv1";
+
+// ============================================================
+// ClawProxyHub 插件契约 v1
+//
+// 本文件是核心与插件之间的唯一耦合点。核心不依赖任何具体插件，
+// 插件只实现本契约。protocol_version 由核心与插件双方在握手时
+// 校验，不一致直接拒载。
+// ============================================================
+
+// ---------- 通用 ----------
+
+message Empty {}
+
+message Error {
+  int32 code = 1;      // 业务错误码，0 之外均为错误
+  string message = 2;  // 人类可读错误信息
+  bool retryable = 3;  // 核心可据此决定是否重试
+}
+
+// ---------- Manifest 与握手 ----------
+
+message Manifest {
+  string name = 1;             // 插件 id，唯一，如 "lobsterai"
+  string version = 2;          // 插件语义化版本
+  string author = 3;
+  map<string, string> label = 4;   // 多语言展示名，如 {"zh": "...", "en": "..."}
+  string icon = 5;             // 图标（包内相对路径，核心提供 HTTP 透出）
+  string min_core_version = 6; // 最低核心版本要求
+  int32 protocol_version = 7;  // 本契约版本，必须与核心一致
+  string settings_schema = 8;  // JSON Schema 字符串，仪表盘动态渲染设置表单
+  repeated string capabilities = 9; // 声明支持的能力: account/login/refresh/models/chat/tasks
+  repeated AuthMethod auth_methods = 10; // 支持的授权登录方式
+  // 插件可处理的对外端点方言。网关把任意协议入口归一化为统一信封后投递；
+  // 声明之外的端点入口会被网关拒绝。空 = chat_completions + messages。
+  repeated string endpoints = 11;
+}
+
+message HandshakeRequest {
+  string core_version = 1;
+  int32 protocol_version = 2;
+}
+
+message HandshakeResponse {
+  Error error = 1;
+  Manifest manifest = 2;
+}
+
+// ---------- 授权方式（插件声明，核心动态渲染，不硬编码任何一种） ----------
+
+// AuthField 登录表单的一个字段。
+message AuthField {
+  string name = 1;                 // 字段名（提交时的 key）
+  map<string, string> label = 2;   // 多语言标签
+  string type = 3;                 // text / password / textarea / file / phone
+  bool required = 4;
+  string placeholder = 5;
+}
+
+// AuthMethod 一种授权登录方式及其能力。
+message AuthMethod {
+  string id = 1;                   // auth_file / oauth / api_key / password / phone_otp ...
+  map<string, string> label = 2;
+  repeated AuthField fields = 3;   // 表单字段（前端据此渲染）
+  repeated string capabilities = 4; // refreshable / auto_relogin / profile
+  // 浏览器授权的回调形态，前端据此决定渲染与轮询：
+  //   auto      — 插件自动接收回调，前端只轮询，不显示输入框
+  //   wait      — 用户手动粘贴回调地址（服务器部署）
+  //   auto_wait — 前端检测管理界面是否本机访问：本机按 auto，否则按 wait
+  // 空 = 按 next.wait + next.fields 推断（wait 且有 fields 显示输入框）
+  string callback = 5;
+}
+
+// ---------- 账号（凭据由核心代管，插件只处理 opaque blob） ----------
+
+message CredentialBlob {
+  string account_id = 1;   // 核心侧账号 id
+  bytes blob = 2;          // 凭据内容，格式由插件自定义，核心不解析
+  int64 updated_at = 3;    // 凭据最后刷新时间（Unix 秒）
+  ProxyConfig proxy = 4;   // 账号所属分组的出站代理（无绑定为 nil）
+}
+
+message LoginRequest {
+  string method_id = 1;           // 使用的授权方式
+  map<string, string> form = 2;   // 本步表单值
+  bytes state = 3;                // 多步登录状态（插件签发，原样回传）
+}
+
+// LoginNextStep 登录未完成时插件指示的下一步。
+message LoginNextStep {
+  string action = 1;              // open_url（浏览器登录）/ input_form（再填表单）
+  string url = 2;                 // open_url 时的登录链接
+  map<string, string> prompt = 3; // 指引文案（如"登录后把跳转地址粘贴回来"）
+  repeated AuthField fields = 4;  // input_form 时下一步的表单字段
+  bytes state = 5;                // 继续下一步时要回传的状态
+  bool wait = 6;                  // true = 插件侧自动接收回调，前端轮询提交直至完成
+}
+
+message LoginResult {
+  Error error = 1;
+  // 登录完成：凭据入库
+  bytes blob = 2;
+  AccountProfile profile = 3;
+  // 登录未完成：渲染下一步（url 或表单）
+  LoginNextStep next = 4;
+}
+
+message AccountProfile {
+  string display_name = 1;  // 脱敏后的展示名
+  // 额度信息，由插件把上游格式转换为数字字符串。
+  // 标准键：credits（剩余积分）/ total_credits（总积分）/ used_credits（已用积分）；
+  // 非标准键原样透传，前端作为原始信息展示。
+  map<string, string> quota = 2;
+  bool healthy = 3;
+  // 积分明细快照（可选，由插件从上游解析）：{"total","used","remaining","packages":[...]}，
+  // 十进制字符串防精度丢失；核心持久化到 accounts.credits_json，读取只走库不请求上游。
+  string credits_json = 4;
+  // 动态渲染块（可选，与设置弹窗/授权方式的协议化渲染对称）：
+  // 插件声明（签到状态 / 成长计划明细 / 积分包…），不定义即不渲染；
+  // 核心随 profile_json 持久化，详情页主框架通用渲染（entries→descriptions，items→表格）。
+  repeated ProfileSection sections = 5;
+}
+
+// ProfileSection 详情页动态块。
+message ProfileSection {
+  string id = 1;                        // 块标识（如 checkin / growth_tasks / packages）
+  map<string, string> title = 2;        // 块标题（多语言）
+  repeated SectionEntry entries = 3;    // KV 行（descriptions 渲染）
+  repeated SectionColumn columns = 4;   // 表格列（items 非空时声明）
+  repeated SectionRow items = 5;        // 表格行：列 key → 单元格值
+}
+
+// SectionEntry descriptions 行。
+message SectionEntry {
+  map<string, string> label = 1; // 字段名（多语言）
+  string value = 2;              // 值
+  string kind = 3;               // text / status（status 由前端渲染徽章）
+}
+
+// SectionColumn 表格列。
+message SectionColumn {
+  string key = 1;                // 列 key（对应 items 单元格）
+  map<string, string> title = 2; // 列标题（多语言）
+  string kind = 3;               // text / status
+}
+
+// SectionRow 表格行：列 key → 单元格值（string = 值，"status:" 前缀 = 徽章值）。
+message SectionRow {
+  map<string, string> cells = 1;
+}
+
+message RefreshResult {
+  Error error = 1;
+  bytes blob = 2;           // 刷新后的凭据；为空表示无需变更
+  AccountProfile profile = 3;
+}
+
+// ---------- 模型目录 ----------
+
+message ModelInfo {
+  string id = 1;
+  map<string, string> label = 2;
+  int32 context_window = 3;
+  bool supports_tools = 4;
+  bool supports_stream = 5;
+}
+
+message ModelList {
+  Error error = 1;
+  repeated ModelInfo models = 2;
+}
+
+// ---------- 统一信封：Chat ----------
+
+// 核心将 OpenAI/Anthropic/Responses 三协议归一化后的请求信封。
+// 插件负责把信封转换成上游方言并回吐事件流。
+message ChatRequest {
+  string model = 1;             // 客户端请求的模型 id
+  repeated EnvelopeMessage messages = 2;
+  repeated ToolDefinition tools = 3;
+  ToolChoice tool_choice = 4;
+  bool stream = 5;
+  double temperature = 6;
+  int32 max_tokens = 7;
+  map<string, string> extra = 8; // 协议特有透传字段
+  CredentialBlob credential = 9; // 核心选中的账号凭据，nil 表示无凭据直调
+  string source = 10;            // 客户端进入网关的协议: messages / chat_completions / responses
+}
+
+message EnvelopeMessage {
+  string role = 1;              // system / user / assistant / tool
+  string text = 2;              // 文本内容（content block type=text 的拼接）
+  repeated ToolCall tool_calls = 3; // assistant 消息携带的工具调用
+  string tool_call_id = 4;      // role=tool 时的调用 id
+  bytes raw = 5;                // 原始消息 JSON，插件需要细节时自取
+}
+
+message ToolDefinition {
+  string name = 1;
+  string description = 2;
+  string parameters_schema = 3; // JSON Schema 字符串
+}
+
+message ToolChoice {
+  string type = 1;    // "auto" / "none" / "tool"
+  string tool_name = 2;
+}
+
+message ToolCall {
+  string id = 1;
+  string name = 2;
+  string arguments = 3; // JSON 字符串
+}
+
+// 插件回吐的统一事件流。核心负责转换回各协议的 SSE 格式。
+message StreamEvent {
+  oneof event {
+    MessageStart message_start = 1;
+    ContentDelta content_delta = 2;
+    ToolCallDelta tool_call_delta = 3;
+    MessageFinish message_finish = 4;
+    TaskFailed task_failed = 5;
+  }
+}
+
+message MessageStart {
+  string model = 1;   // 实际使用的上游模型
+}
+
+message ContentDelta {
+  string text = 1;    // 增量文本
+}
+
+message ToolCallDelta {
+  string id = 1;
+  string name = 2;
+  string arguments_delta = 3;
+}
+
+message Usage {
+  int64 input_tokens = 1;
+  int64 output_tokens = 2;
+  int64 cached_tokens = 3; // 命中缓存的输入 token（上游有透出时上报）
+}
+
+message MessageFinish {
+  string finish_reason = 1; // stop / tool_calls / length / content_filter
+  Usage usage = 2;
+}
+
+message TaskFailed {
+  Error error = 1;
+}
+
+// ---------- 任务调度（核心管"何时"，插件管"做什么"） ----------
+
+message TaskCapability {
+  string id = 1;          // 如 "checkin"
+  map<string, string> label = 2;
+  string kind = 3;        // once / recurring / both
+  bool per_account = 4;   // 是否按账号逐个执行
+  string default_schedule = 5; // 推荐调度（如 "daily 09:00"），装插件时预填
+}
+
+message TaskCapabilities {
+  repeated TaskCapability capabilities = 1;
+}
+
+message RunTaskRequest {
+  string capability_id = 1;
+  CredentialBlob credential = 2;    // per_account 时逐账号注入
+  map<string, string> context = 3;  // 上次执行摘要等上下文
+}
+
+message RunTaskResponse {
+  Error error = 1;
+  bool changed = 2;                // 是否产生了凭据变更（如 token 刷新）
+  bytes blob = 3;                  // 变更后的凭据，核心代存
+  string summary = 4;              // 执行摘要，写执行历史
+  string detail_json = 5;          // 结构化明细快照（如成长任务列表），核心持久化到 task_runs.detail_json
+}
+
+// ---------- 宿主能力（反向：插件调用核心） ----------
+
+message LogEntry {
+  string level = 1;   // debug / info / warn / error
+  string message = 2;
+  map<string, string> fields = 3;
+}
+
+message GetProxyRequest {
+  string group_id = 1; // 插件按账号所属分组取代理配置
+}
+
+message ProxyConfig {
+  string scheme = 1;   // http / https / socks5
+  string host = 2;
+  int32 port = 3;
+  string username = 4;
+  string password = 5;
+}
+
+message StoreGetRequest { string key = 1; }
+message StoreGetResponse { bytes value = 1; bool found = 2; }
+message StorePutRequest { string key = 1; bytes value = 2; }
+
+// 插件设置（核心管理界面在线编辑，存 plugins.settings_json）
+message GetSettingsRequest {
+  string plugin = 1; // 插件 id（插件侧调用时自带）
+}
+message GetSettingsResponse {
+  bytes values = 1; // JSON 对象，结构由 manifest.settings_schema 定义
+}
+
+// ============================================================
+// 服务定义
+// ============================================================
+
+// ClawPlugin —— 核心作为 gRPC 客户端调用插件（go-plugin 子进程模型）
+service ClawPlugin {
+  // 安装/启动握手：协议版本校验 + 获取 Manifest
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  // 账号能力
+  rpc Login(LoginRequest) returns (LoginResult);
+  rpc Refresh(CredentialBlob) returns (RefreshResult);
+  rpc GetProfile(CredentialBlob) returns (AccountProfile);
+  // 模型目录
+  rpc ListModels(CredentialBlob) returns (ModelList);
+  // 核心链路：统一信封进，事件流出
+  rpc Chat(ChatRequest) returns (stream StreamEvent);
+  // 任务能力（核心调度触发时调用）
+  rpc ListTaskCapabilities(Empty) returns (TaskCapabilities);
+  rpc RunTask(RunTaskRequest) returns (RunTaskResponse);
+}
+
+// ClawHost —— 插件作为 gRPC 客户端反向调用核心（回调注入）
+service ClawHost {
+  // 统一日志管道
+  rpc Log(LogEntry) returns (Empty);
+  // 状态读写（凭据之外的小状态，凭据经 RPC 返回值流转）
+  rpc StoreGet(StoreGetRequest) returns (StoreGetResponse);
+  rpc StorePut(StorePutRequest) returns (Empty);
+  // 按分组取代理
+  rpc GetProxy(GetProxyRequest) returns (ProxyConfig);
+  // 读插件设置（核心管理界面保存后即时生效）
+  rpc GetSettings(GetSettingsRequest) returns (GetSettingsResponse);
+}
