@@ -1,0 +1,123 @@
+/* 明暗双主题变量（核心色自定义，结构沿用 TDesign 变量约定） */
+:root,
+:root[theme-mode='light'] {
+  --cph-brand-1: #e8f0ff;
+  --cph-brand-2: #b8ccff;
+  --cph-brand-3: #7fa7ff;
+  --cph-brand-4: #4c7dff;
+  --cph-brand-5: #3563e8;
+  --cph-brand-6: #2a4fc4;
+  --cph-brand-7: #1f3d9c;
+  --cph-brand-8: #162d75;
+  --cph-brand-9: #0f1f52;
+  --cph-brand-10: #0a1440;
+
+  --td-brand-color: var(--cph-brand-4);
+  --td-brand-color-1: var(--cph-brand-1);
+  --td-brand-color-2: var(--cph-brand-2);
+  --td-brand-color-3: var(--cph-brand-3);
+  --td-brand-color-4: var(--cph-brand-4);
+  --td-brand-color-5: var(--cph-brand-5);
+  --td-brand-color-6: var(--cph-brand-6);
+  --td-brand-color-7: var(--cph-brand-7);
+  --td-brand-color-8: var(--cph-brand-8);
+  --td-brand-color-9: var(--cph-brand-9);
+  --td-brand-color-10: var(--cph-brand-10);
+  --td-brand-color-hover: var(--cph-brand-5);
+  --td-brand-color-active: var(--cph-brand-6);
+  --td-brand-color-focus: var(--cph-brand-2);
+  --td-brand-color-light: var(--cph-brand-1);
+  --td-brand-color-disabled: var(--cph-brand-3);
+
+  /* 页面背景基调（明色淡蓝灰） */
+  --cph-bg-tint: #f2f6ff;
+}
+
+:root[theme-mode='dark'] {
+  --td-brand-color: var(--cph-brand-5);
+  --td-brand-color-1: #1a2440;
+  --td-brand-color-2: #22305c;
+  --td-brand-color-3: #2a3d7a;
+  --td-brand-color-4: #3563e8;
+  --td-brand-color-5: #4c7dff;
+  --td-brand-color-6: #7fa7ff;
+  --td-brand-color-7: #b8ccff;
+  --td-brand-color-8: #d6e2ff;
+  --td-brand-color-9: #eaf1ff;
+  --td-brand-color-10: #f5f8ff;
+  --td-brand-color-hover: var(--cph-brand-4);
+  --td-brand-color-active: var(--cph-brand-6);
+  --td-brand-color-focus: var(--cph-brand-3);
+  --td-brand-color-light: var(--cph-brand-1);
+  --td-brand-color-disabled: var(--cph-brand-3);
+
+  /* 页面背景基调（暗色深蓝黑） */
+  --cph-bg-tint: #141a2e;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+/* 全局隐藏滚动条（滚动照常，仅不显示滚动条） */
+* {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/旧 Edge */
+}
+*::-webkit-scrollbar {
+  display: none; /* WebKit */
+}
+
+.page {
+  padding: 24px 28px 32px;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+/* 页面背景：明色淡蓝灰 / 暗色深蓝黑，与品牌色呼应 */
+.t-layout__content {
+  background: linear-gradient(180deg, var(--cph-bg-tint), var(--td-bg-color-page) 240px);
+}
+
+/* 卡片统一质感：圆角 + 悬浮上浮 */
+.t-card {
+  border-radius: 12px;
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+.t-card:hover {
+  box-shadow: var(--td-shadow-1);
+}
+.t-card .t-card__header {
+  font-weight: 600;
+}
+
+/* 顶栏：毛玻璃 + 底部细分割线 */
+.t-layout__header {
+  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--td-bg-color-container) 80%, transparent);
+  border-bottom: 1px solid var(--td-component-border);
+}
+
+/* 菜单图标：选中态发散光晕 */
+.t-menu__item.t-is-active .t-icon {
+  filter: drop-shadow(0 0 6px var(--td-brand-color-3));
+}
+
+/* 提示条缩小字号，避免喧宾夺主 */
+.t-alert .t-alert__message {
+  font-size: 12px;
+}
