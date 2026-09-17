@@ -34,7 +34,7 @@
       </template>
     </t-table>
 
-    <t-dialog v-model:visible="dialogVisible" :header="editingID ? $t('routes.editTitle') : $t('routes.create')" width="680px" :confirm-btn="{ loading: saving }" @confirm="save">
+    <t-dialog v-model:visible="dialogVisible" :header="editingID ? $t('routes.editTitle') : $t('routes.create')" width="760px" :confirm-btn="{ loading: saving }" @confirm="save">
       <t-form label-width="90px">
         <t-form-item :label="$t('routes.name')" mark>
           <t-input v-model="form.name" :placeholder="$t('routes.namePh')" />
@@ -57,7 +57,7 @@
               <t-input-number v-model="e.weight" :min="1" :max="100" theme="column" style="width: 110px" :placeholder="$t('routes.weightPh')" />
               <t-link theme="danger" @click="form.groups.splice(i, 1)">{{ $t('routes.removeEntry') }}</t-link>
             </div>
-            <t-link theme="primary" @click="form.groups.push({ group_id: 0, weight: 100, model: '' })">{{ $t('routes.addGroup') }}</t-link>
+            <t-link theme="primary" @click="form.groups.push({ group_id: null, weight: 100, model: '' })">{{ $t('routes.addGroup') }}</t-link>
           </div>
         </t-form-item>
         <t-form-item :label="$t('routes.timeout')">
@@ -107,7 +107,7 @@ const editingID = ref(0)
 const form = reactive({
   name: '',
   strategy: 'round_robin',
-  groups: [{ group_id: 0, weight: 100, model: '' }] as RouteGroupEntry[],
+  groups: [{ group_id: undefined, weight: 100, model: '' }] as RouteGroupEntry[],
   timeout_seconds: 0,
   failover_enabled: false,
   failover_codes: [] as string[],
@@ -148,7 +148,7 @@ function openCreate() {
   editingID.value = 0
   Object.assign(form, {
     name: '', strategy: 'round_robin',
-    groups: [{ group_id: 0, weight: 100, model: '' }],
+    groups: [{ group_id: null, weight: 100, model: '' }],
     timeout_seconds: 0, failover_enabled: false, failover_codes: [], failover_group_id: null, failover_model: '',
   })
   dialogVisible.value = true
@@ -159,7 +159,7 @@ function openEdit(row: RouteInfo) {
   Object.assign(form, {
     name: row.Name,
     strategy: row.Strategy,
-    groups: parseGroups(row.GroupsJSON).length ? parseGroups(row.GroupsJSON) : [{ group_id: 0, weight: 100, model: '' }],
+    groups: parseGroups(row.GroupsJSON).length ? parseGroups(row.GroupsJSON) : [{ group_id: null, weight: 100, model: '' }],
     timeout_seconds: row.TimeoutSeconds,
     failover_enabled: row.FailoverEnabled,
     failover_codes: [row.FailoverOn4xx && '4xx', row.FailoverOn5xx && '5xx'].filter(Boolean) as string[],

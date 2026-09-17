@@ -8,15 +8,15 @@ Claw 类客户端（LobsterAI / WorkBuddy 等）的统一管理反代网关：�
 客户端（Claude Code / Codex CLI / Cherry Studio ...）
    │  /v1/messages · /v1/chat/completions · /v1/responses
    ▼
-┌─ ClawProxyHub 核心（单二进制，内嵌仪表盘）──────────────┐
-│  网关：三协议归一化 → 统一信封（自动协议转换）           │
-│  路由：对外模型别名 → 分组（权重+真实模型映射）→ 账号     │
-│       策略：round_robin / random / least_used / sticky   │
-│  账号：多步登录 / 刷新 / 401 自动续期与换号 / 分组代理出站 │
-│  任务：interval / daily / once 调度（签到等维护任务）     │
-│  存储：SQLite（golang-migrate 启动自动迁移）             │
-│  市场：index.json 索引 → 下载 .cphplugin → 校验 → 安装    │
-└────────────┬──────────────────────────────────────┘
+┌─ ClawProxyHub 核心（单二进制，内嵌仪表盘）───────────────────┐
+│  网关：三协议归一化 → 统一信封（自动协议转换）               │
+│  路由：对外模型别名 → 分组（权重+真实模型映射）→ 账号        │
+│       策略：round_robin / random / least_used / sticky       │
+│  账号：多步登录 / 刷新 / 401 自动续期与换号 / 分组代理出站   │
+│  任务：interval / daily / once 调度（签到等维护任务）        │
+│  存储：SQLite（golang-migrate 启动自动迁移）                 │
+│  市场：index.json 索引 → 下载 .cphplugin → 校验 → 安装       │
+└────────────┬─────────────────────────────────────────────────┘
              │ hashicorp/go-plugin（子进程 gRPC）
    ┌─────────┴─────────┐
    ▼                   ▼
@@ -94,6 +94,10 @@ sdk/             插件开发工具包（契约生成代码 + 上游适配器）
 examples/stub    演示插件（开发参照）
 web/             仪表盘（Vue3 + TDesign，go:embed 嵌入）
 ```
+
+## 社区
+
+Linux DO: [学AI上L站](https://linux.do)
 
 ## 许可证
 

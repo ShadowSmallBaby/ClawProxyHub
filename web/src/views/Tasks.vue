@@ -51,10 +51,10 @@
       </t-tab-panel>
     </t-tabs>
 
-    <t-dialog v-model:visible="createVisible" :header="$t('tasks.createTitle')" :confirm-btn="{ loading: creating }" @confirm="create">
+    <t-dialog v-model:visible="createVisible" :header="$t('tasks.createTitle')" width="560px" :confirm-btn="{ loading: creating }" @confirm="create">
       <t-form label-width="90px">
         <t-form-item :label="$t('tasks.plugin')" mark>
-          <t-select v-model="form.plugin_id" @change="onPluginChange">
+          <t-select v-model="form.plugin_id" :placeholder="$t('tasks.pluginPh')" @change="onPluginChange">
             <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
           </t-select>
         </t-form-item>
@@ -64,14 +64,27 @@
           </t-select>
         </t-form-item>
         <t-form-item :label="$t('tasks.trigger')" mark>
-          <t-space>
-            <t-select v-model="form.trigger_type" style="width: 110px">
-              <t-option value="interval" :label="$t('tasks.triggerInterval')" />
-              <t-option value="daily" :label="$t('tasks.triggerDaily')" />
-              <t-option value="once" :label="$t('tasks.triggerOnce')" />
-            </t-select>
-            <t-input v-model="form.trigger_value" :placeholder="triggerHint" style="width: 200px" />
-          </t-space>
+          <div class="trigger-box">
+            <div class="trigger-row">
+              <t-select v-model="form.trigger_type" style="width: 110px" :placeholder="$t('tasks.triggerPh')">
+                <t-option value="interval" :label="$t('tasks.triggerInterval')" />
+                <t-option value="daily" :label="$t('tasks.triggerDaily')" />
+                <t-option value="once" :label="$t('tasks.triggerOnce')" />
+              </t-select>
+              <t-date-picker
+                v-if="form.trigger_type === 'once'"
+                v-model="form.trigger_value"
+                class="trigger-value"
+                enable-time-picker
+                allow-input
+                clearable
+                format="YYYY-MM-DD HH:mm"
+                :placeholder="$t('tasks.pickTime')"
+              />
+              <t-input v-else v-model="form.trigger_value" class="trigger-value" :placeholder="triggerPh" />
+            </div>
+            <div class="trigger-hint">{{ triggerHint }}</div>
+          </div>
         </t-form-item>
         <t-form-item :label="$t('tasks.scope')">
           <t-radio-group v-model="form.target_scope" variant="default-filled">
@@ -150,7 +163,7 @@ const ruleColumns = computed(() => [
   { colKey: 'plugin', title: t('tasks.plugin'), width: 130 },
   { colKey: 'capability', title: t('tasks.colTask'), align: 'center' },
   { colKey: 'trigger', title: t('tasks.colTrigger'), width: 100, align: 'center' },
-  { colKey: 'trigger_value', title: t('tasks.colTriggerValue'), width: 120, align: 'center' },
+  { colKey: 'trigger_value', title: t('tasks.colTriggerValue'), width: 150, align: 'center', cell: (_h: any, { row }: any) => fmtTriggerValue(row) },
   { colKey: 'accounts', title: t('tasks.colAccounts'), width: 160, align: 'center' },
   { colKey: 'enabled', title: t('tasks.colStatus'), width: 90, align: 'center' },
   { colKey: 'op', title: t('common.colOp'), width: 190, align: 'center' },
@@ -171,11 +184,36 @@ const runColumns = computed(() => [
   { colKey: 'started_at', title: t('common.colTime'), width: 190, cell: (_h: any, { row }: any) => row.started_at?.replace('T', ' ').slice(0, 19) ?? '-', align: 'center' },
 ])
 
+// 触发值输入框 placeholder（短示例）；once 走日期时间选择器，格式说明在行下方
+const triggerPh = computed(() => ({
+  interval: '1h',
+  daily: '09:00',
+}[form.trigger_type] ?? ''))
 const triggerHint = computed(() => ({
   interval: t('tasks.hintInterval'),
   daily: t('tasks.hintDaily'),
   once: t('tasks.hintOnce'),
 }[form.trigger_type] ?? ''))
+
+// "2026-10-01 12:10" → 本地时区 RFC3339（后端按 RFC3339 计算下次触发）
+function onceToRFC3339(v: string): string {
+  const m = v.trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/)
+  if (!m) return v
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6] ?? 0))
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const off = -d.getTimezoneOffset()
+  const a = Math.abs(off)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${off >= 0 ? '+' : '-'}${pad(Math.floor(a / 60))}:${pad(a % 60)}`
+}
+
+// 列表展示：once 的 RFC3339 转回本地 "YYYY-MM-DD HH:mm"
+function fmtTriggerValue(row: TaskRule): string {
+  if (row.trigger_type !== 'once') return row.trigger_value
+  const d = new Date(row.trigger_value)
+  if (isNaN(d.getTime())) return row.trigger_value
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
 
 async function load() {
   const [r, rn, p] = await Promise.all([
@@ -193,13 +231,21 @@ async function create() {
     MessagePlugin.warning(t('tasks.errForm'))
     return
   }
+  if (form.trigger_type === 'once' && !form.trigger_value) {
+    MessagePlugin.warning(t('tasks.errTrigger'))
+    return
+  }
   if (form.target_scope === 'account_ids' && !form.target_account) {
     MessagePlugin.warning(t('tasks.errAccount'))
     return
   }
   creating.value = true
   try {
-    const payload: Record<string, any> = { ...form, target_account: undefined }
+    const payload: Record<string, any> = {
+      ...form,
+      target_account: undefined,
+      trigger_value: form.trigger_type === 'once' ? onceToRFC3339(form.trigger_value) : form.trigger_value,
+    }
     if (form.target_scope === 'account_ids') {
       payload.target_json = JSON.stringify([form.target_account])
     } else {
@@ -234,4 +280,24 @@ async function removeRule(id: number) {
 
 onMounted(load)
 </script>
+
+<style scoped>
+.trigger-box {
+  width: 100%;
+}
+.trigger-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.trigger-value {
+  flex: 1;
+}
+.trigger-hint {
+  margin-top: 4px;
+  color: var(--td-text-color-placeholder);
+  font-size: 12px;
+  line-height: 1.5;
+}
+</style>
 

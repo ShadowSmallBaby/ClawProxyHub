@@ -132,7 +132,7 @@ export interface GroupInfo {
 }
 
 export interface RouteGroupEntry {
-  group_id: number
+  group_id: number | null | undefined
   weight: number
   model: string
 }

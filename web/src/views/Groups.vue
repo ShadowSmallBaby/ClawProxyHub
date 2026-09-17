@@ -21,7 +21,7 @@
           <t-input v-model="newName" :placeholder="$t('groups.namePh')" />
         </t-form-item>
         <t-form-item :label="$t('groups.plugin')" mark>
-          <t-select v-model="newPlugin">
+          <t-select v-model="newPlugin" :placeholder="$t('groups.pickPluginPh')">
             <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
           </t-select>
         </t-form-item>

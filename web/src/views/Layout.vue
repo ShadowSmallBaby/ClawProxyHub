@@ -32,6 +32,11 @@
           <div class="header-desc">{{ $t(currentPage.desc) }}</div>
         </div>
         <div class="header-right">
+          <t-tooltip :content="$t('common.github')">
+            <t-button variant="text" shape="square" theme="default" @click="openGithub">
+              <logo-github-icon />
+            </t-button>
+          </t-tooltip>
           <t-popup trigger="click">
             <t-button variant="text" shape="square" theme="default">
               <translate-icon />
@@ -101,7 +106,7 @@ import {
   DashboardIcon, AppIcon, UserIcon, FolderIcon, InternetIcon,
   LockOnIcon, TimeIcon, FileIcon, RootListIcon, SettingIcon,
   ChevronLeftIcon, ChevronRightIcon, TranslateIcon, MoonIcon, SunnyIcon,
-  PoweroffIcon, CheckIcon,
+  PoweroffIcon, CheckIcon, LogoGithubIcon,
 } from 'tdesign-icons-vue-next'
 import { api, clearToken, getToken } from '../api/client'
 import i18n, { setLocale as applyLocale, type Locale } from '../i18n'
@@ -124,6 +129,11 @@ const locale = computed<Locale>(() => i18n.global.locale.value as Locale)
 const langs: Locale[] = ['zh', 'en']
 function setLocale(l: Locale) {
   applyLocale(l)
+}
+
+// 项目主页
+function openGithub() {
+  window.open('https://github.com/ShadowSmallBaby/ClawProxyHub', '_blank')
 }
 
 interface MenuItem {
