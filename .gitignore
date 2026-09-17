@@ -1,0 +1,22 @@
+# 数据目录
+data/
+data-test/
+
+# 构建产物
+*.exe
+/cph
+
+# IDE
+.idea/
+.vscode/
+
+# 日志
+*.log
+
+# 前端：dist 由 pnpm build 生成，保留占位文件使 go:embed 在未构建时也能编译
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+
+# 本地环境
+.env
