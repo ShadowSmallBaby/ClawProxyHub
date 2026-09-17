@@ -1,0 +1,260 @@
+// Package account — 账号服务：登录多步协议、建档、刷新、过期处理。
+package account
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"gorm.io/gorm"
+
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/plugin"
+	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
+)
+
+// ErrUnauthorized 通用业务错误。
+type ErrUnauthorized string
+
+func (e ErrUnauthorized) Error() string { return string(e) }
+
+// IsAuthFailure 终态认证失败（凭据不可自愈）。
+func IsAuthFailure(err error) bool {
+	_, ok := err.(ErrUnauthorized)
+	return ok
+}
+
+// Service 账号域服务。
+type Service struct {
+	db      *gorm.DB
+	dataDir string
+	mgr     *plugin.Manager
+}
+
+func New(db *gorm.DB, dataDir string, mgr *plugin.Manager) *Service {
+	return &Service{db: db, dataDir: dataDir, mgr: mgr}
+}
+
+// DataDir 数据目录（解密密钥等用途）。
+func (s *Service) DataDir() string { return s.dataDir }
+
+// AuthMethods 插件声明的授权方式（前端渲染 tab + 表单）。
+func (s *Service) AuthMethods(pluginName string) ([]*pb.AuthMethod, error) {
+	inst, ok := s.mgr.Get(pluginName)
+	if !ok {
+		return nil, fmt.Errorf("plugin %q not running", pluginName)
+	}
+	return inst.Manifest.GetAuthMethods(), nil
+}
+
+// SubmitLogin 提交一步登录。完成时自动建档并返回账号 id；未完成返回下一步。
+// 调用方（管理 API）只需把 next 原样透给前端。
+func (s *Service) SubmitLogin(ctx context.Context, pluginName, methodID string, form map[string]string, state []byte) (*LoginOutcome, error) {
+	inst, ok := s.mgr.Get(pluginName)
+	if !ok {
+		return nil, fmt.Errorf("plugin %q not running", pluginName)
+	}
+
+	result, err := inst.Client().Login(ctx, &pb.LoginRequest{
+		MethodId: methodID, Form: form, State: state,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("plugin login: %w", err)
+	}
+	if result.Error != nil && result.Error.Code != 0 {
+		return nil, ErrUnauthorized(result.Error.Message)
+	}
+	if result.Next != nil {
+		return &LoginOutcome{Next: result.Next}, nil
+	}
+
+	// 登录完成 → 建档（plugin 记录按名补查）
+	acct, err := s.create(inst.Manifest.Name, result.Blob, result.Profile)
+	if err != nil {
+		return nil, err
+	}
+	return &LoginOutcome{AccountID: acct.ID, Profile: result.Profile}, nil
+}
+
+// LoginOutcome 登录一步的结果：建档完成 或 需要下一步。
+type LoginOutcome struct {
+	AccountID int64             // >0 表示建档完成
+	Next      *pb.LoginNextStep // 非 nil 表示登录未完成
+	Profile   *pb.AccountProfile
+}
+
+// create 凭据入库。
+func (s *Service) create(pluginName string, blob []byte, profile *pb.AccountProfile) (*model.Account, error) {
+	var p model.Plugin
+	if err := s.db.Where("name = ?", pluginName).First(&p).Error; err != nil {
+		return nil, fmt.Errorf("plugin record missing for %q", pluginName)
+	}
+	pluginID := p.ID
+	name := ""
+	profileJSON := "{}"
+	creditsJSON := ""
+	if profile != nil {
+		name = profile.DisplayName
+		// 登录返回的 profile（含 quota）直接入库，积分首刷前即有值
+		if b, err := protojson.Marshal(profile); err == nil {
+			profileJSON = string(b)
+		}
+		creditsJSON = profile.CreditsJson
+	}
+	acct := &model.Account{
+		PluginID: pluginID, DisplayName: name,
+		CredentialBlob: EncryptCredential(s.dataDir, blob), Status: "active",
+		ProfileJSON: profileJSON, CreditsJSON: creditsJSON, LastRefreshAt: ptrTime(time.Now()),
+	}
+	if err := s.db.Create(acct).Error; err != nil {
+		return nil, err
+	}
+	return acct, nil
+}
+
+// Refresh 刷新单账号凭据。刷新失败且凭据确已失效时标记 expired。
+func (s *Service) Refresh(ctx context.Context, accountID int64) (*model.Account, error) {
+	var acct model.Account
+	if err := s.db.First(&acct, accountID).Error; err != nil {
+		return nil, err
+	}
+	pluginName, err := s.pluginName(acct.PluginID)
+	if err != nil {
+		return nil, err
+	}
+	inst, ok := s.mgr.Get(pluginName)
+	if !ok {
+		return nil, fmt.Errorf("plugin %q not running", pluginName)
+	}
+
+	cred := &pb.CredentialBlob{AccountId: fmt.Sprintf("%d", acct.ID), Blob: DecryptCredential(s.dataDir, acct.CredentialBlob)}
+	if acct.LastRefreshAt != nil {
+		cred.UpdatedAt = acct.LastRefreshAt.Unix()
+	}
+	cred.Proxy = ProxyForAccount(s.db, acct.ID)
+	result, err := inst.Client().Refresh(ctx, cred)
+	if err != nil {
+		return nil, fmt.Errorf("plugin refresh: %w", err)
+	}
+	if result.Error != nil && result.Error.Code != 0 {
+		// 401 类错误：凭据失效，标记过期（换号重试会跳过）
+		if result.Error.Code == 401 {
+			s.db.Model(&acct).Update("status", "expired")
+		}
+		return nil, ErrUnauthorized(result.Error.Message)
+	}
+
+	updates := map[string]interface{}{"last_refresh_at": time.Now()}
+	if len(result.Blob) > 0 {
+		updates["credential_blob"] = EncryptCredential(s.dataDir, result.Blob)
+	}
+	if result.Profile != nil {
+		updates["profile_json"] = profileJSON(result.Profile)
+		if result.Profile.DisplayName != "" {
+			updates["display_name"] = result.Profile.DisplayName
+		}
+		// 积分明细快照：插件解析了才更新，为空保留旧值（避免无明细的插件抹掉已有数据）
+		if result.Profile.CreditsJson != "" {
+			updates["credits_json"] = result.Profile.CreditsJson
+		}
+	}
+	updates["status"] = "active" // 刷新成功即恢复
+	s.db.Model(&acct).Updates(updates)
+	s.db.First(&acct, accountID)
+	return &acct, nil
+}
+
+// Models 用账号凭据拉插件模型目录（账号级可见模型）。
+func (s *Service) Models(ctx context.Context, accountID int64) ([]*pb.ModelInfo, error) {
+	var acct model.Account
+	if err := s.db.First(&acct, accountID).Error; err != nil {
+		return nil, err
+	}
+	pluginName, err := s.pluginName(acct.PluginID)
+	if err != nil {
+		return nil, err
+	}
+	cred := &pb.CredentialBlob{
+		AccountId: fmt.Sprintf("%d", acct.ID),
+		Blob:      DecryptCredential(s.dataDir, acct.CredentialBlob),
+	}
+	if acct.LastRefreshAt != nil {
+		cred.UpdatedAt = acct.LastRefreshAt.Unix()
+	}
+	inst, ok := s.mgr.Get(pluginName)
+	if !ok {
+		return nil, fmt.Errorf("plugin %q not running", pluginName)
+	}
+	ml, err := inst.Client().ListModels(ctx, cred)
+	if err != nil {
+		return nil, err
+	}
+	return ml.Models, nil
+}
+
+// MarkExpired 标记账号过期（网关 401 换号路径调用）。
+func (s *Service) MarkExpired(accountID int64) {
+	s.db.Model(&model.Account{}).Where("id = ?", accountID).
+		Update("status", "expired")
+}
+
+// MarkAutoPause 自动暂停选号（429 限速 / 402 无积分等触发）。
+// resumeAt 到期自动恢复；传 nil 写入远期时间 = 需手动恢复。仅对 active 账号生效。
+func (s *Service) MarkAutoPause(accountID int64, reason string, resumeAt *time.Time) {
+	if resumeAt == nil {
+		far := time.Now().AddDate(100, 0, 0) // 远期哨兵：选号条件统一按 paused_until 判断
+		resumeAt = &far
+	}
+	s.db.Model(&model.Account{}).Where("id = ? AND status = ?", accountID, "active").
+		Updates(map[string]interface{}{
+			"paused_until": resumeAt,
+			"pause_reason": truncStr(reason, 250),
+		})
+}
+
+// Resume 清除自动暂停（手动恢复入口；不影响 status，expired 仍需重新授权）。
+func (s *Service) Resume(accountID int64) {
+	s.db.Model(&model.Account{}).Where("id = ?", accountID).
+		Updates(map[string]interface{}{
+			"paused_until": nil, "pause_reason": "",
+		})
+}
+
+func truncStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+// List 插件维度的账号列表（凭据不外泄）。
+func (s *Service) List(pluginID int64) ([]model.Account, error) {
+	var accts []model.Account
+	err := s.db.Where("plugin_id = ?", pluginID).Order("id").Find(&accts).Error
+	return accts, err
+}
+
+// Delete 删除账号（凭据随之清除）。
+func (s *Service) Delete(accountID int64) error {
+	return s.db.Delete(&model.Account{}, accountID).Error
+}
+
+func (s *Service) pluginName(pluginID int64) (string, error) {
+	var p model.Plugin
+	if err := s.db.First(&p, pluginID).Error; err != nil {
+		return "", fmt.Errorf("plugin record #%d missing", pluginID)
+	}
+	return p.Name, nil
+}
+
+// profileJSON AccountProfile 序列化为快照存储。
+func profileJSON(p *pb.AccountProfile) string {
+	b, err := protojson.Marshal(p)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+func ptrTime(t time.Time) *time.Time { return &t }
