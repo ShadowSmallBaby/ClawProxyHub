@@ -1,7 +1,7 @@
 services:
   cph:
     build: .
-    image: clawproxyhub:latest
+    image: shadowbaby/claw-proxy-hub:latest
     container_name: cph
     restart: unless-stopped
     ports:
