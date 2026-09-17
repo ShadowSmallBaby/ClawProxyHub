@@ -109,20 +109,21 @@ func (s *Server) marketplace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"plugins": out, "source": source})
 }
 
-// installMarket POST /admin/plugins/install-market — body: {name}
-// 从市场索引找到条目 → 下载 → sha256 校验 → 安装。
+// installMarket POST /admin/plugins/install-market — body: {name, author}
+// 同插件判定 = author+name（name 不保证全局唯一，与市场列表/已装列表同一判定键）。
 func (s *Server) installMarket(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name string `json:"name"`
+		Name   string `json:"name"`
+		Author string `json:"author"`
 	}
-	if !readBody(w, r, &body) || body.Name == "" {
-		http.Error(w, `{"error":"name required"}`, http.StatusBadRequest)
+	if !readBody(w, r, &body) || body.Name == "" || body.Author == "" {
+		http.Error(w, `{"error":"name and author required"}`, http.StatusBadRequest)
 		return
 	}
 	entries, _ := s.fetchMarket()
 	var entry *MarketEntry
 	for i := range entries {
-		if pluginKey(entries[i].Author, entries[i].Name) == pluginKey("", body.Name) && entries[i].Name == body.Name {
+		if pluginKey(entries[i].Author, entries[i].Name) == pluginKey(body.Author, body.Name) {
 			entry = &entries[i]
 			break
 		}

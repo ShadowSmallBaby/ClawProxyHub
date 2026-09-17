@@ -83,8 +83,8 @@
             v-if="!e.installed"
             size="small"
             theme="primary"
-            :loading="installing === e.name"
-            @click="installFromMarket(e.name)"
+            :loading="installing === e.author + '/' + e.name"
+            @click="installFromMarket(e)"
           >
             {{ $t('plugins.install') }}
           </t-button>
@@ -93,8 +93,8 @@
             size="small"
             theme="warning"
             variant="outline"
-            :loading="installing === e.name"
-            @click="installFromMarket(e.name)"
+            :loading="installing === e.author + '/' + e.name"
+            @click="installFromMarket(e)"
           >
             {{ $t('plugins.upgrade') }}
           </t-button>
@@ -239,16 +239,18 @@ async function loadMarket() {
   }
 }
 
-async function installFromMarket(name: string) {
-  installing.value = name
+function installFromMarket(e: (typeof marketEntries.value)[number]) {
+  installing.value = e.author + '/' + e.name
   try {
-    await api.post('/admin/plugins/install-market', { name })
-    MessagePlugin.success(t('plugins.installedN', { name }))
-    await load()
-  } catch (e: any) {
-    MessagePlugin.error(e.message)
-  } finally {
-    installing.value = ''
+    void (async () => {
+      await api.post('/admin/plugins/install-market', { name: e.name, author: e.author ?? '' })
+      MessagePlugin.success(t('plugins.installedN', { name: e.name }))
+      await load()
+      // 弹窗开着时同步刷新市场条目的安装状态
+      if (marketVisible.value) await loadMarket()
+    })()
+  } catch (err: any) {
+    MessagePlugin.error(err.message)
   }
 }
 
@@ -264,6 +266,8 @@ async function uploadInstall({ raw }: { raw: File }): Promise<ResponseType> {
   if (resp.ok) {
     MessagePlugin.success(t('plugins.installOk'))
     await load()
+    // 弹窗开着时同步刷新市场条目的安装状态
+    if (marketVisible.value) await loadMarket()
     return { status: 'success' }
   }
   return { status: 'fail', error: { message: (await resp.text()).slice(0, 200) } } as any
@@ -291,6 +295,8 @@ async function uninstall(name: string) {
     await api.del(`/admin/plugins/${name}`)
     MessagePlugin.success(t('plugins.uninstalledN', { name }))
     await load()
+    // 弹窗开着时同步刷新市场条目的安装状态
+    if (marketVisible.value) await loadMarket()
   } catch (e: any) {
     MessagePlugin.error(e.message)
   }
