@@ -1,0 +1,8 @@
+.git
+.idea
+data
+data-test
+web/node_modules
+web/dist
+*.exe
+*.log
