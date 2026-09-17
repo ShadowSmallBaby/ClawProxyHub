@@ -6,9 +6,12 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"log"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/sqlite3"
@@ -83,7 +86,14 @@ func Open(ctx context.Context, dsn string) (*gorm.DB, error) {
 	}
 
 	gdb, err := gorm.Open(sqlite.Dialector{Conn: sqlDB}, &gorm.Config{
-		Logger: gormlogger.Default.LogMode(gormlogger.Warn),
+		// 记录不存在属正常业务路径（首次读设置等），不打 error 日志
+		Logger: gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags),
+			gormlogger.Config{
+				SlowThreshold:             200 * time.Millisecond,
+				LogLevel:                  gormlogger.Warn,
+				IgnoreRecordNotFoundError: true,
+				Colorful:                  true,
+			}),
 	})
 	if err != nil {
 		sqlDB.Close()
