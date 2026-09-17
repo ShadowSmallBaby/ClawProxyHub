@@ -1,0 +1,15 @@
+-- 000001_init.down.sql — 回滚初始 schema（子表在前）
+DROP TABLE IF EXISTS settings;
+DROP TABLE IF EXISTS request_logs;
+DROP TABLE IF EXISTS task_runs;
+DROP TABLE IF EXISTS task_rules;
+DROP TABLE IF EXISTS group_proxies;
+DROP TABLE IF EXISTS proxies;
+DROP TABLE IF EXISTS key_routes;
+DROP TABLE IF EXISTS keys;
+DROP TABLE IF EXISTS routes;
+DROP TABLE IF EXISTS account_groups;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS accounts;
+DROP TABLE IF EXISTS plugins;
+DROP TABLE IF EXISTS users;
