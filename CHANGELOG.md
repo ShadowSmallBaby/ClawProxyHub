@@ -8,6 +8,8 @@
 - Added 密钥改名接口（`PUT /admin/keys/{id}`）与账号编辑弹窗（改名 / 分组 / 代理 / 模型）
 - Added 进程内事件总线（`internal/event`）：任务成功完成后自动刷新该账号积分
 - Added 前端通用可搜索绑定组件 `BindSelect`，统一账号 / 密钥 / 分组 / 路由的多选绑定
+- Added 出站代理编辑（`PUT /admin/proxies/{id}`，密码留空保留原值）与连通性测试（`POST /admin/proxies/{id}/test`，经代理拨中立目标回时延，socks5 走 `x/net/proxy`）
+- Added 核心版本机制（`internal/version`）与检查更新：`GET /admin/version` 对比仓库 `version.json`，侧栏底部显 `v1.0.3 · 有更新`
 - Changed 管理后台路由按资源分组重构 + `authed` 注册器统一鉴权，杜绝逐条漏包
 
 ## v1.0.2

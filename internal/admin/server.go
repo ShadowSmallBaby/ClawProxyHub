@@ -129,11 +129,13 @@ func (s *Server) routeGroups(r authed) {
 	r.h("GET /admin/groups/{id}/proxies", s.listGroupProxies)
 }
 
-// routeProxies 出站代理增删查。
+// routeProxies 出站代理增删改查 + 连通性测试。
 func (s *Server) routeProxies(r authed) {
 	r.h("GET /admin/proxies", s.listProxies)
 	r.h("POST /admin/proxies", s.createProxy)
+	r.h("PUT /admin/proxies/{id}", s.updateProxy)
 	r.h("DELETE /admin/proxies/{id}", s.deleteProxy)
+	r.h("POST /admin/proxies/{id}/test", s.testProxy)
 }
 
 // routeRoutes 路由增删改查。
@@ -162,6 +164,7 @@ func (s *Server) routeSettingsStats(r authed) {
 	r.h("GET /admin/stats", s.dashboardStats)
 	r.h("GET /admin/stats/quota", s.dashboardQuota)
 	r.h("GET /admin/stats/trend", s.dashboardTrend)
+	r.h("GET /admin/version", s.coreVersion)
 }
 
 // listPlugins GET /admin/plugins — 已启动插件概览（含授权方式）。
