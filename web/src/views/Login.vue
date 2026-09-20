@@ -80,8 +80,12 @@ async function onLogin() {
   if (!username.value || !password.value) return
   loading.value = true
   try {
-    setToken(`${username.value}:${password.value}`)
-    await api.get('/admin/plugins') // 探测校验
+    // 登录换 JWT（后续请求带 Bearer <jwt>，服务端解析 role 免每请求 bcrypt）
+    const r = await api.post<{ token: string; role: string }>('/admin/login', {
+      username: username.value,
+      password: password.value,
+    })
+    setToken(r.token)
     router.push('/')
   } catch (e: any) {
     MessagePlugin.error(e.message === 'unauthorized' ? t('login.errCredentials') : e.message)

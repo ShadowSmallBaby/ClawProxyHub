@@ -306,7 +306,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 	// 发起调用。失败恢复顺序：401 先保凭据（刷新同账号 → 换号，保住会话粘性），
 	// 穷尽后或非凭据错误走路由降级（状态类匹配，每次请求至多降一次）。
 	// 注意：req.Model 已替换为真实模型名，重试解析路由需用原始对外名
-	log := &requestLogCtx{key: key, account: account, model: req.Model, protocol: protocol, stream: req.Stream,
+	routeName := ""
+	if isRoute {
+		routeName = origModel // 对外路由名（模型列存真实模型 req.Model）
+	}
+	log := &requestLogCtx{key: key, account: account, model: req.Model, routeName: routeName,
+		protocol: protocol, stream: req.Stream,
 		clientIP: clientIP(r), userAgent: truncStr(r.UserAgent(), 250)}
 	var route *model.Route
 	if resolved != nil {
@@ -402,12 +407,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 	}
 
 	start := time.Now()
+	log.startedAt = start // 首字/总耗时同源起点
 	// failWith 终态失败收尾：写响应 + 落日志。
 	failWith := func(status int, errType, brief string) {
 		log.status = status
 		log.errBrief = brief
 		writeJSON(w, status, errBody(errType, errors.New(brief)))
-		log.write(s.db, time.Since(start))
+		log.write(s.db)
 	}
 	// finishUnrecovered 恢复穷尽后的统一出口（区分 401 无号 503 / 其它 502）。
 	finishUnrecovered := func(code int32, brief string, transient error) {
@@ -539,24 +545,30 @@ type requestLogCtx struct {
 	key          *model.Key
 	account      *model.Account
 	model        string
+	routeName    string // 对外路由名（未命中路由时为空）
 	protocol     string
 	stream       bool
 	input        int64
 	output       int64
 	cached       int64
 	status       int
+	startedAt    time.Time // 请求计时起点（首字/总耗时同源，保证总耗时 ≥ 首字）
 	firstTokenMs int32
 	clientIP     string
 	userAgent    string
 	errBrief     string
 }
 
-// write 落库 request_logs。
-func (c *requestLogCtx) write(db *gorm.DB, latency time.Duration) {
+// write 落库 request_logs。总耗时从 c.startedAt 算，与首字同源（保证 ≥ 首字）。
+func (c *requestLogCtx) write(db *gorm.DB) {
+	latencyMs := int32(0)
+	if !c.startedAt.IsZero() {
+		latencyMs = int32(time.Since(c.startedAt).Milliseconds())
+	}
 	rl := &model.RequestLog{
-		Model: c.model, Protocol: c.protocol, Status: int32(c.status),
+		Model: c.model, RouteName: c.routeName, Protocol: c.protocol, Status: int32(c.status),
 		InputTokens: int32(c.input), OutputTokens: int32(c.output),
-		CachedTokens: int32(c.cached), LatencyMs: int32(latency.Milliseconds()),
+		CachedTokens: int32(c.cached), LatencyMs: latencyMs,
 		FirstTokenMs: c.firstTokenMs, ClientIP: c.clientIP, UserAgent: c.userAgent,
 		ErrorBrief: c.errBrief,
 	}

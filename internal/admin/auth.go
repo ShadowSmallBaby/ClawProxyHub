@@ -3,7 +3,8 @@
 package admin
 
 import (
-	"encoding/base64"
+	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -12,6 +13,27 @@ import (
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 )
+
+// ctxKeyRole 请求上下文里的当前角色键。
+type ctxKeyRole struct{}
+
+// roleOf 从上下文取角色，缺省 guest。
+func roleOf(r *http.Request) string {
+	if v, ok := r.Context().Value(ctxKeyRole{}).(string); ok && v != "" {
+		return v
+	}
+	return "guest"
+}
+
+// menusForRole 角色可见菜单键：admin 全量，guest 只读（隐藏系统设置）。
+func menusForRole(role string) []string {
+	all := []string{"dashboard", "plugins", "accounts", "groups", "proxies", "routes", "keys", "oauth", "tasks", "logs", "settings"}
+	if role == "admin" {
+		return all
+	}
+	// guest：只读概览与日志，隐藏配置类
+	return []string{"dashboard", "logs"}
+}
 
 // ensureAdminSeed 表空且环境变量有密码时自动建号（容器部署引导）。
 func (s *Server) ensureAdminSeed() {
@@ -40,42 +62,65 @@ func (s *Server) createUser(username, password string) bool {
 	return s.db.Create(&model.User{Username: username, PasswordHash: string(hash), Role: "admin"}).Error == nil
 }
 
-// auth 管理员鉴权：Basic（user:password）或 Bearer（"user:password" / 仅 password）。
+// auth 管理员鉴权：只认 JWT Bearer（解析 role，免 bcrypt）。
+// 鉴权后把角色注入上下文；guest 只读（非 GET 请求拒绝）。
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		username, password, ok := extractCredential(r)
-		if ok {
-			ok = s.verifyPassword(username, password)
-		}
-		if !ok {
-			w.Header().Set("WWW-Authenticate", "Basic realm=cph-admin")
+		c, err := s.parseBearer(r)
+		if err != nil {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
-		next(w, r)
+		// guest 只读：仅放行 GET（写操作需 admin）
+		if c.Role != "admin" && r.Method != http.MethodGet {
+			http.Error(w, `{"error":"forbidden: read-only role"}`, http.StatusForbidden)
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), ctxKeyRole{}, c.Role)))
 	}
 }
 
-// extractCredential 从 Authorization 头取用户名与密码。
-// 用户名可为空（Bearer 仅密码时按唯一管理员匹配）。
-func extractCredential(r *http.Request) (username, password string, ok bool) {
+// parseBearer 取 Authorization: Bearer <jwt> 并校验，返回载荷。
+func (s *Server) parseBearer(r *http.Request) (*jwtClaims, error) {
 	auth := r.Header.Get("Authorization")
-	if strings.HasPrefix(auth, "Basic ") {
-		if raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(auth, "Basic ")); err == nil {
-			if parts := strings.SplitN(string(raw), ":", 2); len(parts) == 2 {
-				return parts[0], parts[1], true
-			}
-		}
-		return "", "", false
+	token := strings.TrimPrefix(auth, "Bearer ")
+	if token == auth || token == "" {
+		return nil, errors.New("missing bearer token")
 	}
-	if strings.HasPrefix(auth, "Bearer ") {
-		cred := strings.TrimPrefix(auth, "Bearer ")
-		if u, p, found := strings.Cut(cred, ":"); found {
-			return u, p, true
-		}
-		return "", cred, true
+	return s.parseJWT(token)
+}
+
+// roleOfUser 查用户角色；username 空按唯一管理员。
+func (s *Server) roleOfUser(username string) string {
+	var user model.User
+	var err error
+	if username != "" {
+		err = s.db.Where("username = ?", username).First(&user).Error
+	} else {
+		err = s.db.Where("role = ?", "admin").Order("id").First(&user).Error
 	}
-	return "", "", false
+	if err != nil || user.Role == "" {
+		return "guest"
+	}
+	return user.Role
+}
+
+// login POST /admin/login — 校验用户名密码，签发 JWT（免鉴权入口）。
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !readBody(w, r, &body) {
+		return
+	}
+	if !s.verifyPassword(body.Username, body.Password) {
+		http.Error(w, `{"error":"invalid credentials"}`, http.StatusUnauthorized)
+		return
+	}
+	role := s.roleOfUser(body.Username)
+	token := s.signJWT(body.Username, role)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"token": token, "role": role})
 }
 
 // verifyPassword 校验；username 为空时按唯一管理员匹配。
@@ -93,11 +138,10 @@ func (s *Server) verifyPassword(username, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) == nil
 }
 
-// lookupUsername 从请求头还原用户名（改密场景定位记录）。
+// lookupUsername 从 JWT 取用户名（改密场景定位记录）；缺失回退唯一管理员。
 func (s *Server) lookupUsername(r *http.Request) string {
-	username, _, ok := extractCredential(r)
-	if ok && username != "" {
-		return username
+	if c, err := s.parseBearer(r); err == nil && c.Sub != "" {
+		return c.Sub
 	}
 	var user model.User
 	if err := s.db.Where("role = ?", "admin").Order("id").First(&user).Error; err == nil {
@@ -118,7 +162,11 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"username": user.Username, "role": user.Role})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"username": user.Username,
+		"role":     user.Role,
+		"menus":    menusForRole(user.Role),
+	})
 }
 
 // initialized users 表已有管理员账号。

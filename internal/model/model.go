@@ -185,7 +185,8 @@ type RequestLog struct {
 	KeyID        *int64
 	PluginID     *int64
 	AccountID    *int64
-	Model        string `gorm:"size:128;default:''"`
+	Model        string `gorm:"size:128;default:''"`         // 实际请求上游的真实模型
+	RouteName    string `gorm:"column:route_name;size:128;default:''"` // 对外路由名（未命中路由为空）
 	Protocol     string `gorm:"size:32;default:''"`
 	Status       int32
 	InputTokens  int32     `gorm:"column:input_tokens;default:0"`
@@ -207,3 +208,18 @@ type Setting struct {
 	Value     string
 	UpdatedAt time.Time `gorm:"column:updated_at"`
 }
+
+// OAuthCredential 第三方平台（LinuxDo/GitHub 等）用户登录态，供插件换取上游 token。
+// TokenBlob 经核心 AES-256-GCM 加密存储（复用凭据加密密钥）。
+type OAuthCredential struct {
+	ID           int64      `gorm:"primaryKey;autoIncrement"`
+	Platform     string     `gorm:"index;size:64"`
+	AccountLabel string     `gorm:"column:account_label;size:128;default:''"`
+	TokenBlob    []byte     `gorm:"column:token_blob"`
+	ExpiresAt    *time.Time `gorm:"column:expires_at"`
+	ExtraJSON    string     `gorm:"column:extra_json;default:'{}'"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+func (OAuthCredential) TableName() string { return "oauth_credentials" }

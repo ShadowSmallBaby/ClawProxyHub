@@ -309,16 +309,55 @@ func (s *Server) dashboardTrend(w http.ResponseWriter, r *http.Request) {
 
 // listLogs GET /admin/logs?limit=100&key_id= — 调用日志（key_name 由 keys 表聚合）。
 func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
-	limit := 100
-	if n := parseInt(r.URL.Query().Get("limit")); n > 0 && n <= 1000 {
-		limit = int(n)
+	qp := r.URL.Query()
+	// 分页：page 从 1 起，page_size 限定档位（默认 30）
+	pageSize := 30
+	switch parseInt(qp.Get("page_size")) {
+	case 10, 30, 50, 100, 200:
+		pageSize = int(parseInt(qp.Get("page_size")))
 	}
+	page := int(parseInt(qp.Get("page")))
+	if page < 1 {
+		page = 1
+	}
+
 	q := s.db.Model(&model.RequestLog{})
-	if kid := parseInt(r.URL.Query().Get("key_id")); kid > 0 {
-		q = q.Where("key_id = ?", kid)
+	// 密钥名模糊：子查询命中的 key_id
+	if kw := strings.TrimSpace(qp.Get("key")); kw != "" {
+		q = q.Where("key_id IN (?)", s.db.Model(&model.Key{}).Select("id").Where("name LIKE ?", "%"+kw+"%"))
 	}
+	if kw := strings.TrimSpace(qp.Get("model")); kw != "" {
+		q = q.Where("model LIKE ?", "%"+kw+"%")
+	}
+	if kw := strings.TrimSpace(qp.Get("route")); kw != "" {
+		q = q.Where("route_name LIKE ?", "%"+kw+"%")
+	}
+	if pid := parseInt(qp.Get("plugin_id")); pid > 0 {
+		q = q.Where("plugin_id = ?", pid)
+	}
+	if p := strings.TrimSpace(qp.Get("protocol")); p != "" {
+		q = q.Where("protocol = ?", p)
+	}
+	// 状态类：success(<400) / client_error(400-499) / server_error(>=500)
+	switch qp.Get("status_class") {
+	case "success":
+		q = q.Where("status < 400")
+	case "client_error":
+		q = q.Where("status >= 400 AND status < 500")
+	case "server_error":
+		q = q.Where("status >= 500")
+	}
+	if from := strings.TrimSpace(qp.Get("from")); from != "" {
+		q = q.Where("created_at >= ?", from)
+	}
+	if to := strings.TrimSpace(qp.Get("to")); to != "" {
+		q = q.Where("created_at <= ?", to)
+	}
+
+	var total int64
+	q.Count(&total)
 	var logs []model.RequestLog
-	if err := q.Order("id DESC").Limit(limit).Find(&logs).Error; err != nil {
+	if err := q.Order("id DESC").Limit(pageSize).Offset((page - 1) * pageSize).Find(&logs).Error; err != nil {
 		http.Error(w, `{"error":"db"}`, http.StatusInternalServerError)
 		return
 	}
@@ -345,7 +384,7 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"logs": out})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"logs": out, "total": total})
 }
 
 // dashboardQuota GET /admin/stats/quota — 按插件聚合账号积分快照（credits_json，

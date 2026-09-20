@@ -54,9 +54,10 @@ func (a authed) h(pattern string, fn http.HandlerFunc) { a.mux.HandleFunc(patter
 // Handler 管理路由：免鉴权引导 + 按资源分组的鉴权路由。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	// 首启引导（免鉴权）
+	// 首启引导 + 登录签发（免鉴权）
 	mux.HandleFunc("GET /admin/setup-status", s.setupStatus)
 	mux.HandleFunc("POST /admin/setup", s.setup)
+	mux.HandleFunc("POST /admin/login", s.login)
 
 	r := authed{mux: mux, s: s}
 	s.routeSession(r)
@@ -67,8 +68,17 @@ func (s *Server) Handler() http.Handler {
 	s.routeProxies(r)
 	s.routeRoutes(r)
 	s.routeTasks(r)
+	s.routeOAuth(r)
 	s.routeSettingsStats(r)
 	return mux
+}
+
+// routeOAuth 第三方平台登录态托管（供插件换取上游 token）。
+func (s *Server) routeOAuth(r authed) {
+	r.h("GET /admin/oauth-credentials", s.listOAuth)
+	r.h("POST /admin/oauth-credentials", s.createOAuth)
+	r.h("PUT /admin/oauth-credentials/{id}", s.updateOAuth)
+	r.h("DELETE /admin/oauth-credentials/{id}", s.deleteOAuth)
 }
 
 // routeSession 会话：改密 / 当前用户。

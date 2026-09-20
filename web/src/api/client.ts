@@ -13,6 +13,20 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY)
 }
 
+// getRole 从 JWT 载荷解出角色（仅前端展示/守卫用，真正边界在服务端）。
+// 非 JWT（旧 user:password 过渡态）或解析失败一律按 admin，避免误挡。
+export function getRole(): string {
+  const t = getToken()
+  const parts = t.split('.')
+  if (parts.length !== 3) return 'admin'
+  try {
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
+    return payload.role || 'admin'
+  } catch {
+    return 'admin'
+  }
+}
+
 async function request<T = any>(method: string, path: string, body?: unknown): Promise<T> {
   const resp = await fetch(path, {
     method,

@@ -1,4 +1,32 @@
 {
-  "version": "1.0.3",
-  "release_url": "https://github.com/ShadowSmallBaby/ClawProxyHub/releases"
+  "version": "1.0.5",
+  "release_url": "https://github.com/ShadowSmallBaby/ClawProxyHub/releases",
+  "changelog": {
+    "title": {
+      "zh": "更新日志",
+      "en": "What's New"
+    },
+    "items": [
+      {
+        "zh": "JWT 鉴权与访客只读角色（RBAC）",
+        "en": "JWT authentication and guest read-only role (RBAC)"
+      },
+      {
+        "zh": "第三方平台凭证托管（供插件换取上游 token）",
+        "en": "Third-party platform credential management (for plugins to exchange upstream tokens)"
+      },
+      {
+        "zh": "日志页支持多条件模糊搜索、日期区间快捷选项、分页与固定高度滚动",
+        "en": "Logs page: multi-filter fuzzy search, date-range presets, pagination and fixed-height scrolling"
+      },
+      {
+        "zh": "修复日志延迟统计：总耗时与首字同源",
+        "en": "Fix log latency: total time now shares the same origin as first-token"
+      },
+      {
+        "zh": "修复版本检查：改用语义化比较，仅远端更新时才提示",
+        "en": "Fix update check: semantic version comparison, prompt only when remote is newer"
+      }
+    ]
+  }
 }
