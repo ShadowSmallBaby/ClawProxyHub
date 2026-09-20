@@ -54,9 +54,10 @@ func (a authed) h(pattern string, fn http.HandlerFunc) { a.mux.HandleFunc(patter
 // Handler 管理路由：免鉴权引导 + 按资源分组的鉴权路由。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	// 首启引导（免鉴权）
+	// 首启引导 + 登录签发（免鉴权）
 	mux.HandleFunc("GET /admin/setup-status", s.setupStatus)
 	mux.HandleFunc("POST /admin/setup", s.setup)
+	mux.HandleFunc("POST /admin/login", s.login)
 
 	r := authed{mux: mux, s: s}
 	s.routeSession(r)

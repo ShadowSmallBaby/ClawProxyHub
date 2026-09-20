@@ -1,5 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { getToken } from '../api/client'
+import { getToken, getRole } from '../api/client'
+
+// guest 角色可访问的路径（与后端 menusForRole 保持一致）
+const GUEST_PATHS = ['dashboard', 'logs']
 
 const router = createRouter({
   history: createWebHistory(),
@@ -28,6 +31,11 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   if (to.path !== '/login' && to.path !== '/setup' && !getToken()) return '/login'
+  // guest 只读：访问配置类路径重定向回概览
+  if (getToken() && getRole() !== 'admin') {
+    const seg = to.path.replace(/^\//, '').split('/')[0]
+    if (seg && !GUEST_PATHS.includes(seg) && to.path !== '/') return '/dashboard'
+  }
 })
 
 export default router

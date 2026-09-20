@@ -12,7 +12,7 @@
         class="aside-menu"
         @change="(v: string) => router.push(v)"
       >
-        <t-menu-item v-for="item in menuItems" :key="item.value" :value="item.value">
+        <t-menu-item v-for="item in visibleMenuItems" :key="item.value" :value="item.value">
           <template #icon><component :is="item.icon" /></template>{{ $t(item.label) }}
         </t-menu-item>
       </t-menu>
@@ -116,21 +116,24 @@ import {
   PoweroffIcon, CheckIcon, LogoGithubIcon,
 } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { api, clearToken, getToken } from '../api/client'
+import { api, clearToken } from '../api/client'
 import i18n, { setLocale as applyLocale, type Locale } from '../i18n'
 
 const route = useRoute()
 const router = useRouter()
 const dark = ref(localStorage.getItem('cph-theme') === 'dark')
 const collapsed = ref(localStorage.getItem('cph-sidebar') === 'collapsed')
-// token 形如 "user:password"，展示用户名部分
-const username = computed(() => getToken().split(':')[0])
-// 角色展示名（管理员 / 访客，后端 /admin/me 提供）
+// 用户名由 /admin/me 下发（token 已是 JWT，不能再从中拆用户名）
+const username = ref('')
+// 角色展示名 + 可见菜单键（后端 /admin/me 按角色下发，RBAC 前端守卫）
 const role = ref('')
+const allowedMenus = ref<string[] | null>(null) // null = 未加载（先全显，避免闪烁）
 const roleLabel = computed(() =>
   i18n.global.t(role.value === 'guest' ? 'common.guest' : 'common.admin'),
 )
-api.get<{ role: string }>('/admin/me').then((r) => (role.value = r.role)).catch(() => {})
+api.get<{ username: string; role: string; menus: string[] }>('/admin/me')
+  .then((r) => { username.value = r.username; role.value = r.role; allowedMenus.value = r.menus ?? null })
+  .catch(() => {})
 
 // ---------- 多语言（zh / en，vue-i18n 全局响应式） ----------
 const locale = computed<Locale>(() => i18n.global.locale.value as Locale)
@@ -198,6 +201,13 @@ const menuItems: MenuItem[] = [
   { value: '/logs', label: 'menu.logs', desc: 'menuDesc.logs', icon: FileIcon },
   { value: '/settings', label: 'menu.settings', desc: 'menuDesc.settings', icon: SettingIcon },
 ]
+
+// 按角色过滤后的可见菜单（allowedMenus 未加载时全显，避免刷新闪烁）
+const visibleMenuItems = computed(() =>
+  allowedMenus.value === null
+    ? menuItems
+    : menuItems.filter((m) => allowedMenus.value!.includes(m.value.slice(1))),
+)
 
 // 当前菜单（含子路径前缀匹配）
 const currentPage = computed(
