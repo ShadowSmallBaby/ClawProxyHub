@@ -1,16 +1,51 @@
 <template>
   <div class="page">
-    <div class="page-header">
-
-      <t-button variant="outline" @click="load">{{ $t('common.refresh') }}</t-button>
+    <!-- 过滤栏：模糊搜索 + 下拉 + 时间区间，窄屏自动换行 -->
+    <div class="filters">
+      <t-input v-model="filters.key" :placeholder="$t('logs.searchKey')" clearable style="width: 280px" @enter="search" />
+      <t-input v-model="filters.model" :placeholder="$t('logs.searchModel')" clearable style="width: 280px" @enter="search" />
+      <t-input v-model="filters.route" :placeholder="$t('logs.searchRoute')" clearable style="width: 280px" @enter="search" />
+      <t-select v-model="filters.plugin_id" :placeholder="$t('logs.pluginAll')" clearable style="width: 130px">
+        <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
+      </t-select>
+      <t-select v-model="filters.protocol" :placeholder="$t('logs.protocolAll')" clearable style="width: 160px">
+        <t-option v-for="(v, k) in protocolDict" :key="k" :value="k" :label="dict(protocolDict, k)" />
+      </t-select>
+      <t-select v-model="filters.status_class" :placeholder="$t('logs.statusAll')" clearable style="width: 120px">
+        <t-option value="success" :label="$t('logs.statusSuccess')" />
+        <t-option value="client_error" :label="$t('logs.statusClientErr')" />
+        <t-option value="server_error" :label="$t('logs.statusServerErr')" />
+      </t-select>
+      <t-date-range-picker
+        v-model="filters.range"
+        allow-input
+        clearable
+        :presets="presets"
+        presets-placement="bottom"
+        :placeholder="[$t('logs.timeFrom'), $t('logs.timeTo')]"
+        style="width: 300px"
+      />
+      <t-button theme="primary" @click="search">{{ $t('logs.search') }}</t-button>
+      <t-button variant="outline" @click="reset">{{ $t('logs.reset') }}</t-button>
     </div>
-    <t-table row-key="ID" :data="logs" :columns="columns" :loading="loading">
+
+    <t-table
+      row-key="ID"
+      :data="logs"
+      :columns="columns"
+      :loading="loading"
+      :max-height="tableHeight"
+      resizable
+    >
       <template #key="{ row }">
         <span v-if="row.key_name">{{ row.key_name }}</span>
         <span v-else class="dim">-</span>
       </template>
+      <template #route="{ row }">
+        <span v-if="row.RouteName">{{ row.RouteName }}</span>
+        <span v-else class="dim">-</span>
+      </template>
       <template #status="{ row }">
-        <!-- 错误信息并入状态 tooltip -->
         <t-tooltip
           v-if="row.Status >= 400 && row.ErrorBrief"
           :content="`${row.Status} · ${row.ErrorBrief}`"
@@ -22,7 +57,6 @@
         <t-tag v-else :theme="row.Status < 400 ? 'success' : 'danger'" variant="light">{{ row.Status }}</t-tag>
       </template>
       <template #tokens="{ row }">
-        <!-- Token 明细合并：输入/输出/缓存 tooltip + 总数 -->
         <t-tooltip placement="top-left" :overlay-style="{ minWidth: '220px' }">
           <span class="tokens">
             <span class="tok-in">↓ {{ fmt(row.InputTokens) }}</span>
@@ -39,13 +73,12 @@
               <div class="tok-detail-row" v-if="row.CachedTokens">
                 <span>{{ $t('logs.cached') }}</span><b>{{ fmt(row.CachedTokens) }}</b>
               </div>
-              <div class="tok-detail-total"><span>{{ $t('logs.totalTokens') }}</span><b>{{ fmt(total(row)) }}</b></div>
+              <div class="tok-detail-total"><span>{{ $t('logs.totalTokens') }}</span><b>{{ fmt(sumTokens(row)) }}</b></div>
             </div>
           </template>
         </t-tooltip>
       </template>
       <template #latency="{ row }">
-        <!-- 首字/总耗时合并：绿条 + tooltip -->
         <t-tooltip placement="top-left">
           <div class="latency">
             <span class="latency-bar"></span>
@@ -70,11 +103,23 @@
         <span v-else>-</span>
       </template>
     </t-table>
+
+    <!-- 分页：页大小 10/30/50/100/200 -->
+    <div class="pager">
+      <t-pagination
+        v-model="page"
+        v-model:pageSize="pageSize"
+        :total="total"
+        :page-size-options="[10, 30, 50, 100, 200]"
+        show-jumper
+        @change="load"
+      />
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../api/client'
 import { dict, protocolDict } from '../utils/dict'
@@ -82,9 +127,53 @@ import type { RequestLog } from '../api/types'
 
 const { t } = useI18n()
 
+// 时间快捷区间：原生 Date 计算，只到日期（不含时间），返回 [起, 止]（避免引入 dayjs）
+function fmtDate(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+// 以周一为一周起点，返回该周周一日期
+function weekStartDate(base: Date, offsetWeeks = 0): Date {
+  const x = new Date(base); x.setHours(0, 0, 0, 0)
+  const dow = (x.getDay() + 6) % 7 // 周一=0
+  x.setDate(x.getDate() - dow + offsetWeeks * 7)
+  return x
+}
+function rangeStr(from: Date, to: Date): string[] { return [fmtDate(from), fmtDate(to)] }
+const presets = computed<Record<string, string[]>>(() => {
+  const now = new Date()
+  const dayMs = 86400000
+  const yesterday = new Date(now.getTime() - dayMs)
+  const lastWeekMon = weekStartDate(now, -1)
+  const lastWeekSun = new Date(weekStartDate(now).getTime() - dayMs)
+  return {
+    [t('logs.presetToday')]: rangeStr(now, now),
+    [t('logs.presetYesterday')]: rangeStr(yesterday, yesterday),
+    [t('logs.presetThisWeek')]: rangeStr(weekStartDate(now), now),
+    [t('logs.presetLastWeek')]: rangeStr(lastWeekMon, lastWeekSun),
+    [t('logs.presetLast7')]: rangeStr(new Date(now.getTime() - 6 * dayMs), now),
+    [t('logs.presetLast30')]: rangeStr(new Date(now.getTime() - 29 * dayMs), now),
+  }
+})
+
 const logs = ref<RequestLog[]>([])
 const loading = ref(false)
 const plugins = ref<{ id: number; name: string; label?: string }[]>([])
+const page = ref(1)
+const pageSize = ref(30)
+const total = ref(0)
+// 固定表格高度，内部滚动（视口高度减去过滤栏/分页/边距）
+const tableHeight = ref(window.innerHeight - 260)
+
+const filters = reactive({
+  key: '',
+  model: '',
+  route: '',
+  plugin_id: undefined as number | undefined,
+  protocol: undefined as string | undefined,
+  status_class: undefined as string | undefined,
+  range: [] as string[],
+})
 
 // 插件品牌名映射
 function pluginLabel(pluginID: number | null): string {
@@ -94,9 +183,10 @@ function pluginLabel(pluginID: number | null): string {
 }
 
 const columns = computed(() => [
-  { colKey: 'key', title: t('logs.key'), width: 130, ellipsis: true },
+  { colKey: 'key', title: t('logs.key'), width: 120, ellipsis: true },
+  { colKey: 'route', title: t('logs.route'), width: 140, ellipsis: true, align: 'center' },
   { colKey: 'Model', title: t('logs.model'), width: 160, ellipsis: true, align: 'center' },
-  { colKey: 'plugin', title: t('logs.plugin'), width: 110, cell: (_h: any, { row }: any) => pluginLabel(row.PluginID), align: 'center' },
+  { colKey: 'plugin', title: t('logs.plugin'), width: 100, cell: (_h: any, { row }: any) => pluginLabel(row.PluginID), align: 'center' },
   { colKey: 'Protocol', title: t('logs.protocol'), width: 150, cell: (_h: any, { row }: any) => dict(protocolDict, row.Protocol), align: 'center' },
   { colKey: 'status', title: t('common.colStatus'), width: 80, align: 'center' },
   { colKey: 'tokens', title: 'Token', width: 190, align: 'center' },
@@ -114,7 +204,6 @@ function fmt(n: number): string {
   return `${(n / 1000000).toFixed(2)}M`
 }
 
-// 缓存 token 取整 K 展示（如 5m 对齐输入输出）
 function fmtCache(n: number): string {
   return fmt(n)
 }
@@ -126,28 +215,75 @@ function fmtMs(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`
 }
 
-function total(row: RequestLog): number {
+function sumTokens(row: RequestLog): number {
   return (row.InputTokens || 0) + (row.OutputTokens || 0) + (row.CachedTokens || 0)
+}
+
+// buildQuery 组装过滤参数（空值不带）
+function buildQuery(): string {
+  const p = new URLSearchParams()
+  p.set('page', String(page.value))
+  p.set('page_size', String(pageSize.value))
+  if (filters.key.trim()) p.set('key', filters.key.trim())
+  if (filters.model.trim()) p.set('model', filters.model.trim())
+  if (filters.route.trim()) p.set('route', filters.route.trim())
+  if (filters.plugin_id) p.set('plugin_id', String(filters.plugin_id))
+  if (filters.protocol) p.set('protocol', filters.protocol)
+  if (filters.status_class) p.set('status_class', filters.status_class)
+  if (filters.range?.[0]) p.set('from', filters.range[0])
+  // 结束日期为纯日期（长度 10）时补当天末刻，含当天全部记录
+  if (filters.range?.[1]) {
+    const to = filters.range[1]
+    p.set('to', to.length === 10 ? `${to} 23:59:59` : to)
+  }
+  return p.toString()
 }
 
 async function load() {
   loading.value = true
   try {
     const [resp, p] = await Promise.all([
-      api.get<{ logs: RequestLog[] }>('/admin/logs?limit=200'),
+      api.get<{ logs: RequestLog[]; total: number }>(`/admin/logs?${buildQuery()}`),
       api.get<{ plugins: { id: number; name: string; label?: string }[] }>('/admin/plugins'),
     ])
     logs.value = resp.logs ?? []
+    total.value = resp.total ?? 0
     plugins.value = p.plugins ?? []
   } finally {
     loading.value = false
   }
 }
 
+// search 重置到第一页再查
+function search() {
+  page.value = 1
+  load()
+}
+
+function reset() {
+  filters.key = ''; filters.model = ''; filters.route = ''
+  filters.plugin_id = undefined; filters.protocol = undefined; filters.status_class = undefined
+  filters.range = []
+  page.value = 1
+  load()
+}
+
 onMounted(load)
 </script>
 
 <style scoped>
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
 .ellipsis {
   display: inline-block;
   max-width: 100%;
@@ -160,7 +296,6 @@ onMounted(load)
 .dim {
   color: var(--td-text-color-placeholder);
 }
-/* Token 合并列：输入/输出 + 可选缓存 */
 .tokens {
   display: inline-flex;
   align-items: center;
@@ -178,7 +313,6 @@ onMounted(load)
   color: var(--td-warning-color);
   cursor: default;
 }
-/* Token 明细 tooltip */
 .tok-detail {
   min-width: 200px;
 }
@@ -206,7 +340,6 @@ onMounted(load)
 .tok-detail-total b {
   font-variant-numeric: tabular-nums;
 }
-/* 延迟合并列：绿条 + 首字/总耗时 */
 .latency {
   display: flex;
   align-items: center;

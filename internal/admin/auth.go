@@ -27,7 +27,7 @@ func roleOf(r *http.Request) string {
 
 // menusForRole 角色可见菜单键：admin 全量，guest 只读（隐藏系统设置）。
 func menusForRole(role string) []string {
-	all := []string{"dashboard", "plugins", "accounts", "groups", "proxies", "routes", "keys", "tasks", "logs", "settings"}
+	all := []string{"dashboard", "plugins", "accounts", "groups", "proxies", "routes", "keys", "oauth", "tasks", "logs", "settings"}
 	if role == "admin" {
 		return all
 	}

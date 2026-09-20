@@ -21,6 +21,7 @@ const router = createRouter({
         { path: 'proxies', component: () => import('../views/Proxies.vue') },
         { path: 'routes', component: () => import('../views/Routes.vue') },
         { path: 'keys', component: () => import('../views/Keys.vue') },
+        { path: 'oauth', component: () => import('../views/OAuth.vue') },
         { path: 'tasks', component: () => import('../views/Tasks.vue') },
         { path: 'logs', component: () => import('../views/Logs.vue') },
         { path: 'settings', component: () => import('../views/Settings.vue') },

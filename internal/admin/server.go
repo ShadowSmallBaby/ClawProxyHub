@@ -68,8 +68,17 @@ func (s *Server) Handler() http.Handler {
 	s.routeProxies(r)
 	s.routeRoutes(r)
 	s.routeTasks(r)
+	s.routeOAuth(r)
 	s.routeSettingsStats(r)
 	return mux
+}
+
+// routeOAuth 第三方平台登录态托管（供插件换取上游 token）。
+func (s *Server) routeOAuth(r authed) {
+	r.h("GET /admin/oauth-credentials", s.listOAuth)
+	r.h("POST /admin/oauth-credentials", s.createOAuth)
+	r.h("PUT /admin/oauth-credentials/{id}", s.updateOAuth)
+	r.h("DELETE /admin/oauth-credentials/{id}", s.deleteOAuth)
 }
 
 // routeSession 会话：改密 / 当前用户。

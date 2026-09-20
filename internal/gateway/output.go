@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"time"
 
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
@@ -56,7 +55,6 @@ func (s *Server) streamOut(w http.ResponseWriter, events chan *pb.StreamEvent, f
 	w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
 
-	start := time.Now()
 	log.status = http.StatusOK
 	filler := &toolIDFiller{}
 
@@ -79,7 +77,7 @@ func (s *Server) streamOut(w http.ResponseWriter, events chan *pb.StreamEvent, f
 
 	if first != nil && !emit(first) {
 		io.WriteString(w, enc.finish())
-		log.write(s.db, time.Since(start))
+		log.write(s.db)
 		return
 	}
 	for ev := range events {
@@ -88,7 +86,7 @@ func (s *Server) streamOut(w http.ResponseWriter, events chan *pb.StreamEvent, f
 		}
 	}
 	io.WriteString(w, enc.finish())
-	log.write(s.db, time.Since(start))
+	log.write(s.db)
 }
 
 // nonStreamOut 聚合：完整 JSON 一次写回。first 为已取出的首事件。
@@ -99,7 +97,6 @@ func (s *Server) nonStreamOut(w http.ResponseWriter, events chan *pb.StreamEvent
 		return 0, ""
 	}
 	a := aggr[0]
-	start := time.Now()
 	filler := &toolIDFiller{}
 
 	handle := func(ev *pb.StreamEvent) bool {
@@ -126,7 +123,7 @@ func (s *Server) nonStreamOut(w http.ResponseWriter, events chan *pb.StreamEvent
 	}
 	log.status = http.StatusOK
 	writeJSON(w, http.StatusOK, a.result())
-	log.write(s.db, time.Since(start))
+	log.write(s.db)
 	return 0, ""
 }
 

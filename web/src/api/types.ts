@@ -189,7 +189,9 @@ export interface TaskRun {
 export interface RequestLog {
   ID: number
   KeyID: number | null
+  PluginID: number | null
   Model: string
+  RouteName: string
   Protocol: string
   Status: number
   InputTokens: number

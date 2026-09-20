@@ -103,6 +103,17 @@
         <router-view />
       </t-content>
     </t-layout>
+
+    <!-- 更新日志弹窗：点版本徽标有更新时展示，右下按钮跳发布页 -->
+    <t-dialog v-model:visible="changelogVisible" :header="changelogTitle" :footer="false" width="480px">
+      <div class="changelog-ver">v{{ version }} → <b>v{{ latest }}</b></div>
+      <ul v-if="changelog?.items?.length" class="changelog-list">
+        <li v-for="(it, i) in changelog.items" :key="i">{{ clText(it) }}</li>
+      </ul>
+      <div class="changelog-foot">
+        <t-button theme="primary" @click="gotoRelease">{{ $t('common.goRelease') }}</t-button>
+      </div>
+    </t-dialog>
   </t-layout>
 </template>
 
@@ -113,7 +124,7 @@ import {
   DashboardIcon, AppIcon, UserIcon, FolderIcon, InternetIcon,
   LockOnIcon, TimeIcon, FileIcon, RootListIcon, SettingIcon,
   ChevronLeftIcon, ChevronRightIcon, TranslateIcon, MoonIcon, SunnyIcon,
-  PoweroffIcon, CheckIcon, LogoGithubIcon,
+  PoweroffIcon, CheckIcon, LogoGithubIcon, CertificateIcon,
 } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { api, clearToken } from '../api/client'
@@ -153,21 +164,26 @@ const latest = ref('')
 const updateAvailable = ref(false)
 const checking = ref(false)
 const releaseUrl = ref('https://github.com/ShadowSmallBaby/ClawProxyHub/releases')
+// 更新日志（远端 version.json.changelog，中英双语）+ 弹窗开关
+interface Changelog { title?: Record<string, string>; items?: Record<string, string>[] }
+const changelog = ref<Changelog | null>(null)
+const changelogVisible = ref(false)
 
 // checkVersion 拉取本机/远端版本对比；manual=true 时弹结果提示（手动点击）。
 async function checkVersion(manual = false) {
   if (checking.value) return
   checking.value = true
   try {
-    const r = await api.get<{ version: string; latest?: string; update_available?: boolean; release_url?: string }>('/admin/version')
+    const r = await api.get<{ version: string; latest?: string; update_available?: boolean; release_url?: string; changelog?: Changelog }>('/admin/version')
     version.value = r.version
     latest.value = r.latest ?? ''
     updateAvailable.value = !!r.update_available
     if (r.release_url) releaseUrl.value = r.release_url
+    changelog.value = r.changelog ?? null
     if (manual) {
       if (updateAvailable.value) {
-        MessagePlugin.info(i18n.global.t('common.updateFound', { v: latest.value }))
-        window.open(releaseUrl.value, '_blank')
+        // 有更新：先弹更新日志弹窗（弹窗内按钮再跳发布页）
+        changelogVisible.value = true
       } else if (latest.value) {
         MessagePlugin.success(i18n.global.t('common.upToDate'))
       } else {
@@ -180,6 +196,19 @@ async function checkVersion(manual = false) {
     checking.value = false
   }
 }
+// clText 按当前语言取更新日志文案（缺当前语言回退另一语言）
+function clText(m: Record<string, string> | undefined): string {
+  if (!m) return ''
+  return m[locale.value] || m.zh || m.en || ''
+}
+// 更新日志弹窗标题（远端未给则用通用文案）
+const changelogTitle = computed(() => clText(changelog.value?.title) || i18n.global.t('common.hasUpdate'))
+// gotoRelease 跳发布页并关弹窗
+function gotoRelease() {
+  window.open(releaseUrl.value, '_blank')
+  changelogVisible.value = false
+}
+
 checkVersion() // 首次进页自动查一次
 
 interface MenuItem {
@@ -197,6 +226,7 @@ const menuItems: MenuItem[] = [
   { value: '/proxies', label: 'menu.proxies', desc: 'menuDesc.proxies', icon: RootListIcon },
   { value: '/routes', label: 'menu.routes', desc: 'menuDesc.routes', icon: InternetIcon },
   { value: '/keys', label: 'menu.keys', desc: 'menuDesc.keys', icon: LockOnIcon },
+  { value: '/oauth', label: 'menu.oauth', desc: 'menuDesc.oauth', icon: CertificateIcon },
   { value: '/tasks', label: 'menu.tasks', desc: 'menuDesc.tasks', icon: TimeIcon },
   { value: '/logs', label: 'menu.logs', desc: 'menuDesc.logs', icon: FileIcon },
   { value: '/settings', label: 'menu.settings', desc: 'menuDesc.settings', icon: SettingIcon },
@@ -460,5 +490,28 @@ function logout() {
   flex: 1;
   overflow-y: auto;
   height: 0;
+}
+
+/* 更新日志弹窗 */
+.changelog-ver {
+  font-size: 13px;
+  color: var(--td-text-color-secondary);
+  margin-bottom: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.changelog-ver b {
+  color: var(--td-brand-color);
+}
+.changelog-list {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.9;
+  font-size: 14px;
+  color: var(--td-text-color-primary);
+}
+.changelog-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
 }
 </style>
