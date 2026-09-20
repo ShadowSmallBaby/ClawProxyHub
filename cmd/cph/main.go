@@ -15,6 +15,7 @@ import (
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/admin"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/config"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/database"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/event"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/gateway"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/plugin"
@@ -104,11 +105,13 @@ func run() error {
 	syncPluginRecords(db, plugins)
 	defer plugins.StopAll()
 
-	engine := task.NewEngine(db, cfg.DataDir, task.NewPluginRunner(plugins))
+	bus := event.New()
+	accounts := accountpkg.New(db, cfg.DataDir, plugins)
+	accounts.SubscribeRefresh(ctx, bus)
+
+	engine := task.NewEngine(db, cfg.DataDir, task.NewPluginRunner(plugins), bus)
 	engine.Start(ctx)
 	defer engine.Stop()
-
-	accounts := accountpkg.New(db, cfg.DataDir, plugins)
 	settings := setting.New(db)
 	gw := gateway.New(db, cfg.DataDir, plugins, router.New(db), accounts, settings)
 	adminSrv := admin.New(db, accounts, plugins, engine, settings, cfg.MarketplaceURL)

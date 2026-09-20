@@ -1,6 +1,6 @@
 <template>
   <t-layout class="layout">
-    <t-aside :width="collapsed ? '64px' : '220px'" class="aside">
+    <t-aside :width="collapsed ? '64px' : '200px'" class="aside">
       <div class="logo" @click="router.push('/dashboard')">
         <img class="logo-badge" src="/logo.png" alt="ClawProxyHub" />
         <span v-if="!collapsed" class="logo-text">Claw<span>ProxyHub</span></span>
@@ -8,7 +8,7 @@
       <t-menu
         :value="route.path"
         :collapsed="collapsed"
-        :width="collapsed ? '64px' : '220px'"
+        :width="collapsed ? '64px' : '200px'"
         class="aside-menu"
         @change="(v: string) => router.push(v)"
       >
@@ -32,6 +32,13 @@
           <div class="header-desc">{{ $t(currentPage.desc) }}</div>
         </div>
         <div class="header-right">
+          <t-tooltip v-if="version" :content="updateAvailable ? $t('common.hasUpdate') : $t('common.checkUpdate')">
+            <div class="ver-chip" :class="{ 'has-update': updateAvailable, checking }" @click="checkVersion(true)">
+              <t-loading v-if="checking" size="12px" />
+              <span class="ver-text">v{{ version }}</span>
+              <span v-if="updateAvailable && !checking" class="ver-dot" />
+            </div>
+          </t-tooltip>
           <t-tooltip :content="$t('common.github')">
             <t-button variant="text" shape="square" theme="default" @click="openGithub">
               <logo-github-icon />
@@ -108,6 +115,7 @@ import {
   ChevronLeftIcon, ChevronRightIcon, TranslateIcon, MoonIcon, SunnyIcon,
   PoweroffIcon, CheckIcon, LogoGithubIcon,
 } from 'tdesign-icons-vue-next'
+import { MessagePlugin } from 'tdesign-vue-next'
 import { api, clearToken, getToken } from '../api/client'
 import i18n, { setLocale as applyLocale, type Locale } from '../i18n'
 
@@ -135,6 +143,41 @@ function setLocale(l: Locale) {
 function openGithub() {
   window.open('https://github.com/ShadowSmallBaby/ClawProxyHub', '_blank')
 }
+
+// ---------- 版本信息（头部徽标；点击重查，首次进页自动查一次） ----------
+const version = ref('')
+const latest = ref('')
+const updateAvailable = ref(false)
+const checking = ref(false)
+const releaseUrl = ref('https://github.com/ShadowSmallBaby/ClawProxyHub/releases')
+
+// checkVersion 拉取本机/远端版本对比；manual=true 时弹结果提示（手动点击）。
+async function checkVersion(manual = false) {
+  if (checking.value) return
+  checking.value = true
+  try {
+    const r = await api.get<{ version: string; latest?: string; update_available?: boolean; release_url?: string }>('/admin/version')
+    version.value = r.version
+    latest.value = r.latest ?? ''
+    updateAvailable.value = !!r.update_available
+    if (r.release_url) releaseUrl.value = r.release_url
+    if (manual) {
+      if (updateAvailable.value) {
+        MessagePlugin.info(i18n.global.t('common.updateFound', { v: latest.value }))
+        window.open(releaseUrl.value, '_blank')
+      } else if (latest.value) {
+        MessagePlugin.success(i18n.global.t('common.upToDate'))
+      } else {
+        MessagePlugin.warning(i18n.global.t('common.checkFailed'))
+      }
+    }
+  } catch {
+    if (manual) MessagePlugin.warning(i18n.global.t('common.checkFailed'))
+  } finally {
+    checking.value = false
+  }
+}
+checkVersion() // 首次进页自动查一次
 
 interface MenuItem {
   value: string
@@ -274,6 +317,41 @@ function logout() {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+/* 版本 chip：默认灰字，有更新时描边高亮 + 红点，可点跳发布页 */
+.ver-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--td-text-color-placeholder);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.ver-chip:hover {
+  color: var(--td-text-color-primary);
+  background: var(--td-bg-color-secondarycontainer);
+}
+.ver-chip.checking {
+  cursor: progress;
+}
+.ver-chip.has-update {
+  color: var(--td-warning-color);
+  background: var(--td-warning-color-1);
+  cursor: pointer;
+}
+.ver-chip.has-update:hover {
+  background: var(--td-warning-color-2);
+}
+.ver-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--td-warning-color);
 }
 /* 语言菜单 */
 .lang-menu {

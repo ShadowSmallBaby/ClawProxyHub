@@ -68,6 +68,8 @@
       </template>
       <template #op="{ row }">
         <t-space size="small">
+          <t-link theme="primary" @click="openEdit(row)">{{ $t('common.edit') }}</t-link>
+          <t-link theme="primary" @click="openTest(row)">{{ $t('accounts.test') }}</t-link>
           <t-link theme="primary" @click="refresh(row.id)">{{ $t('common.refresh') }}</t-link>
           <t-popconfirm :content="$t('accounts.confirmDelete')" @confirm="remove(row.id)">
             <t-link theme="danger">{{ $t('common.delete') }}</t-link>
@@ -270,13 +272,57 @@
         </div>
         <div>
           <div class="section-title">{{ $t('accounts.groupsTitle') }}</div>
-          <t-select v-model="newAccountGroups" multiple clearable :placeholder="$t('accounts.groupsPh')" style="width: 100%">
-            <t-option v-for="g in pluginGroups" :key="g.id" :value="g.id" :label="`${g.name} (${g.plugin_label || g.plugin})`" />
-          </t-select>
+          <bind-select v-model="newAccountGroups" :options="wizardGroupOptions" :placeholder="$t('accounts.groupsPh')" />
         </div>
         <t-button theme="primary" block :loading="savingConfig" @click="finishWizard">{{ $t('accounts.finish') }}</t-button>
       </t-space>
     </t-dialog>
+
+    <!-- 编辑账号：改名 / 绑分组 / 绑代理 / 同步模型 -->
+    <t-dialog v-model:visible="editVisible" :header="$t('accounts.editTitle')" :confirm-btn="{ loading: editSaving }" width="640px" @confirm="submitEdit">
+      <t-form v-if="editRow" label-width="90px">
+        <t-form-item :label="$t('accounts.name')">
+          <t-input v-model="editName" :placeholder="$t('accounts.namePh')" clearable />
+        </t-form-item>
+        <t-form-item :label="$t('accounts.groupsTitle')">
+          <bind-select v-model="editGroups" :options="editGroupOptions" :placeholder="$t('accounts.groupsPh')" />
+        </t-form-item>
+        <t-form-item :label="$t('accounts.proxyTitle')">
+          <bind-select v-model="editProxies" :options="proxyOptions" :placeholder="$t('accounts.proxyPh')" />
+        </t-form-item>
+        <t-form-item :label="$t('accounts.modelsTitle')">
+          <div style="width: 100%">
+            <t-link theme="primary" @click="editSyncModels">{{ editSyncing ? $t('accounts.syncing') : $t('accounts.sync') }}</t-link>
+            <div v-if="editModels.length" class="model-list" style="margin-top: 8px">
+              <t-tag v-for="m in editModels" :key="m.id" closable variant="light-outline" style="margin: 0 6px 6px 0" @close="editModels = editModels.filter((x) => x.id !== m.id)">{{ m.id }}</t-tag>
+            </div>
+            <span v-else class="hint">{{ $t('accounts.noModels') }}</span>
+          </div>
+        </t-form-item>
+      </t-form>
+    </t-dialog>
+
+    <!-- 在线测试：选端点/模型/问题 → 响应日志 -->
+    <t-drawer v-model:visible="testVisible" :header="$t('accounts.testTitle')" size="560px" :footer="false">
+      <t-space v-if="testRow" direction="vertical" style="width: 100%" size="large">
+        <t-form label-width="80px">
+          <t-form-item :label="$t('accounts.testEndpoint')">
+            <bind-select v-model="testEndpoint" :multiple="false" :options="endpointOptions" />
+          </t-form-item>
+          <t-form-item :label="$t('accounts.testModel')">
+            <bind-select v-model="testModel" :multiple="false" :options="testModelOptions" :placeholder="$t('accounts.testModelPh')" />
+          </t-form-item>
+          <t-form-item :label="$t('accounts.testQuestion')">
+            <t-input v-model="testQuestion" :placeholder="$t('accounts.testQuestionPh')" />
+          </t-form-item>
+        </t-form>
+        <t-button theme="primary" block :loading="testing" :disabled="!testModel" @click="runTest">{{ $t('accounts.testRun') }}</t-button>
+        <div v-if="testText" class="test-answer">{{ testText }}</div>
+        <div v-if="testLogs.length" class="test-logs">
+          <div v-for="(l, i) in testLogs" :key="i" class="test-log-line">{{ l }}</div>
+        </div>
+      </t-space>
+    </t-drawer>
   </div>
 </template>
 
@@ -286,15 +332,37 @@ import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { CheckIcon } from 'tdesign-icons-vue-next'
 import { api } from '../api/client'
+import BindSelect from '../components/BindSelect.vue'
 import { accountStatusDict, capabilityDict, dict, label, runStatusDict } from '../utils/dict'
-import type { Account, AccountDetail, AuthMethod, GroupInfo, LoginResp, NextStep, PluginInfo } from '../api/types'
+import type { Account, AccountDetail, AuthMethod, GroupInfo, LoginResp, ModelInfo, NextStep, PluginInfo } from '../api/types'
 
 const { t } = useI18n()
 
 const plugins = ref<PluginInfo[]>([])
 const accounts = ref<Account[]>([])
 const groups = ref<GroupInfo[]>([])
+const proxies = ref<{ ID: number; Scheme: string; Host: string; Port: number }[]>([])
 const loading = ref(false)
+
+// 编辑弹窗
+const editVisible = ref(false)
+const editRow = ref<Account | null>(null)
+const editName = ref('')
+const editGroups = ref<number[]>([])
+const editProxies = ref<number[]>([])
+const editModels = ref<{ id: string }[]>([])
+const editSaving = ref(false)
+const editSyncing = ref(false)
+
+// 在线测试抽屉
+const testVisible = ref(false)
+const testRow = ref<Account | null>(null)
+const testEndpoint = ref('chat_completions')
+const testModel = ref('')
+const testQuestion = ref('')
+const testText = ref('')
+const testLogs = ref<string[]>([])
+const testing = ref(false)
 
 const addVisible = ref(false)
 const wizardStep = ref<'select' | 'auth' | 'done'>('select')
@@ -339,7 +407,7 @@ const columns = computed(() => [
   { colKey: 'status', title: t('accounts.status'), width: 90, align: 'center' },
   { colKey: 'schedule', title: t('accounts.schedule'), width: 110, align: 'center' },
   { colKey: 'last_refresh_at', title: t('accounts.lastRefresh'), width: 120, cell: (_h: any, { row }: any) => row.last_refresh_at ? timeAgo(row.last_refresh_at) : '-', align: 'center' },
-  { colKey: 'op', title: t('common.colOp'), width: 130, align: 'center' },
+  { colKey: 'op', title: t('common.colOp'), width: 200, align: 'center' },
 ])
 
 // 相对时间：如 5分钟前 / 1天前 / 3个月前
@@ -524,16 +592,117 @@ const autoPolling = computed(() => {
 async function loadAll() {
   loading.value = true
   try {
-    const [p, a, g] = await Promise.all([
+    const [p, a, g, px] = await Promise.all([
       api.get<{ plugins: PluginInfo[] }>('/admin/plugins'),
       api.get<{ accounts: Account[] }>('/admin/accounts'),
       api.get<{ groups: GroupInfo[] }>('/admin/groups'),
+      api.get<{ proxies: typeof proxies.value }>('/admin/proxies'),
     ])
     plugins.value = p.plugins ?? []
     accounts.value = a.accounts ?? []
     groups.value = g.groups ?? []
+    proxies.value = px.proxies ?? []
   } finally {
     loading.value = false
+  }
+}
+
+const proxyOptions = computed(() =>
+  proxies.value.map((px) => ({ value: px.ID, label: `${px.Scheme}://${px.Host}:${px.Port}` })),
+)
+const wizardGroupOptions = computed(() =>
+  pluginGroups.value.map((g) => ({ value: g.id, label: `${g.name} (${g.plugin_label || g.plugin})` })),
+)
+const editGroupOptions = computed(() => {
+  const pid = editRow.value?.plugin_id
+  return groups.value.filter((g) => g.plugin_id === pid).map((g) => ({ value: g.id, label: `${g.name} (${g.plugin_label || g.plugin})` }))
+})
+const endpointOptions = [
+  { value: 'chat_completions', label: 'chat/completions' },
+  { value: 'messages', label: 'messages' },
+  { value: 'responses', label: 'responses' },
+]
+const testModelOptions = computed(() => editModels.value.map((m) => ({ value: m.id, label: m.id })))
+
+// openEdit 打开编辑弹窗，回填名称/分组/代理/模型
+async function openEdit(row: Account) {
+  editRow.value = row
+  editName.value = row.display_name
+  editGroups.value = [...(row.group_ids ?? [])]
+  editModels.value = []
+  editProxies.value = []
+  editVisible.value = true
+  const [px, detail] = await Promise.all([
+    api.get<{ proxy_ids: number[] }>(`/admin/accounts/${row.id}/proxies`).catch(() => ({ proxy_ids: [] })),
+    api.get<AccountDetail>(`/admin/accounts/${row.id}/detail`).catch(() => null),
+  ])
+  editProxies.value = px.proxy_ids ?? []
+  editModels.value = (detail?.models ?? []).map((m) => ({ id: m.id }))
+}
+
+// editSyncModels 拉上游模型目录（?refresh=1 落库）
+async function editSyncModels() {
+  if (!editRow.value || editSyncing.value) return
+  editSyncing.value = true
+  try {
+    const resp = await api.get<{ models: ModelInfo[] | null }>(`/admin/accounts/${editRow.value.id}/models?refresh=1`)
+    editModels.value = (resp.models ?? []).map((m) => ({ id: m.id }))
+  } catch (e: any) {
+    MessagePlugin.warning(t('accounts.syncFailed', { msg: e.message }))
+  } finally {
+    editSyncing.value = false
+  }
+}
+
+// submitEdit 保存名称/分组/代理/模型（模型以用户勾选为准）
+async function submitEdit() {
+  if (!editRow.value) return
+  editSaving.value = true
+  try {
+    const id = editRow.value.id
+    await api.put(`/admin/accounts/${id}`, { display_name: editName.value, group_ids: editGroups.value })
+    await api.put(`/admin/accounts/${id}/proxies`, { proxy_ids: editProxies.value })
+    await api.put(`/admin/accounts/${id}/models`, { models: editModels.value })
+    MessagePlugin.success(t('common.saved'))
+    editVisible.value = false
+    await loadAll()
+  } catch (e: any) {
+    MessagePlugin.error(e.message)
+  } finally {
+    editSaving.value = false
+  }
+}
+
+// openTest 打开在线测试抽屉，模型候选取账号已存模型
+async function openTest(row: Account) {
+  testRow.value = row
+  testEndpoint.value = 'chat_completions'
+  testQuestion.value = ''
+  testText.value = ''
+  testLogs.value = []
+  testModel.value = ''
+  testVisible.value = true
+  const detail = await api.get<AccountDetail>(`/admin/accounts/${row.id}/detail`).catch(() => null)
+  editModels.value = (detail?.models ?? []).map((m) => ({ id: m.id }))
+  if (editModels.value.length) testModel.value = editModels.value[0].id
+}
+
+// runTest 直调插件 Chat（绕路由/key），输出响应与日志
+async function runTest() {
+  if (!testRow.value || !testModel.value) return
+  testing.value = true
+  testText.value = ''
+  testLogs.value = []
+  try {
+    const resp = await api.post<{ text: string; logs: string[] }>(`/admin/accounts/${testRow.value.id}/test`, {
+      endpoint: testEndpoint.value, model: testModel.value, question: testQuestion.value,
+    })
+    testText.value = resp.text ?? ''
+    testLogs.value = resp.logs ?? []
+  } catch (e: any) {
+    testLogs.value = ['✗ ' + (e.message || 'error')]
+  } finally {
+    testing.value = false
   }
 }
 
@@ -640,7 +809,7 @@ async function syncModels() {
   if (!newAccountId.value || modelsSyncing.value) return
   modelsSyncing.value = true
   try {
-    const resp = await api.get<{ models: { id: string }[] | null }>(`/admin/accounts/${newAccountId.value}/models`)
+    const resp = await api.get<{ models: { id: string }[] | null }>(`/admin/accounts/${newAccountId.value}/models?refresh=1`)
     wizardModels.value = resp.models ?? []
   } catch (e: any) {
     MessagePlugin.warning(t('accounts.syncFailed', { msg: e.message }))
@@ -796,6 +965,25 @@ onMounted(loadAll)
 .hint {
   color: var(--td-text-color-placeholder);
   font-size: 12px;
+}
+.test-answer {
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--td-bg-color-secondarycontainer);
+  border-radius: 6px;
+}
+.test-logs {
+  padding: 8px 12px;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  background: var(--td-bg-color-container-hover);
+  border-radius: 6px;
+}
+.test-log-line {
+  word-break: break-all;
+  line-height: 1.7;
 }
 .wizard-back {
   display: flex;

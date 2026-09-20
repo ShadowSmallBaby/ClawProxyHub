@@ -50,9 +50,7 @@
         <t-form-item :label="$t('routes.groupMapping')" mark>
           <div class="entries">
             <div v-for="(e, i) in form.groups" :key="i" class="entry">
-              <t-select v-model="e.group_id" :placeholder="$t('routes.groupPh')" style="width: 160px">
-                <t-option v-for="g in groups" :key="g.id" :value="g.id" :label="`${g.name} (${g.plugin_label || g.plugin})`" />
-              </t-select>
+              <bind-select v-model="e.group_id" :multiple="false" :options="groupOptions" :placeholder="$t('routes.groupPh')" style="width: 160px" />
               <t-input v-model="e.model" :placeholder="$t('routes.modelPh')" style="flex: 1" />
               <t-input-number v-model="e.weight" :min="1" :max="100" theme="column" style="width: 110px" :placeholder="$t('routes.weightPh')" />
               <t-link theme="danger" @click="form.groups.splice(i, 1)">{{ $t('routes.removeEntry') }}</t-link>
@@ -76,9 +74,7 @@
             </t-checkbox-group>
           </t-form-item>
           <t-form-item :label="$t('routes.failoverGroup')" mark>
-            <t-select v-model="form.failover_group_id" :placeholder="$t('routes.pickGroup')" style="width: 240px" clearable>
-              <t-option v-for="g in groups" :key="g.id" :value="g.id" :label="`${g.name} (${g.plugin_label || g.plugin})`" />
-            </t-select>
+            <bind-select v-model="form.failover_group_id" :multiple="false" :options="groupOptions" :placeholder="$t('routes.pickGroup')" style="width: 240px" />
           </t-form-item>
           <t-form-item :label="$t('routes.failoverModel')" mark>
             <t-input v-model="form.failover_model" :placeholder="$t('routes.failoverModelPh')" style="width: 360px" />
@@ -94,6 +90,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { api } from '../api/client'
+import BindSelect from '../components/BindSelect.vue'
 import { dict, strategyDict } from '../utils/dict'
 import type { GroupInfo, RouteGroupEntry, RouteInfo } from '../api/types'
 
@@ -124,6 +121,10 @@ const columns = computed(() => [
   { colKey: 'failover', title: t('routes.colFailover'), width: 220, align: 'center' },
   { colKey: 'op', title: t('common.colOp'), width: 130, align: 'center' },
 ])
+
+const groupOptions = computed(() =>
+  groups.value.map((g) => ({ value: g.id, label: `${g.name} (${g.plugin_label || g.plugin})` })),
+)
 
 function parseGroups(json: string): RouteGroupEntry[] {
   try { return JSON.parse(json) } catch { return [] }

@@ -3,12 +3,14 @@ package account
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"gorm.io/gorm"
 
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/event"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/plugin"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
@@ -74,6 +76,8 @@ func (s *Service) SubmitLogin(ctx context.Context, pluginName, methodID string, 
 	if err != nil {
 		return nil, err
 	}
+	// 首次建档自动拉一次模型目录落库（best-effort，失败不阻断登录）
+	_, _ = s.SyncModels(ctx, acct.ID)
 	return &LoginOutcome{AccountID: acct.ID, Profile: result.Profile}, nil
 }
 
@@ -193,6 +197,58 @@ func (s *Service) Models(ctx context.Context, accountID int64) ([]*pb.ModelInfo,
 	return ml.Models, nil
 }
 
+// SyncModels 拉上游模型目录并落库（首次建档 / 手动刷新用），返回拉取结果。
+func (s *Service) SyncModels(ctx context.Context, accountID int64) ([]*pb.ModelInfo, error) {
+	models, err := s.Models(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	s.db.Model(&model.Account{}).Where("id = ?", accountID).
+		Update("models_json", marshalModels(models))
+	return models, nil
+}
+
+// SaveModels 存用户勾选的模型目录（以用户为准）。
+func (s *Service) SaveModels(accountID int64, models []*pb.ModelInfo) {
+	s.db.Model(&model.Account{}).Where("id = ?", accountID).
+		Update("models_json", marshalModels(models))
+}
+
+// StoredModels 读库中的模型目录快照。
+func (s *Service) StoredModels(accountID int64) []*pb.ModelInfo {
+	var acct model.Account
+	if err := s.db.Select("models_json").First(&acct, accountID).Error; err != nil || acct.ModelsJSON == "" {
+		return nil
+	}
+	var raws []json.RawMessage
+	if json.Unmarshal([]byte(acct.ModelsJSON), &raws) != nil {
+		return nil
+	}
+	out := make([]*pb.ModelInfo, 0, len(raws))
+	for _, r := range raws {
+		m := &pb.ModelInfo{}
+		if protojson.Unmarshal(r, m) == nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// marshalModels ModelInfo 数组 → JSON（protojson 保真，逐条编码）。
+func marshalModels(models []*pb.ModelInfo) string {
+	raws := make([]json.RawMessage, 0, len(models))
+	for _, m := range models {
+		if b, err := protojson.Marshal(m); err == nil {
+			raws = append(raws, b)
+		}
+	}
+	b, err := json.Marshal(raws)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 // MarkExpired 标记账号过期（网关 401 换号路径调用）。
 func (s *Service) MarkExpired(accountID int64) {
 	s.db.Model(&model.Account{}).Where("id = ?", accountID).
@@ -258,3 +314,20 @@ func profileJSON(p *pb.AccountProfile) string {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// SubscribeRefresh 订阅任务完成事件，成功后刷新该账号 profile（积分/套餐）。
+func (s *Service) SubscribeRefresh(ctx context.Context, bus *event.Bus) {
+	ch := bus.Subscribe(event.TopicTaskCompleted)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev := <-ch:
+				if ev.AccountID > 0 {
+					_, _ = s.Refresh(ctx, ev.AccountID)
+				}
+			}
+		}
+	}()
+}

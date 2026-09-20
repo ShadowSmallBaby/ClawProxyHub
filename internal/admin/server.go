@@ -43,67 +43,128 @@ func New(db *gorm.DB, accounts *account.Service, plugins *plugin.Manager, engine
 	return s
 }
 
-// Handler 管理路由。
+// authed 鉴权路由注册器：h() 注册的处理器统一套 s.auth，杜绝漏包鉴权。
+type authed struct {
+	mux *http.ServeMux
+	s   *Server
+}
+
+func (a authed) h(pattern string, fn http.HandlerFunc) { a.mux.HandleFunc(pattern, a.s.auth(fn)) }
+
+// Handler 管理路由：免鉴权引导 + 按资源分组的鉴权路由。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	// 首启引导（免鉴权）
 	mux.HandleFunc("GET /admin/setup-status", s.setupStatus)
 	mux.HandleFunc("POST /admin/setup", s.setup)
-	// 管理操作（需鉴权）
-	mux.HandleFunc("POST /admin/password", s.auth(s.changePassword))
-	mux.HandleFunc("GET /admin/me", s.auth(s.me))
-	mux.HandleFunc("GET /admin/plugins", s.auth(s.listPlugins))
-	mux.HandleFunc("GET /admin/plugins/{name}/auth-methods", s.auth(s.authMethods))
-	mux.HandleFunc("GET /admin/plugins/{name}/settings", s.auth(s.pluginSettings))
-	mux.HandleFunc("GET /admin/plugins/{name}/task-capabilities", s.auth(s.pluginTaskCapabilities))
-	mux.HandleFunc("PUT /admin/plugins/{name}/settings", s.auth(s.putPluginSettings))
-	// 插件分发
-	mux.HandleFunc("GET /admin/plugins/marketplace", s.auth(s.marketplace))
-	mux.HandleFunc("POST /admin/plugins/install-market", s.auth(s.installMarket))
-	mux.HandleFunc("POST /admin/plugins/install-upload", s.auth(s.installUpload))
-	mux.HandleFunc("POST /admin/plugins/{name}/stop", s.auth(s.stopPlugin))
-	mux.HandleFunc("POST /admin/plugins/{name}/start", s.auth(s.startPlugin))
-	mux.HandleFunc("DELETE /admin/plugins/{name}", s.auth(s.uninstallPlugin))
-	mux.HandleFunc("POST /admin/accounts/login", s.auth(s.submitLogin))
-	mux.HandleFunc("GET /admin/accounts", s.auth(s.listAccounts))
-	mux.HandleFunc("GET /admin/accounts/{id}/detail", s.auth(s.accountDetail))
-	mux.HandleFunc("GET /admin/accounts/{id}/models", s.auth(s.accountModels))
-	mux.HandleFunc("DELETE /admin/accounts/{id}", s.auth(s.deleteAccount))
-	mux.HandleFunc("POST /admin/accounts/{id}/refresh", s.auth(s.refreshAccount))
-	mux.HandleFunc("POST /admin/accounts/{id}/pause", s.auth(s.pauseAccount))
-	mux.HandleFunc("POST /admin/accounts/{id}/resume", s.auth(s.resumeAccount))
-	mux.HandleFunc("PUT /admin/accounts/{id}", s.auth(s.updateAccount))
-	mux.HandleFunc("GET /admin/keys", s.auth(s.listKeys))
-	mux.HandleFunc("GET /admin/keys/{id}/reveal", s.auth(s.revealKey))
-	mux.HandleFunc("POST /admin/keys", s.auth(s.createKey))
-	mux.HandleFunc("DELETE /admin/keys/{id}", s.auth(s.deleteKey))
-	mux.HandleFunc("POST /admin/keys/{id}/toggle", s.auth(s.toggleKey))
-	mux.HandleFunc("PUT /admin/keys/{id}/routes", s.auth(s.bindKeyRoutes))
-	mux.HandleFunc("GET /admin/groups", s.auth(s.listGroups))
-	mux.HandleFunc("POST /admin/groups", s.auth(s.createGroup))
-	mux.HandleFunc("DELETE /admin/groups/{id}", s.auth(s.deleteGroup))
-	mux.HandleFunc("PUT /admin/groups/{id}/proxies", s.auth(s.bindGroupProxies))
-	mux.HandleFunc("GET /admin/groups/{id}/proxies", s.auth(s.listGroupProxies))
-	mux.HandleFunc("GET /admin/proxies", s.auth(s.listProxies))
-	mux.HandleFunc("POST /admin/proxies", s.auth(s.createProxy))
-	mux.HandleFunc("DELETE /admin/proxies/{id}", s.auth(s.deleteProxy))
-	mux.HandleFunc("GET /admin/routes", s.auth(s.listRoutes))
-	mux.HandleFunc("POST /admin/routes", s.auth(s.createRoute))
-	mux.HandleFunc("PUT /admin/routes/{id}", s.auth(s.updateRoute))
-	mux.HandleFunc("DELETE /admin/routes/{id}", s.auth(s.deleteRoute))
-	mux.HandleFunc("GET /admin/settings", s.auth(s.getSettings))
-	mux.HandleFunc("PUT /admin/settings", s.auth(s.putSettings))
-	mux.HandleFunc("GET /admin/task-rules", s.auth(s.listTaskRules))
-	mux.HandleFunc("POST /admin/task-rules", s.auth(s.createTaskRule))
-	mux.HandleFunc("POST /admin/task-rules/{id}/toggle", s.auth(s.toggleTaskRule))
-	mux.HandleFunc("DELETE /admin/task-rules/{id}", s.auth(s.deleteTaskRule))
-	mux.HandleFunc("POST /admin/task-rules/{id}/run", s.auth(s.runTaskRule))
-	mux.HandleFunc("GET /admin/task-runs", s.auth(s.listTaskRuns))
-	mux.HandleFunc("GET /admin/logs", s.auth(s.listLogs))
-	mux.HandleFunc("GET /admin/stats", s.auth(s.dashboardStats))
-	mux.HandleFunc("GET /admin/stats/quota", s.auth(s.dashboardQuota))
-	mux.HandleFunc("GET /admin/stats/trend", s.auth(s.dashboardTrend))
+
+	r := authed{mux: mux, s: s}
+	s.routeSession(r)
+	s.routePlugins(r)
+	s.routeAccounts(r)
+	s.routeKeys(r)
+	s.routeGroups(r)
+	s.routeProxies(r)
+	s.routeRoutes(r)
+	s.routeTasks(r)
+	s.routeSettingsStats(r)
 	return mux
+}
+
+// routeSession 会话：改密 / 当前用户。
+func (s *Server) routeSession(r authed) {
+	r.h("POST /admin/password", s.changePassword)
+	r.h("GET /admin/me", s.me)
+}
+
+// routePlugins 插件：概览 / 设置 / 分发。
+func (s *Server) routePlugins(r authed) {
+	r.h("GET /admin/plugins", s.listPlugins)
+	r.h("GET /admin/plugins/{name}/auth-methods", s.authMethods)
+	r.h("GET /admin/plugins/{name}/settings", s.pluginSettings)
+	r.h("GET /admin/plugins/{name}/task-capabilities", s.pluginTaskCapabilities)
+	r.h("PUT /admin/plugins/{name}/settings", s.putPluginSettings)
+	r.h("GET /admin/plugins/marketplace", s.marketplace)
+	r.h("POST /admin/plugins/install-market", s.installMarket)
+	r.h("POST /admin/plugins/install-upload", s.installUpload)
+	r.h("POST /admin/plugins/{name}/stop", s.stopPlugin)
+	r.h("POST /admin/plugins/{name}/start", s.startPlugin)
+	r.h("DELETE /admin/plugins/{name}", s.uninstallPlugin)
+}
+
+// routeAccounts 账号：登录 / 详情 / 模型 / 代理 / 调度 / 测试。
+func (s *Server) routeAccounts(r authed) {
+	r.h("POST /admin/accounts/login", s.submitLogin)
+	r.h("GET /admin/accounts", s.listAccounts)
+	r.h("GET /admin/accounts/{id}/detail", s.accountDetail)
+	r.h("GET /admin/accounts/{id}/models", s.accountModels)
+	r.h("PUT /admin/accounts/{id}/models", s.saveAccountModels)
+	r.h("DELETE /admin/accounts/{id}", s.deleteAccount)
+	r.h("POST /admin/accounts/{id}/refresh", s.refreshAccount)
+	r.h("POST /admin/accounts/{id}/pause", s.pauseAccount)
+	r.h("POST /admin/accounts/{id}/resume", s.resumeAccount)
+	r.h("PUT /admin/accounts/{id}", s.updateAccount)
+	r.h("GET /admin/accounts/{id}/proxies", s.listAccountProxies)
+	r.h("PUT /admin/accounts/{id}/proxies", s.bindAccountProxies)
+	r.h("POST /admin/accounts/{id}/test", s.testAccount)
+}
+
+// routeKeys 密钥：签发 / 回显 / 改名 / 路由授权。
+func (s *Server) routeKeys(r authed) {
+	r.h("GET /admin/keys", s.listKeys)
+	r.h("GET /admin/keys/{id}/reveal", s.revealKey)
+	r.h("POST /admin/keys", s.createKey)
+	r.h("DELETE /admin/keys/{id}", s.deleteKey)
+	r.h("POST /admin/keys/{id}/toggle", s.toggleKey)
+	r.h("PUT /admin/keys/{id}", s.updateKey)
+	r.h("PUT /admin/keys/{id}/routes", s.bindKeyRoutes)
+}
+
+// routeGroups 分组：增删 / 代理绑定。
+func (s *Server) routeGroups(r authed) {
+	r.h("GET /admin/groups", s.listGroups)
+	r.h("POST /admin/groups", s.createGroup)
+	r.h("DELETE /admin/groups/{id}", s.deleteGroup)
+	r.h("PUT /admin/groups/{id}/proxies", s.bindGroupProxies)
+	r.h("GET /admin/groups/{id}/proxies", s.listGroupProxies)
+}
+
+// routeProxies 出站代理增删改查 + 连通性测试。
+func (s *Server) routeProxies(r authed) {
+	r.h("GET /admin/proxies", s.listProxies)
+	r.h("POST /admin/proxies", s.createProxy)
+	r.h("PUT /admin/proxies/{id}", s.updateProxy)
+	r.h("DELETE /admin/proxies/{id}", s.deleteProxy)
+	r.h("POST /admin/proxies/{id}/test", s.testProxy)
+}
+
+// routeRoutes 路由增删改查。
+func (s *Server) routeRoutes(r authed) {
+	r.h("GET /admin/routes", s.listRoutes)
+	r.h("POST /admin/routes", s.createRoute)
+	r.h("PUT /admin/routes/{id}", s.updateRoute)
+	r.h("DELETE /admin/routes/{id}", s.deleteRoute)
+}
+
+// routeTasks 任务调度规则与执行历史。
+func (s *Server) routeTasks(r authed) {
+	r.h("GET /admin/task-rules", s.listTaskRules)
+	r.h("POST /admin/task-rules", s.createTaskRule)
+	r.h("POST /admin/task-rules/{id}/toggle", s.toggleTaskRule)
+	r.h("DELETE /admin/task-rules/{id}", s.deleteTaskRule)
+	r.h("POST /admin/task-rules/{id}/run", s.runTaskRule)
+	r.h("GET /admin/task-runs", s.listTaskRuns)
+}
+
+// routeSettingsStats 系统设置 / 日志 / 仪表盘统计。
+func (s *Server) routeSettingsStats(r authed) {
+	r.h("GET /admin/settings", s.getSettings)
+	r.h("PUT /admin/settings", s.putSettings)
+	r.h("GET /admin/logs", s.listLogs)
+	r.h("GET /admin/stats", s.dashboardStats)
+	r.h("GET /admin/stats/quota", s.dashboardQuota)
+	r.h("GET /admin/stats/trend", s.dashboardTrend)
+	r.h("GET /admin/version", s.coreVersion)
 }
 
 // listPlugins GET /admin/plugins — 已启动插件概览（含授权方式）。

@@ -40,7 +40,9 @@ type Account struct {
 	ProfileJSON    string `gorm:"column:profile_json;default:'{}'"`
 	// 积分明细快照：{"total","used","remaining","packages":[...]}（插件解析上游后写入，读取只走库）
 	CreditsJSON string `gorm:"column:credits_json;default:''"`
-	Status      string `gorm:"size:16;default:active"` // active/disabled/expired
+	// 账号模型目录快照：ModelInfo 数组 JSON，仅同步时写入，读取默认走库
+	ModelsJSON string `gorm:"column:models_json;default:''"`
+	Status     string `gorm:"size:16;default:active"` // active/disabled/expired
 	// 自动暂停（429 限速 / 无积分等触发）：paused_until 到期自动恢复；reason 供展示
 	PausedUntil   *time.Time `gorm:"column:paused_until"`
 	PauseReason   string     `gorm:"column:pause_reason;size:256;default:''"`
@@ -134,6 +136,14 @@ type GroupProxy struct {
 }
 
 func (GroupProxy) TableName() string { return "group_proxies" }
+
+// AccountProxy 账号与代理的多对多绑定（优先级高于分组级）。
+type AccountProxy struct {
+	AccountID int64 `gorm:"primaryKey"`
+	ProxyID   int64 `gorm:"primaryKey"`
+}
+
+func (AccountProxy) TableName() string { return "account_proxies" }
 
 // TaskRule 调度规则：核心只描述"何时+对谁"。
 type TaskRule struct {

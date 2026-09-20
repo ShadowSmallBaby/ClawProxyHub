@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.3
+
+- Added 账号级出站代理：优先级 账号 > 分组（`account_proxies` 表），账号编辑弹窗可绑定
+- Added 账号模型目录落库（`accounts.models_json`）：首次登录自动拉取，`?refresh=1` 手动同步，读取默认走库，以用户勾选为准
+- Added 账号在线测试：选端点 / 模型 / 问题直调插件 Chat，绕过路由与密钥，输出响应与事件日志，不落 `request_logs`
+- Added 密钥改名接口（`PUT /admin/keys/{id}`）与账号编辑弹窗（改名 / 分组 / 代理 / 模型）
+- Added 进程内事件总线（`internal/event`）：任务成功完成后自动刷新该账号积分
+- Added 前端通用可搜索绑定组件 `BindSelect`，统一账号 / 密钥 / 分组 / 路由的多选绑定
+- Added 出站代理编辑（`PUT /admin/proxies/{id}`，密码留空保留原值）与连通性测试（`POST /admin/proxies/{id}/test`，经代理拨中立目标回时延，socks5 走 `x/net/proxy`）
+- Added 核心版本机制（`internal/version`）与检查更新：`GET /admin/version` 对比仓库 `version.json`，侧栏底部显 `v1.0.3 · 有更新`
+- Changed 管理后台路由按资源分组重构 + `authed` 注册器统一鉴权，杜绝逐条漏包
+
 ## v1.0.2
 
 - Fixed Codex CLI 工具调用失败（表现为对话正常、涉及工具即上游 500）：上游流式工具调用首块带 `id`+`name`、续块 `id` 置空只带 `arguments`（`openaiup` 契约），而各协议编码器/聚合器按 `id` 索引，空 `id` 被误当新调用开出无名孤儿块，Codex 收到残缺 `function_call` 报 `failed to parse arguments: EOF`，坏历史回传再触发上游 500

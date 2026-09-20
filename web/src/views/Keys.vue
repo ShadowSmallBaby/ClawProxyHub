@@ -26,6 +26,7 @@
       </template>
       <template #op="{ row }">
         <t-space size="small">
+          <t-link theme="primary" @click="openRename(row)">{{ $t('common.edit') }}</t-link>
           <t-link theme="primary" @click="bindVisible = row.id">{{ $t('keys.bindRoutes') }}</t-link>
           <t-popconfirm :content="$t('keys.confirmDelete')" @confirm="remove(row.id)">
             <t-link theme="danger">{{ $t('common.delete') }}</t-link>
@@ -50,9 +51,16 @@
     </t-dialog>
 
     <t-dialog v-model:visible="bindVisibleBool" :header="$t('keys.bindTitle')" @confirm="bind">
-      <t-select v-model="bindRoutes" multiple clearable :placeholder="$t('keys.bindPh')">
-        <t-option v-for="r in routes" :key="r.ID" :value="r.ID" :label="r.Name" />
-      </t-select>
+      <bind-select v-model="bindRoutes" :options="routeOptions" :placeholder="$t('keys.bindPh')" />
+    </t-dialog>
+
+    <!-- 改名 -->
+    <t-dialog v-model:visible="renameVisibleBool" :header="$t('keys.rename')" @confirm="submitRename">
+      <t-form label-width="90px">
+        <t-form-item :label="$t('keys.name')">
+          <t-input v-model="renameName" :placeholder="$t('keys.namePh')" clearable @enter="submitRename" />
+        </t-form-item>
+      </t-form>
     </t-dialog>
   </div>
 </template>
@@ -63,6 +71,7 @@ import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { FileCopyIcon } from 'tdesign-icons-vue-next'
 import { api } from '../api/client'
+import BindSelect from '../components/BindSelect.vue'
 import type { KeyInfo, RouteInfo } from '../api/types'
 
 const { t } = useI18n()
@@ -76,6 +85,8 @@ const createName = ref('')
 const creating = ref(false)
 const bindVisible = ref<number | null>(null)
 const bindRoutes = ref<number[]>([])
+const renameVisible = ref<number | null>(null)
+const renameName = ref('')
 
 // 行内明文缓存（keyID → 明文，复制用）
 const plainKeys = ref<Record<number, string>>({})
@@ -98,6 +109,24 @@ const bindVisibleBool = computed({
   get: () => bindVisible.value !== null,
   set: (v: boolean) => { if (!v) bindVisible.value = null },
 })
+
+const renameVisibleBool = computed({
+  get: () => renameVisible.value !== null,
+  set: (v: boolean) => { if (!v) renameVisible.value = null },
+})
+
+function openRename(row: KeyInfo) {
+  renameVisible.value = row.id
+  renameName.value = row.name
+}
+
+async function submitRename() {
+  if (renameVisible.value === null) return
+  await api.put(`/admin/keys/${renameVisible.value}`, { name: renameName.value })
+  MessagePlugin.success(t('common.updated'))
+  renameVisible.value = null
+  await load()
+}
 
 const columns = computed(() => [
   { colKey: 'id', title: t('common.colId'), width: 70 },
@@ -128,6 +157,8 @@ function timeAgo(ts: string): string {
 function routeName(id: number): string {
   return routes.value.find((r) => r.ID === id)?.Name ?? `#${id}`
 }
+
+const routeOptions = computed(() => routes.value.map((r) => ({ value: r.ID, label: r.Name })))
 
 async function load() {
   const [k, r] = await Promise.all([
