@@ -22,6 +22,14 @@ func deref(f *float64) float64 {
 	return *f
 }
 
+// normalizeRole 把 developer 角色归一为 system（上游多不认 developer）。
+func normalizeRole(role string) string {
+	if role == "developer" {
+		return "system"
+	}
+	return role
+}
+
 // extractText 从 string / blocks 数组 / nil 里提取文本拼接。
 func extractText(raw json.RawMessage) string {
 	if len(raw) == 0 {
@@ -38,7 +46,7 @@ func extractText(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &blocks); err == nil {
 		var texts []string
 		for _, b := range blocks {
-			if b.Type == "text" {
+			if b.Type == "text" || b.Type == "input_text" || b.Type == "output_text" {
 				texts = append(texts, b.Text)
 			}
 		}

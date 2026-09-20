@@ -38,6 +38,12 @@ func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
 	}
 	if len(raw.Reasoning) > 0 {
 		req.Extra["reasoning"] = string(raw.Reasoning)
+		var reasoning struct {
+			Effort string `json:"effort"`
+		}
+		if json.Unmarshal(raw.Reasoning, &reasoning) == nil && reasoning.Effort != "" {
+			req.Extra["reasoning_effort"] = reasoning.Effort
+		}
 	}
 	if raw.Instructions != "" {
 		req.Messages = append(req.Messages, &pb.EnvelopeMessage{Role: "system", Text: raw.Instructions})
@@ -66,7 +72,7 @@ func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
 			switch it.Type {
 			case "message", "":
 				req.Messages = append(req.Messages, &pb.EnvelopeMessage{
-					Role: it.Role, Text: extractText(it.Content),
+					Role: normalizeRole(it.Role), Text: extractText(it.Content),
 				})
 			case "function_call":
 				req.Messages = append(req.Messages, &pb.EnvelopeMessage{
@@ -188,13 +194,15 @@ func (s *responsesSSEState) convertEvent(ev *pb.StreamEvent) string {
 				},
 			})
 		}
-		usage := map[string]interface{}{}
+		// usage 为必填字段，缺失时补零值（Codex 严格反序列化，否则断流）。
+		var inTok, outTok int64
 		if e.MessageFinish.Usage != nil {
-			usage = map[string]interface{}{
-				"input_tokens":  e.MessageFinish.Usage.InputTokens,
-				"output_tokens": e.MessageFinish.Usage.OutputTokens,
-				"total_tokens":  e.MessageFinish.Usage.InputTokens + e.MessageFinish.Usage.OutputTokens,
-			}
+			inTok, outTok = e.MessageFinish.Usage.InputTokens, e.MessageFinish.Usage.OutputTokens
+		}
+		usage := map[string]interface{}{
+			"input_tokens":  inTok,
+			"output_tokens": outTok,
+			"total_tokens":  inTok + outTok,
 		}
 		out += respEvent("response.completed", map[string]interface{}{
 			"response": map[string]interface{}{

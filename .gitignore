@@ -5,6 +5,7 @@ data-test/
 # 构建产物
 *.exe
 /cph
+release/
 
 # IDE
 .idea/

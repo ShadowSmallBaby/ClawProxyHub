@@ -46,6 +46,38 @@ func TestParseResponsesRequest(t *testing.T) {
 	}
 }
 
+// TestParseResponsesRequestCodex 复刻 Codex CLI 的实际请求：developer 角色 +
+// input_text 内容块 + reasoning.effort，回归三处修复（文本不再被丢空 / 角色归一 / effort 透传）。
+func TestParseResponsesRequestCodex(t *testing.T) {
+	body := `{
+		"model": "deepseek-flash",
+		"instructions": "system prompt",
+		"input": [
+			{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "dev rule"}]},
+			{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "今天是几号了"}]}
+		],
+		"reasoning": {"effort": "xhigh"},
+		"stream": true
+	}`
+	req, err := parseResponsesRequest([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// instructions(system) + developer(→system) + user = 3
+	if len(req.Messages) != 3 {
+		t.Fatalf("want 3 messages, got %d: %+v", len(req.Messages), req.Messages)
+	}
+	if req.Messages[1].Role != "system" || req.Messages[1].Text != "dev rule" {
+		t.Errorf("developer 未归一或文本丢失: %+v", req.Messages[1])
+	}
+	if req.Messages[2].Role != "user" || req.Messages[2].Text != "今天是几号了" {
+		t.Errorf("input_text 提取失败: %+v", req.Messages[2])
+	}
+	if req.Extra["reasoning_effort"] != "xhigh" {
+		t.Errorf("reasoning.effort 未透传: %q", req.Extra["reasoning_effort"])
+	}
+}
+
 func TestParseResponsesRequestStringInput(t *testing.T) {
 	req, err := parseResponsesRequest([]byte(`{"model":"m","input":"纯文本输入"}`))
 	if err != nil {

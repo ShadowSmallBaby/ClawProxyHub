@@ -44,7 +44,7 @@ func parseChatCompletions(body []byte) (*pb.ChatRequest, error) {
 
 	for i := range raw.Messages {
 		m := &raw.Messages[i]
-		em := &pb.EnvelopeMessage{Role: m.Role, Text: extractText(m.Content), Raw: m.Content}
+		em := &pb.EnvelopeMessage{Role: normalizeRole(m.Role), Text: extractText(m.Content), Raw: m.Content}
 		for _, tc := range m.ToolCalls {
 			em.ToolCalls = append(em.ToolCalls, &pb.ToolCall{
 				Id: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
