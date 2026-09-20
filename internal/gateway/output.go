@@ -58,6 +58,7 @@ func (s *Server) streamOut(w http.ResponseWriter, events chan *pb.StreamEvent, f
 
 	start := time.Now()
 	log.status = http.StatusOK
+	filler := &toolIDFiller{}
 
 	emit := func(ev *pb.StreamEvent) bool {
 		if failed, ok := ev.Event.(*pb.StreamEvent_TaskFailed); ok && failed.TaskFailed != nil {
@@ -65,6 +66,7 @@ func (s *Server) streamOut(w http.ResponseWriter, events chan *pb.StreamEvent, f
 			log.errBrief = failed.TaskFailed.Error.GetMessage()
 			return false
 		}
+		filler.fill(ev)
 		collectUsage(log, ev)
 		if out := enc.convertEvent(ev); out != "" {
 			io.WriteString(w, out)
@@ -98,6 +100,7 @@ func (s *Server) nonStreamOut(w http.ResponseWriter, events chan *pb.StreamEvent
 	}
 	a := aggr[0]
 	start := time.Now()
+	filler := &toolIDFiller{}
 
 	handle := func(ev *pb.StreamEvent) bool {
 		if failed, ok := ev.Event.(*pb.StreamEvent_TaskFailed); ok && failed.TaskFailed != nil {
@@ -106,6 +109,7 @@ func (s *Server) nonStreamOut(w http.ResponseWriter, events chan *pb.StreamEvent
 			brief = failed.TaskFailed.Error.GetMessage()
 			return false
 		}
+		filler.fill(ev)
 		collectUsage(log, ev)
 		a.feed(ev)
 		return true
@@ -124,6 +128,22 @@ func (s *Server) nonStreamOut(w http.ResponseWriter, events chan *pb.StreamEvent
 	writeJSON(w, http.StatusOK, a.result())
 	log.write(s.db, time.Since(start))
 	return 0, ""
+}
+
+// toolIDFiller 把工具调用续块的空 id 补成上一个非空 id（openaiup 契约：续块只带
+// arguments）。出口层统一补齐，供所有按 id 索引的编码器/聚合器复用。
+type toolIDFiller struct{ lastID string }
+
+func (f *toolIDFiller) fill(ev *pb.StreamEvent) {
+	tc, ok := ev.Event.(*pb.StreamEvent_ToolCallDelta)
+	if !ok || tc.ToolCallDelta == nil {
+		return
+	}
+	if tc.ToolCallDelta.Id != "" {
+		f.lastID = tc.ToolCallDelta.Id
+		return
+	}
+	tc.ToolCallDelta.Id = f.lastID // 续块归入上一个调用
 }
 
 // collectUsage 从 MessageFinish 事件提取用量。

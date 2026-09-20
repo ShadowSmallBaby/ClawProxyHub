@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.2
+
+- Fixed Codex CLI 工具调用失败（表现为对话正常、涉及工具即上游 500）：上游流式工具调用首块带 `id`+`name`、续块 `id` 置空只带 `arguments`（`openaiup` 契约），而各协议编码器/聚合器按 `id` 索引，空 `id` 被误当新调用开出无名孤儿块，Codex 收到残缺 `function_call` 报 `failed to parse arguments: EOF`，坏历史回传再触发上游 500
+- Fixed 出口层新增工具调用 `id` 补齐，一处覆盖 `responses` / `chat_completions` / `messages` × 流式/非流式 × 协议间转换（如 Anthropic 客户端 × OpenAI 上游同样受影响）
+- Fixed Responses 流式收尾不完整：`response.completed` 缺 `output` 数组（正文只剩 preamble）、工具调用缺 `function_call_arguments.done` / `output_item.done`（工具永不执行）、`output_text.done` 文本为空
+- Fixed 工具历史消息序列错位：相邻 `assistant` 与 `function_call` 未合并进同一条 `tool_calls`，并行调用时 `tool` 消息与声明它的 `assistant` 错位被上游拒绝；`arguments` 缺省补 `{}`
+- Changed 不再透传 `reasoning.effort`（v1.0.1 引入）：Codex 的 `xhigh` 等私有值上游不认会 500，Responses 本无顶层 `reasoning_effort`
+- Added `TestToolIDFillerAllEncoders`（含反证）、`TestResponsesSSEToolCallSplit`、工具历史合并回归测试
+
 ## v1.0.1
 
 - Fixed Codex CLI（`/v1/responses`）请求失败（表现为 502 / 上游 500）：`extractText` 未识别 `input_text` / `output_text` 内容块，导致消息文本被静默丢空、上游收到空请求
