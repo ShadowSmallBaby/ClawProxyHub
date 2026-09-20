@@ -100,7 +100,16 @@ export interface AccountDetail {
     packages?: { total?: string; used: string; remaining?: string; expiresAt?: string }[]
     [key: string]: unknown
   } | null
+  models?: ModelInfo[] | null
   runs: AccountRun[]
+}
+
+export interface ModelInfo {
+  id: string
+  label?: Record<string, string>
+  contextWindow?: number
+  supportsTools?: boolean
+  supportsStream?: boolean
 }
 
 // 账号积分包（credits.packages 元素）

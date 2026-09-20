@@ -3,12 +3,17 @@ package admin
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"gorm.io/gorm"
 
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
+	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
 // updateAccount PUT /admin/accounts/{id} — body: {display_name?, group_ids?}
@@ -80,14 +85,110 @@ func (s *Server) resumeAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// accountModels GET /admin/accounts/{id}/models — 同步客户端模型目录（账号凭据）。
+// accountModels GET /admin/accounts/{id}/models — 默认读库快照；?refresh=1 才实时拉上游并落库。
 func (s *Server) accountModels(w http.ResponseWriter, r *http.Request) {
-	models, err := s.accounts.Models(r.Context(), parseInt(r.PathValue("id")))
+	id := parseInt(r.PathValue("id"))
+	if r.URL.Query().Get("refresh") == "1" {
+		models, err := s.accounts.SyncModels(r.Context(), id)
+		if err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"models": models})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"models": s.accounts.StoredModels(id)})
+}
+
+// saveAccountModels PUT /admin/accounts/{id}/models — 存用户勾选的模型目录（以用户为准）。
+func (s *Server) saveAccountModels(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Models []json.RawMessage `json:"models"`
+	}
+	if !readBody(w, r, &body) {
+		return
+	}
+	models := make([]*pb.ModelInfo, 0, len(body.Models))
+	for _, raw := range body.Models {
+		m := &pb.ModelInfo{}
+		if protojson.Unmarshal(raw, m) == nil && m.Id != "" {
+			models = append(models, m)
+		}
+	}
+	s.accounts.SaveModels(parseInt(r.PathValue("id")), models)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// testAccount POST /admin/accounts/{id}/test — body: {endpoint, model, question?}
+// 用账号凭据直调插件 Chat，绕过路由/key，收集事件为日志返回，不落 request_logs。
+func (s *Server) testAccount(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Endpoint string `json:"endpoint"`
+		Model    string `json:"model"`
+		Question string `json:"question"`
+	}
+	if !readBody(w, r, &body) {
+		return
+	}
+	var acct model.Account
+	if err := s.db.First(&acct, parseInt(r.PathValue("id"))).Error; err != nil {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		return
+	}
+	pluginName := pluginNameByID(s.db, acct.PluginID)
+	if pluginName == "" {
+		http.Error(w, `{"error":"plugin not found"}`, http.StatusBadRequest)
+		return
+	}
+	question := body.Question
+	if question == "" {
+		question = "你好，请用一句话自我介绍。"
+	}
+	req := &pb.ChatRequest{
+		Model:  body.Model,
+		Source: body.Endpoint,
+		Messages: []*pb.EnvelopeMessage{
+			{Role: "user", Text: question},
+		},
+	}
+	cred := &pb.CredentialBlob{
+		AccountId: strconv.FormatInt(acct.ID, 10),
+		Blob:      account.DecryptCredential(s.accounts.DataDir(), acct.CredentialBlob),
+	}
+	if acct.LastRefreshAt != nil {
+		cred.UpdatedAt = acct.LastRefreshAt.Unix()
+	}
+	cred.Proxy = account.ProxyForAccount(s.db, acct.ID)
+
+	events, err := s.plugins.Chat(req, pluginName, cred)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadGateway)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"models": models})
+	var text string
+	var logs []string
+	for ev := range events {
+		switch e := ev.Event.(type) {
+		case *pb.StreamEvent_MessageStart:
+			logs = append(logs, "→ model: "+e.MessageStart.Model)
+		case *pb.StreamEvent_ContentDelta:
+			text += e.ContentDelta.Text
+		case *pb.StreamEvent_ToolCallDelta:
+			logs = append(logs, "→ tool_call: "+e.ToolCallDelta.Name+" "+e.ToolCallDelta.ArgumentsDelta)
+		case *pb.StreamEvent_MessageFinish:
+			if e.MessageFinish.Usage != nil {
+				logs = append(logs, fmt.Sprintf("→ finish: %s (in=%d out=%d)",
+					e.MessageFinish.FinishReason, e.MessageFinish.Usage.InputTokens, e.MessageFinish.Usage.OutputTokens))
+			} else {
+				logs = append(logs, "→ finish: "+e.MessageFinish.FinishReason)
+			}
+		case *pb.StreamEvent_TaskFailed:
+			logs = append(logs, fmt.Sprintf("✗ failed: code=%d %s", e.TaskFailed.Error.GetCode(), e.TaskFailed.Error.GetMessage()))
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"text": text, "logs": logs,
+	})
 }
 
 // accountDetail GET /admin/accounts/{id}/detail — 账号详情：基本信息 + 套餐/积分 + 任务执行情况。
@@ -120,6 +221,7 @@ func (s *Server) accountDetail(w http.ResponseWriter, r *http.Request) {
 		"created_at":      acct.CreatedAt,
 		"profile":         jsonOrNull(acct.ProfileJSON),
 		"credits":         jsonOrNull(acct.CreditsJSON),
+		"models":          s.accounts.StoredModels(acct.ID),
 		"runs":            s.runViews(runs),
 	}
 	// 套餐/积分信息在 profile 快照里（插件 GetProfile / 登录返回）

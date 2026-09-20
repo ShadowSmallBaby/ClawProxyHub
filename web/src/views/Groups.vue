@@ -30,9 +30,7 @@
     </t-dialog>
 
     <t-dialog v-model:visible="bindVisible" :header="$t('groups.bindHeader', { name: bindGroup?.name })" @confirm="bind">
-      <t-select v-model="bindProxyIds" multiple clearable :placeholder="$t('groups.bindPh')">
-        <t-option v-for="px in proxies" :key="px.ID" :value="px.ID" :label="`${px.Scheme}://${px.Host}:${px.Port}`" />
-      </t-select>
+      <bind-select v-model="bindProxyIds" :options="proxyOptions" :placeholder="$t('groups.bindPh')" />
       <t-alert style="margin-top: 12px" theme="info" :message="$t('groups.hintBind')" />
     </t-dialog>
   </div>
@@ -43,6 +41,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { api } from '../api/client'
+import BindSelect from '../components/BindSelect.vue'
 import type { GroupInfo } from '../api/types'
 
 const { t } = useI18n()
@@ -66,6 +65,10 @@ const columns = computed(() => [
   { colKey: 'accounts', title: t('groups.accounts'), width: 100, align: 'center' },
   { colKey: 'op', title: t('common.colOp'), width: 160, align: 'center' },
 ])
+
+const proxyOptions = computed(() =>
+  proxies.value.map((px) => ({ value: px.ID, label: `${px.Scheme}://${px.Host}:${px.Port}` })),
+)
 
 async function load() {
   const [g, p, px] = await Promise.all([

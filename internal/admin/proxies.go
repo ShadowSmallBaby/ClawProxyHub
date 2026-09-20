@@ -38,6 +38,7 @@ func (s *Server) createProxy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteProxy(w http.ResponseWriter, r *http.Request) {
 	id := parseInt(r.PathValue("id"))
 	s.db.Where("proxy_id = ?", id).Delete(&model.GroupProxy{})
+	s.db.Where("proxy_id = ?", id).Delete(&model.AccountProxy{})
 	s.db.Delete(&model.Proxy{}, id)
 	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }
@@ -63,6 +64,34 @@ func (s *Server) listGroupProxies(w http.ResponseWriter, r *http.Request) {
 	gid := parseInt(r.PathValue("id"))
 	var links []model.GroupProxy
 	s.db.Where("group_id = ?", gid).Find(&links)
+	ids := make([]int64, 0, len(links))
+	for _, l := range links {
+		ids = append(ids, l.ProxyID)
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"proxy_ids": ids})
+}
+
+// bindAccountProxies PUT /admin/accounts/{id}/proxies — body: {proxy_ids: []}，空 = 解除全部。
+func (s *Server) bindAccountProxies(w http.ResponseWriter, r *http.Request) {
+	aid := parseInt(r.PathValue("id"))
+	var body struct {
+		ProxyIDs []int64 `json:"proxy_ids"`
+	}
+	if !readBody(w, r, &body) {
+		return
+	}
+	s.db.Where("account_id = ?", aid).Delete(&model.AccountProxy{})
+	for _, pid := range body.ProxyIDs {
+		s.db.Create(&model.AccountProxy{AccountID: aid, ProxyID: pid})
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// listAccountProxies GET /admin/accounts/{id}/proxies
+func (s *Server) listAccountProxies(w http.ResponseWriter, r *http.Request) {
+	aid := parseInt(r.PathValue("id"))
+	var links []model.AccountProxy
+	s.db.Where("account_id = ?", aid).Find(&links)
 	ids := make([]int64, 0, len(links))
 	for _, l := range links {
 		ids = append(ids, l.ProxyID)

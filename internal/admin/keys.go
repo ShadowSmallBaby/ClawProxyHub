@@ -104,6 +104,22 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"id": k.ID, "key": raw})
 }
 
+// updateKey PUT /admin/keys/{id} — body: {name}，改名。
+func (s *Server) updateKey(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !readBody(w, r, &body) {
+		return
+	}
+	if err := s.db.Model(&model.Key{}).Where("id = ?", parseInt(r.PathValue("id"))).
+		Update("name", body.Name).Error; err != nil {
+		http.Error(w, `{"error":"update failed"}`, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // deleteKey DELETE /admin/keys/{id}
 func (s *Server) deleteKey(w http.ResponseWriter, r *http.Request) {
 	id := parseInt(r.PathValue("id"))

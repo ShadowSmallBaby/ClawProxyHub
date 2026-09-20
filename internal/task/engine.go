@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/event"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
@@ -28,12 +29,13 @@ type Engine struct {
 	db      *gorm.DB
 	dataDir string
 	runner  Runner
+	bus     *event.Bus
 	stop    chan struct{}
 }
 
 // NewEngine 创建调度引擎。
-func NewEngine(db *gorm.DB, dataDir string, runner Runner) *Engine {
-	return &Engine{db: db, dataDir: dataDir, runner: runner, stop: make(chan struct{})}
+func NewEngine(db *gorm.DB, dataDir string, runner Runner, bus *event.Bus) *Engine {
+	return &Engine{db: db, dataDir: dataDir, runner: runner, bus: bus, stop: make(chan struct{})}
 }
 
 // Start 启动扫描循环。残留的 running 记录（上次进程异常退出）标记为 failed。
@@ -166,6 +168,10 @@ func (e *Engine) executeRule(ctx context.Context, rule *model.TaskRule) {
 		fin := time.Now()
 		run.FinishedAt = &fin
 		e.db.Save(&run)
+
+		if run.Status == "success" && acct != nil && e.bus != nil {
+			e.bus.Publish(event.Event{Topic: event.TopicTaskCompleted, AccountID: acct.ID})
+		}
 	}
 }
 
