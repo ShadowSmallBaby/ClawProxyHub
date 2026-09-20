@@ -148,6 +148,58 @@ func TestParseChatCompletions(t *testing.T) {
 	}
 }
 
+// TestToolIDFillerAllEncoders 出口层 id 补齐器：工具调用续块 id 置空只带 arguments
+// （openaiup 契约）。补齐后 openai/anthropic 编码器都应只产 1 个工具块、参数完整，
+// 不因空 id 开孤儿块。覆盖协议间转换链路（各上游方言 → 客户端协议）。
+func TestToolIDFillerAllEncoders(t *testing.T) {
+	// 每次构造全新事件：filler.fill 会原地改 id，不能共享
+	freshSeq := func() []*pb.StreamEvent {
+		return []*pb.StreamEvent{
+			{Event: &pb.StreamEvent_ToolCallDelta{ToolCallDelta: &pb.ToolCallDelta{Id: "call_9", Name: "exec_command"}}},
+			{Event: &pb.StreamEvent_ToolCallDelta{ToolCallDelta: &pb.ToolCallDelta{ArgumentsDelta: `{"cmd":"ls`}}},
+			{Event: &pb.StreamEvent_ToolCallDelta{ToolCallDelta: &pb.ToolCallDelta{ArgumentsDelta: ` -la"}`}}},
+			{Event: &pb.StreamEvent_MessageFinish{MessageFinish: &pb.MessageFinish{FinishReason: "tool_calls", Usage: &pb.Usage{}}}},
+		}
+	}
+	run := func(enc streamEncoder) string {
+		f := &toolIDFiller{}
+		var sb strings.Builder
+		for _, ev := range freshSeq() {
+			f.fill(ev) // 出口层补齐（模拟 streamOut/nonStreamOut）
+			sb.WriteString(enc.convertEvent(ev))
+		}
+		return sb.String()
+	}
+
+	// OpenAI：tool_calls 按 index，只应有一个 index 0，参数完整拼接
+	oai := run(newOpenAISSEState())
+	if strings.Count(oai, `"index":1`) != 0 {
+		t.Errorf("openai 出现第二个工具块(孤儿):\n%s", oai)
+	}
+	if !strings.Contains(oai, `"name":"exec_command"`) {
+		t.Errorf("openai 工具 name 丢失:\n%s", oai)
+	}
+
+	// Anthropic：tool_use content_block，只应有一个 content_block_start(tool_use)
+	anth := run(newAnthSSEState("m"))
+	if n := strings.Count(anth, `"type":"tool_use"`); n != 1 {
+		t.Errorf("anthropic want 1 tool_use block, got %d:\n%s", n, anth)
+	}
+	if !strings.Contains(anth, `"id":"call_9"`) || !strings.Contains(anth, `"name":"exec_command"`) {
+		t.Errorf("anthropic tool_use id/name 丢失:\n%s", anth)
+	}
+
+	// 续块空 id 未被补齐时的反证：不经 filler，openai 会开出 index 1 孤儿
+	var bad strings.Builder
+	st := newOpenAISSEState()
+	for _, ev := range freshSeq() {
+		bad.WriteString(st.convertEvent(ev))
+	}
+	if !strings.Contains(bad.String(), `"index":1`) {
+		t.Errorf("反证失败：未补齐时本应出现孤儿 index 1，说明测试序列无效")
+	}
+}
+
 func TestOpenAISSEAndAggregate(t *testing.T) {
 	st := newOpenAISSEState()
 	var sb strings.Builder

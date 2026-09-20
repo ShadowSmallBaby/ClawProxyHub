@@ -73,8 +73,9 @@ func TestParseResponsesRequestCodex(t *testing.T) {
 	if req.Messages[2].Role != "user" || req.Messages[2].Text != "今天是几号了" {
 		t.Errorf("input_text 提取失败: %+v", req.Messages[2])
 	}
-	if req.Extra["reasoning_effort"] != "xhigh" {
-		t.Errorf("reasoning.effort 未透传: %q", req.Extra["reasoning_effort"])
+	// reasoning.effort 不得透传上游：Codex 的 "xhigh" 上游不认会 500。
+	if _, ok := req.Extra["reasoning_effort"]; ok {
+		t.Errorf("reasoning.effort 不应透传上游: %q", req.Extra["reasoning_effort"])
 	}
 }
 
@@ -112,14 +113,83 @@ func TestResponsesSSE(t *testing.T) {
 		`"delta":"hello"`,
 		`"type":"function_call"`,
 		"event: response.function_call_arguments.delta",
+		// 工具调用必须 finalize，否则 Codex 收不到完整调用不执行
+		"event: response.function_call_arguments.done",
+		`"arguments":"{\"x\":1}"`,
 		"event: response.output_item.done",
 		"event: response.completed",
+		// output_text.done 必须带完整文本，而非空串
+		`"text":"hello"`,
+		// response.completed 必须带 output 数组，Codex 从此读最终输出
+		`"output":[`,
 		`"input_tokens":3`,
 		`"output_tokens":4`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("responses sse missing %q\n%s", want, out)
 		}
+	}
+	// completed 的 output 里应同时含 message 与 function_call 两项
+	idx := strings.Index(out, "event: response.completed")
+	if idx < 0 || !strings.Contains(out[idx:], `"type":"function_call"`) || !strings.Contains(out[idx:], `"type":"message"`) {
+		t.Errorf("response.completed output 缺少 message/function_call:\n%s", out[max(idx, 0):])
+	}
+}
+
+// TestResponsesSSEToolCallSplit 复刻 Codex 真实流式：工具调用首块带 id+name，
+// 续块 id 置空只带 arguments（openaiup 契约）。回归——空 id 必须归入当前调用，
+// 不得开新块，否则参数流进无名孤儿 item，Codex 报 "failed to parse arguments: EOF"。
+func TestResponsesSSEToolCallSplit(t *testing.T) {
+	st := newResponsesSSEState("deepseek-flash")
+	feed := func(id, name, argsDelta string) string {
+		return st.convertEvent(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{
+			ToolCallDelta: &pb.ToolCallDelta{Id: id, Name: name, ArgumentsDelta: argsDelta},
+		}})
+	}
+	var sb strings.Builder
+	sb.WriteString(st.convertEvent(&pb.StreamEvent{Event: &pb.StreamEvent_MessageStart{
+		MessageStart: &pb.MessageStart{Model: "deepseek-flash"}}}))
+	// 调用1：首块 id+name，续块空 id 分块带参数
+	sb.WriteString(feed("call_00", "exec_command", ""))
+	sb.WriteString(feed("", "", `{"cmd":"ls`))
+	sb.WriteString(feed("", "", ` -la"}`))
+	// 调用2：新 id 开新块，续块空 id 带参数
+	sb.WriteString(feed("call_01", "exec_command", ""))
+	sb.WriteString(feed("", "", `{"cmd":"pwd"}`))
+	sb.WriteString(st.convertEvent(&pb.StreamEvent{Event: &pb.StreamEvent_MessageFinish{
+		MessageFinish: &pb.MessageFinish{FinishReason: "tool_calls",
+			Usage: &pb.Usage{InputTokens: 1, OutputTokens: 2}}}}))
+	out := sb.String()
+
+	// completed 的 output 数组是权威终态：只应有 2 个 function_call（不能因空 id 开孤儿块）
+	ci := strings.Index(out, "event: response.completed")
+	if ci < 0 {
+		t.Fatalf("无 response.completed:\n%s", out)
+	}
+	if n := strings.Count(out[ci:], `"type":"function_call"`); n != 2 {
+		t.Fatalf("completed.output want 2 function_call, got %d\n%s", n, out[ci:])
+	}
+	// added 事件也应恰好 2 次（每个真实调用开一块，无孤儿）
+	if n := strings.Count(out, "event: response.output_item.added"); n != 2 {
+		t.Fatalf("want 2 output_item.added, got %d\n%s", n, out)
+	}
+	// 空 id / 空 name 的孤儿块绝不允许出现
+	if strings.Contains(out, `"call_id":""`) {
+		t.Errorf("出现空 call_id 孤儿块:\n%s", out)
+	}
+	// 两个调用的完整参数都要在 arguments.done 里完整落地
+	for _, want := range []string{
+		`"call_id":"call_00"`, `"call_id":"call_01"`,
+		`"arguments":"{\"cmd\":\"ls -la\"}"`, `"arguments":"{\"cmd\":\"pwd\"}"`,
+		`"name":"exec_command"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q\n%s", want, out)
+		}
+	}
+	// name 不得为空（孤儿块的典型症状）
+	if strings.Contains(out, `"name":""`) {
+		t.Errorf("function_call name 为空:\n%s", out)
 	}
 }
 

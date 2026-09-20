@@ -36,15 +36,8 @@ func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
 	if raw.TopP != nil {
 		req.Extra["top_p"] = fmt.Sprintf("%g", *raw.TopP)
 	}
-	if len(raw.Reasoning) > 0 {
-		req.Extra["reasoning"] = string(raw.Reasoning)
-		var reasoning struct {
-			Effort string `json:"effort"`
-		}
-		if json.Unmarshal(raw.Reasoning, &reasoning) == nil && reasoning.Effort != "" {
-			req.Extra["reasoning_effort"] = reasoning.Effort
-		}
-	}
+	// 不透传 reasoning.effort：Codex 的 "xhigh" 等私有值上游不认，会 500。
+	// 对齐原项目——Responses 无顶层 reasoning_effort，该字段直接丢弃。
 	if raw.Instructions != "" {
 		req.Messages = append(req.Messages, &pb.EnvelopeMessage{Role: "system", Text: raw.Instructions})
 	}
@@ -68,25 +61,47 @@ func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
 		if err := json.Unmarshal(raw.Input, &items); err != nil {
 			return nil, fmt.Errorf("input must be string or message array")
 		}
+		// 合并相邻 assistant message 与 function_call：并行调用须归入同一条 assistant
+		// 的 tool_calls，否则 tool 消息与声明它的 assistant 错位，上游拒绝。
+		var pendText string
+		var pendAssistant bool
+		var pendTools []*pb.ToolCall
+		flushAssistant := func() {
+			if !pendAssistant && len(pendTools) == 0 {
+				return
+			}
+			req.Messages = append(req.Messages, &pb.EnvelopeMessage{
+				Role: "assistant", Text: pendText, ToolCalls: pendTools,
+			})
+			pendText, pendAssistant, pendTools = "", false, nil
+		}
 		for _, it := range items {
 			switch it.Type {
 			case "message", "":
+				role := normalizeRole(it.Role)
+				if role == "assistant" {
+					flushAssistant()
+					pendText, pendAssistant = extractText(it.Content), true
+					continue
+				}
+				flushAssistant()
 				req.Messages = append(req.Messages, &pb.EnvelopeMessage{
-					Role: normalizeRole(it.Role), Text: extractText(it.Content),
+					Role: role, Text: extractText(it.Content),
 				})
 			case "function_call":
-				req.Messages = append(req.Messages, &pb.EnvelopeMessage{
-					Role: "assistant",
-					ToolCalls: []*pb.ToolCall{{
-						Id: it.CallID, Name: it.Name, Arguments: it.Arguments,
-					}},
-				})
+				args := it.Arguments
+				if args == "" {
+					args = "{}" // 上游要求 arguments 是合法 JSON 文本
+				}
+				pendTools = append(pendTools, &pb.ToolCall{Id: it.CallID, Name: it.Name, Arguments: args})
 			case "function_call_output":
+				flushAssistant()
 				req.Messages = append(req.Messages, &pb.EnvelopeMessage{
 					Role: "tool", Text: it.Output, ToolCallId: it.CallID,
 				})
 			}
 		}
+		flushAssistant()
 	}
 
 	for _, t := range raw.Tools {
@@ -119,15 +134,28 @@ type responsesSSEState struct {
 	model    string
 	respID   string
 	textItem string // 文本 output_item 的 item_id；空未开
-	nextItem int
-	fnItems  map[string]string // tool call id → item_id
+	textIdx  int    // 文本 item 的 output_index
+	text     string // 累计正文，供 output_text.done 与 completed.output 回填
+	nextItem int    // 下一个 output item 的序号（同时用作 item_id 与 output_index）
+	fnOrder  []string
+	fnCalls  map[string]*respFnCall // tool call id → 累积中的函数调用
+	curFn    *respFnCall            // 当前打开的调用：后续增量 id 为空时归入它
 	usage    *pb.Usage
+}
+
+// respFnCall 累积中的 function_call output item（name/args 分块到齐后于 finish 补发 done）。
+type respFnCall struct {
+	itemID string
+	callID string
+	name   string
+	args   string
+	idx    int // output_index
 }
 
 func newResponsesSSEState(model string) *responsesSSEState {
 	return &responsesSSEState{
 		model: model, respID: "resp_" + randHex(16),
-		textItem: "", fnItems: map[string]string{},
+		fnCalls: map[string]*respFnCall{},
 	}
 }
 
@@ -145,37 +173,68 @@ func (s *responsesSSEState) convertEvent(ev *pb.StreamEvent) string {
 		var out string
 		if s.textItem == "" {
 			s.textItem = fmt.Sprintf("item_%d", s.nextItem)
+			s.textIdx = s.nextItem
 			s.nextItem++
 			out += respEvent("response.output_item.added", map[string]interface{}{
-				"output_index": 0, "item": map[string]interface{}{
+				"output_index": s.textIdx, "item": map[string]interface{}{
 					"type": "message", "id": s.textItem, "role": "assistant", "status": "in_progress",
 					"content": []interface{}{map[string]interface{}{"type": "output_text", "text": ""}},
 				},
 			})
 		}
+		s.text += e.ContentDelta.Text
 		out += respEvent("response.output_text.delta", map[string]interface{}{
-			"item_id": s.textItem, "output_index": 0, "content_index": 0,
+			"item_id": s.textItem, "output_index": s.textIdx, "content_index": 0,
 			"delta": e.ContentDelta.Text,
 		})
 		return out
 
 	case *pb.StreamEvent_ToolCallDelta:
-		itemID, ok := s.fnItems[e.ToolCallDelta.Id]
 		var out string
-		if !ok {
-			itemID = fmt.Sprintf("item_%d", s.nextItem)
+		// 续块空 id 归入当前打开的调用，否则参数流进无名孤儿 item。
+		id := e.ToolCallDelta.Id
+		fc := s.curFn
+		if id != "" {
+			existing, ok := s.fnCalls[id]
+			if !ok {
+				existing = &respFnCall{
+					itemID: fmt.Sprintf("item_%d", s.nextItem), callID: id,
+					name: e.ToolCallDelta.Name, idx: s.nextItem,
+				}
+				s.nextItem++
+				s.fnCalls[id] = existing
+				s.fnOrder = append(s.fnOrder, id)
+				out += respEvent("response.output_item.added", map[string]interface{}{
+					"output_index": existing.idx, "item": map[string]interface{}{
+						"type": "function_call", "id": existing.itemID, "call_id": existing.callID,
+						"name": existing.name, "arguments": "", "status": "in_progress",
+					},
+				})
+			}
+			fc = existing
+			s.curFn = fc
+		} else if fc == nil {
+			// 兜底：首块就没 id，合成 key 避免丢事件
+			key := fmt.Sprintf("__anon_%d", s.nextItem)
+			fc = &respFnCall{itemID: fmt.Sprintf("item_%d", s.nextItem), callID: key, idx: s.nextItem}
 			s.nextItem++
-			s.fnItems[e.ToolCallDelta.Id] = itemID
+			s.fnCalls[key] = fc
+			s.fnOrder = append(s.fnOrder, key)
 			out += respEvent("response.output_item.added", map[string]interface{}{
-				"output_index": len(s.fnItems), "item": map[string]interface{}{
-					"type": "function_call", "id": itemID, "call_id": e.ToolCallDelta.Id,
-					"name": e.ToolCallDelta.Name, "arguments": "", "status": "in_progress",
+				"output_index": fc.idx, "item": map[string]interface{}{
+					"type": "function_call", "id": fc.itemID, "call_id": fc.callID,
+					"name": fc.name, "arguments": "", "status": "in_progress",
 				},
 			})
+			s.curFn = fc
+		}
+		if fc.name == "" && e.ToolCallDelta.Name != "" {
+			fc.name = e.ToolCallDelta.Name // name 可能晚于首个 delta 到达
 		}
 		if e.ToolCallDelta.ArgumentsDelta != "" {
+			fc.args += e.ToolCallDelta.ArgumentsDelta
 			out += respEvent("response.function_call_arguments.delta", map[string]interface{}{
-				"item_id": itemID, "output_index": len(s.fnItems),
+				"item_id": fc.itemID, "output_index": fc.idx,
 				"delta": e.ToolCallDelta.ArgumentsDelta,
 			})
 		}
@@ -184,15 +243,38 @@ func (s *responsesSSEState) convertEvent(ev *pb.StreamEvent) string {
 	case *pb.StreamEvent_MessageFinish:
 		s.usage = e.MessageFinish.Usage
 		var out string
+		var output []interface{}
+		// 文本 item 收尾：output_text.done 带完整文本，output_item.done 带完整 content。
 		if s.textItem != "" {
 			out += respEvent("response.output_text.done", map[string]interface{}{
-				"item_id": s.textItem, "output_index": 0, "content_index": 0, "text": "",
+				"item_id": s.textItem, "output_index": s.textIdx, "content_index": 0, "text": s.text,
 			})
+			item := map[string]interface{}{
+				"type": "message", "id": s.textItem, "role": "assistant", "status": "completed",
+				"content": []interface{}{map[string]interface{}{"type": "output_text", "text": s.text}},
+			}
 			out += respEvent("response.output_item.done", map[string]interface{}{
-				"output_index": 0, "item": map[string]interface{}{
-					"type": "message", "id": s.textItem, "role": "assistant", "status": "completed",
-				},
+				"output_index": s.textIdx, "item": item,
 			})
+			output = append(output, item)
+		}
+		// 工具调用 item 收尾：补 arguments.done 与 output_item.done，否则 Codex 不执行。
+		for _, id := range s.fnOrder {
+			fc := s.fnCalls[id]
+			out += respEvent("response.function_call_arguments.done", map[string]interface{}{
+				"item_id": fc.itemID, "output_index": fc.idx, "arguments": fc.args,
+			})
+			item := map[string]interface{}{
+				"type": "function_call", "id": fc.itemID, "call_id": fc.callID,
+				"name": fc.name, "arguments": fc.args, "status": "completed",
+			}
+			out += respEvent("response.output_item.done", map[string]interface{}{
+				"output_index": fc.idx, "item": item,
+			})
+			output = append(output, item)
+		}
+		if output == nil {
+			output = []interface{}{}
 		}
 		// usage 为必填字段，缺失时补零值（Codex 严格反序列化，否则断流）。
 		var inTok, outTok int64
@@ -204,10 +286,11 @@ func (s *responsesSSEState) convertEvent(ev *pb.StreamEvent) string {
 			"output_tokens": outTok,
 			"total_tokens":  inTok + outTok,
 		}
+		// response.completed 必须带 output：Codex 从这里读最终 message + function_call。
 		out += respEvent("response.completed", map[string]interface{}{
 			"response": map[string]interface{}{
 				"id": s.respID, "object": "response", "model": s.model,
-				"status": "completed", "usage": usage,
+				"status": "completed", "output": output, "usage": usage,
 			},
 		})
 		return out
