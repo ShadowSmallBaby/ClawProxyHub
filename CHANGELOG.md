@@ -23,6 +23,19 @@
 - Added 插件 `GetProxy` 支持 `account_id`：账号级代理优先，回退分组
 - Changed 握手 `core_version` 改为真实版本号（原写死 0.1.0）
 
+## v1.0.5
+
+鉴权底座升级为 JWT + 角色访问控制；新增第三方平台凭证托管；日志页重构。
+
+- Added JWT 鉴权 + RBAC：登录签发 HS256 JWT（claims 带 role/exp）替代每请求 bcrypt；`admin` 全量、`guest` 只读（隐藏系统设置、非 GET 拦 403）；`/admin/me` 按角色下发可见菜单，前端路由守卫 + 菜单过滤
+- Added 第三方平台凭证托管（`oauth_credentials` 表，迁移 000003）：集中管理 LinuxDo / GitHub 等平台登录态，`TokenBlob` 经 AES-256-GCM 加密；`/admin/oauth-credentials` CRUD + 前端「凭证」管理页
+- Added 日志页多条件搜索（密钥 / 模型 / 路由模糊 + 插件 / 协议 / 状态类下拉 + 日期区间）与分页（页大小 10 / 30 / 50 / 100 / 200）
+- Added 日期区间快捷选项：今天 / 昨天 / 本周 / 上周 / 最近 7 天 / 最近 30 天
+- Added 路由名列（`request_logs.route_name`，迁移 000004）：区分对外路由名与真实模型
+- Fixed 日志延迟统计：网关统一 `startedAt` 计时源，杜绝「首字 3s 总耗时 300ms」的反常数据
+- Fixed 版本检查误判：`GET /admin/version` 改用语义化比较（`compareSemver`），仅远端严格大于本机时才提示更新
+- Changed 移除旧 Basic Auth 兼容（升级后需重新登录换取 JWT）；有更新时点击版本徽标先弹更新日志（中英双语）
+
 ## v1.0.3
 
 - Added 账号级出站代理：优先级 账号 > 分组（`account_proxies` 表），账号编辑弹窗可绑定
