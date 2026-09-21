@@ -12,12 +12,35 @@ import (
 // streamEncoder 流式编码器：把信封事件编码为协议 SSE 文本。
 type streamEncoder interface {
 	convertEvent(ev *pb.StreamEvent) string
+	// failure 流中途失败时的协议错误事件（客户端据此报错而非静默截断）。
+	failure(message string) string
 	// finish 流结束后的尾部输出（OpenAI 的 [DONE] 等）。
 	finish() string
 }
 
 func (s *anthSSEState) finish() string   { return "" }
 func (s *openaiSSEState) finish() string { return "data: [DONE]\n\n" }
+
+func (s *anthSSEState) failure(message string) string {
+	return anthEvent("error", map[string]interface{}{
+		"error": map[string]interface{}{"type": "api_error", "message": message},
+	})
+}
+
+func (s *openaiSSEState) failure(message string) string {
+	return s.chunkRaw(map[string]interface{}{
+		"error": map[string]interface{}{"type": "upstream_error", "message": message},
+	})
+}
+
+func (s *responsesSSEState) failure(message string) string {
+	return respEvent("response.failed", map[string]interface{}{
+		"response": map[string]interface{}{
+			"id": s.respID, "object": "response", "model": s.model, "status": "failed",
+			"error": map[string]interface{}{"code": "server_error", "message": message},
+		},
+	})
+}
 
 // aggregate 非流式聚合器。
 type aggregate interface {
@@ -62,6 +85,7 @@ func (s *Server) streamOut(w http.ResponseWriter, events chan *pb.StreamEvent, f
 		if failed, ok := ev.Event.(*pb.StreamEvent_TaskFailed); ok && failed.TaskFailed != nil {
 			log.status = http.StatusBadGateway
 			log.errBrief = failed.TaskFailed.Error.GetMessage()
+			io.WriteString(w, enc.failure(log.errBrief))
 			return false
 		}
 		filler.fill(ev)
@@ -147,8 +171,58 @@ func (f *toolIDFiller) fill(ev *pb.StreamEvent) {
 func collectUsage(log *requestLogCtx, ev *pb.StreamEvent) {
 	if fin, ok := ev.Event.(*pb.StreamEvent_MessageFinish); ok && fin.MessageFinish != nil {
 		if u := fin.MessageFinish.Usage; u != nil {
-			log.input, log.output, log.cached = u.InputTokens, u.OutputTokens, u.CachedTokens
+			log.input, log.output = u.InputTokens, u.OutputTokens
+			log.cached, log.cacheCreation = u.CachedTokens, u.CacheCreationTokens
 		}
+	}
+}
+
+// ---------- 信封 usage → 各协议 usage 对象 ----------
+// 信封为 Anthropic 语义（input 不含缓存）；OpenAI 系 prompt/input 总量需把缓存读写合回。
+
+// anthUsage Anthropic usage：四字段直出。
+func anthUsage(u *pb.Usage) map[string]interface{} {
+	if u == nil {
+		u = &pb.Usage{}
+	}
+	return map[string]interface{}{
+		"input_tokens":                u.InputTokens,
+		"output_tokens":               u.OutputTokens,
+		"cache_read_input_tokens":     u.CachedTokens,
+		"cache_creation_input_tokens": u.CacheCreationTokens,
+	}
+}
+
+// openaiUsage Chat Completions usage：prompt_tokens 含缓存，明细在 prompt_tokens_details。
+func openaiUsage(u *pb.Usage) map[string]interface{} {
+	if u == nil {
+		u = &pb.Usage{}
+	}
+	prompt := u.InputTokens + u.CachedTokens + u.CacheCreationTokens
+	return map[string]interface{}{
+		"prompt_tokens":     prompt,
+		"completion_tokens": u.OutputTokens,
+		"total_tokens":      prompt + u.OutputTokens,
+		"prompt_tokens_details": map[string]interface{}{
+			"cached_tokens": u.CachedTokens, "cache_write_tokens": u.CacheCreationTokens,
+		},
+		"completion_tokens_details": map[string]interface{}{"reasoning_tokens": u.ReasoningTokens},
+	}
+}
+
+// responsesUsage Responses usage：input_tokens 含缓存，明细在 input_tokens_details
+// （Codex 从 cached_tokens 读缓存命中）。
+func responsesUsage(u *pb.Usage) map[string]interface{} {
+	if u == nil {
+		u = &pb.Usage{}
+	}
+	input := u.InputTokens + u.CachedTokens + u.CacheCreationTokens
+	return map[string]interface{}{
+		"input_tokens":          input,
+		"output_tokens":         u.OutputTokens,
+		"total_tokens":          input + u.OutputTokens,
+		"input_tokens_details":  map[string]interface{}{"cached_tokens": u.CachedTokens},
+		"output_tokens_details": map[string]interface{}{"reasoning_tokens": u.ReasoningTokens},
 	}
 }
 
@@ -158,8 +232,10 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// errBody 错误响应体：OpenAI 形态的 error 对象 + Anthropic 要求的顶层 type=error（两家 SDK 都能解析）。
 func errBody(errType string, err error) map[string]interface{} {
 	return map[string]interface{}{
+		"type":  "error",
 		"error": map[string]string{"type": errType, "message": err.Error()},
 	}
 }

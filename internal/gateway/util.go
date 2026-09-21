@@ -7,6 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sort"
+	"strconv"
+	"strings"
+
+	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
 func randHex(n int) string {
@@ -101,4 +105,48 @@ func sortedValues[V int](m map[string]V) []V {
 	}
 	sort.Slice(vals, func(i, j int) bool { return vals[i] < vals[j] })
 	return vals
+}
+
+// ---------- 内容块（图片 / 推理） ----------
+
+// imagePart 由 URL 构造图片块：data URL 拆成 media_type + base64，其余保留远程地址。
+func imagePart(url string) *pb.ContentPart {
+	if strings.HasPrefix(url, "data:") {
+		meta, data, ok := strings.Cut(url[len("data:"):], ",")
+		if ok {
+			return &pb.ContentPart{
+				Type: "image", MediaType: strings.TrimSuffix(meta, ";base64"), Data: data,
+			}
+		}
+	}
+	return &pb.ContentPart{Type: "image", Url: url}
+}
+
+// finishParts 决定信封是否保留 parts：全是无缓存断点的文本块则丢弃（以 text 为准），
+// 否则保留完整有序内容。
+func finishParts(parts []*pb.ContentPart) []*pb.ContentPart {
+	for _, p := range parts {
+		if p.Type != "text" || p.CacheControl != "" {
+			return parts
+		}
+	}
+	return nil
+}
+
+// setTemperature 显式给出的 temperature 记进 Extra（含 0），插件据此区分"未设置"与"设为 0"。
+func setTemperature(req *pb.ChatRequest, t *float64) {
+	if t != nil {
+		req.Extra["temperature"] = strconv.FormatFloat(*t, 'g', -1, 64)
+	}
+}
+
+// partsText 拼接内容块里的文本。
+func partsText(parts []*pb.ContentPart) string {
+	var texts []string
+	for _, p := range parts {
+		if p.Type == "text" {
+			texts = append(texts, p.Text)
+		}
+	}
+	return joinTexts(texts)
 }

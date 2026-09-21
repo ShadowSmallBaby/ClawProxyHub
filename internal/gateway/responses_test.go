@@ -209,3 +209,15 @@ func TestResponsesAggregate(t *testing.T) {
 		t.Errorf("aggregate usage wrong: %s", b)
 	}
 }
+
+// TestParseResponsesToolChoice 字符串 required → tool；对象 function → 指定工具。
+func TestParseResponsesToolChoice(t *testing.T) {
+	req, err := parseResponsesRequest([]byte(`{"model":"m","input":"hi","tool_choice":"required"}`))
+	if err != nil || req.ToolChoice == nil || req.ToolChoice.Type != "tool" {
+		t.Errorf("required wrong: err=%v tc=%+v", err, req.ToolChoice)
+	}
+	req, err = parseResponsesRequest([]byte(`{"model":"m","input":"hi","tool_choice":{"type":"function","name":"shell"}}`))
+	if err != nil || req.ToolChoice == nil || req.ToolChoice.Type != "tool" || req.ToolChoice.ToolName != "shell" {
+		t.Errorf("object wrong: err=%v tc=%+v", err, req.ToolChoice)
+	}
+}
