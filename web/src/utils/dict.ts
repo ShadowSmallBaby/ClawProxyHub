@@ -19,6 +19,7 @@ export const capabilityDict: Record<string, Bi> = {
   refreshable: { zh: '可刷新', en: 'Refreshable' },
   auto_relogin: { zh: '自动续登', en: 'Auto Re-login' },
   profile: { zh: '资料', en: 'Profile' },
+  instances: { zh: '多实例', en: 'Multi-instance' },
 }
 
 export const strategyDict: Record<string, Bi> = {

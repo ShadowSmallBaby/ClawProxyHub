@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.1.0
+
+大版本，含破坏性变更。引入实例层与插件契约 v2，插件市场改多源，新增 New API 插件。
+
+- Breaking 插件契约 v2（`instance_id` / `account_id` / `instance_schema`，`ProtocolVersion` 1→2）；核心按 `[1,2]` 协商向后兼容 v1 插件，v1 插件仅默认实例
+- Breaking 系统设置移除 `marketplace_url`，改由 `/admin/plugin-sources` 管理源列表（旧值导入为 `custom` 源）
+- Breaking 分组归属实例（`groups.instance_id`），账号只能进同实例分组；新增 `PUT /admin/groups/{id}`；`POST /admin/accounts/login` 新增可选 `instance_id`
+- Added 实例层（迁移 000005）：Plugin → Instance → Account，`instances` 表 + `accounts/groups.instance_id`；单例插件自动落默认实例，多实例插件由 `Manifest.capabilities:instances` + `instance_schema` 自声明；`/admin/instances` CRUD + 前端「实例」页
+- Added 插件市场多源（`network.plugin_sources`）：按源懒加载、可达探测、每源计数、命名空间目录隔离、同名跨源拒装；前端「插件源」抽屉管理
+- Added New API 插件（`plugins/newapi`，protocol v2 多实例）：api_key / password / cred_file / oauth 四种授权，余额折算与每日签到
+- Added 站内通知（迁移 000006）：任务提醒落库，头部铃铛展示未读
+- Added 调用日志缓存写入 token（迁移 000007，`cache_creation_tokens`）：区分缓存写入与读取，三协议 usage 信封统一带出
+- Added 日志保留清理（`internal/janitor`，`logs.retention_days`）、CSV 导出（`GET /admin/logs/export`）与清空
+- Added 系统信息 / 备份 / 恢复（`/admin/system/info|backup|restore`）：`VACUUM INTO` 快照 + `secret.key`，恢复重启换入
+- Added 删除影响面预览与级联（`/admin/*/impact`）：预览受影响实例/分组/账号/规则/执行历史 + 引用路由与密钥名，事务内按层级级联
+- Added 路由级 User-Agent（迁移 000008）+ 全局网关 UA / 浏览器 UA 设置
+- Added 站点品牌自定义（`site.name/abbr/logo`，`GET /admin/branding` 免鉴权）
+- Added 任务规则自动生成（迁移 000009，`task_rules.auto`）+ 规则去重 + `PUT /admin/task-rules/{id}` + 规则/执行历史分页
+- Added 个人资料页（用户名 / 角色 / 可访问菜单，改密弹窗）；「设置」移至头像下拉，guest 可改自己密码
+- Added 流式错误帧：上游中途失败按入口协议下发合规错误帧，不再静默断流
+- Added 插件 `GetProxy` 支持 `account_id`：账号级代理优先，回退分组
+- Changed 握手 `core_version` 改为真实版本号（原写死 0.1.0）
+
 ## v1.0.3
 
 - Added 账号级出站代理：优先级 账号 > 分组（`account_proxies` 表），账号编辑弹窗可绑定

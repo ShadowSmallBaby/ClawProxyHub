@@ -25,9 +25,9 @@
             <t-tag size="small" theme="default" variant="light" class="group-add">＋</t-tag>
             <template #content>
               <div class="group-picker">
-                <div v-if="!groupsOf(row.plugin_id).length" class="group-picker-empty">{{ $t('accounts.noGroups') }}</div>
+                <div v-if="!groupsOf(row).length" class="group-picker-empty">{{ $t('accounts.noGroups') }}</div>
                 <div
-                  v-for="g in groupsOf(row.plugin_id)"
+                  v-for="g in groupsOf(row)"
                   :key="g.id"
                   class="group-picker-item"
                   :class="{ active: (row.group_ids ?? []).includes(g.id) }"
@@ -45,13 +45,14 @@
         <t-tooltip v-if="pausedInfo(row)" :content="pausedInfo(row)!" placement="top">
           <t-tag theme="warning" variant="light">{{ pausedLabel(row) }}</t-tag>
         </t-tooltip>
-        <t-switch
-          v-else
-          :value="row.status === 'active'"
-          size="small"
-          :disabled="row.status === 'expired'"
-          @change="() => toggleSchedule(row)"
-        />
+        <t-tooltip v-else :content="row.status === 'disabled' && row.pause_reason ? row.pause_reason : ''" :disabled="!(row.status === 'disabled' && row.pause_reason)" placement="top">
+          <t-switch
+            :value="row.status === 'active'"
+            size="small"
+            :disabled="row.status === 'expired'"
+            @change="() => toggleSchedule(row)"
+          />
+        </t-tooltip>
       </template>
       <template #status="{ row }">
         <t-tag v-if="row.status === 'active'" theme="success" variant="light">{{ $t('accounts.statusActive') }}</t-tag>
@@ -71,9 +72,7 @@
           <t-link theme="primary" @click="openEdit(row)">{{ $t('common.edit') }}</t-link>
           <t-link theme="primary" @click="openTest(row)">{{ $t('accounts.test') }}</t-link>
           <t-link theme="primary" @click="refresh(row.id)">{{ $t('common.refresh') }}</t-link>
-          <t-popconfirm :content="$t('accounts.confirmDelete')" @confirm="remove(row.id)">
-            <t-link theme="danger">{{ $t('common.delete') }}</t-link>
-          </t-popconfirm>
+          <t-link theme="danger" @click="askRemove(row)">{{ $t('common.delete') }}</t-link>
         </t-space>
       </template>
     </t-table>
@@ -174,6 +173,19 @@
           <span class="wizard-client">{{ selectedPluginLabel }}</span>
         </div>
 
+        <!-- 目标实例（站点）：仅多实例插件展示；无实例时先去新建 -->
+        <t-alert v-if="selectedPlugin?.multi_instance && !instanceOptions(selectedPluginId).length" theme="warning">
+          <template #message>
+            {{ $t('accounts.noInstance') }}
+            <t-link theme="primary" @click="router.push('/instances')">{{ $t('menu.instances') }}</t-link>
+          </template>
+        </t-alert>
+        <t-form v-else-if="selectedPlugin?.multi_instance" label-width="90px">
+          <t-form-item :label="$t('accounts.instance')">
+            <t-select v-model="wizardInstanceId" :options="instanceOptions(selectedPluginId)" style="width: 100%" />
+          </t-form-item>
+        </t-form>
+
         <t-tabs v-if="methods.length" v-model="methodId">
           <t-tab-panel v-for="m in methods" :key="m.id" :value="m.id" :label="label(m.label, m.id)">
             <div class="tab-body">
@@ -244,7 +256,7 @@
           </t-form-item>
         </t-form>
 
-        <t-button theme="primary" block :loading="submitting" @click="submit">
+        <t-button theme="primary" block :loading="submitting" :disabled="selectedPlugin?.multi_instance && !wizardInstanceId" @click="submit">
           {{ submitLabel }}
         </t-button>
       </t-space>
@@ -283,6 +295,9 @@
       <t-form v-if="editRow" label-width="90px">
         <t-form-item :label="$t('accounts.name')">
           <t-input v-model="editName" :placeholder="$t('accounts.namePh')" clearable />
+        </t-form-item>
+        <t-form-item v-if="pluginOf(editRow.plugin_id)?.multi_instance" :label="$t('accounts.instance')">
+          <t-select v-model="editInstanceId" :options="instanceOptions(editRow.plugin_id)" style="width: 100%" />
         </t-form-item>
         <t-form-item :label="$t('accounts.groupsTitle')">
           <bind-select v-model="editGroups" :options="editGroupOptions" :placeholder="$t('accounts.groupsPh')" />
@@ -323,24 +338,37 @@
         </div>
       </t-space>
     </t-drawer>
+
+    <delete-impact-dialog
+      v-model:visible="removeVisible"
+      :header="$t('common.delete') + ' · ' + (removing?.display_name || `#${removing?.id ?? 0}`)"
+      :message="$t('accounts.confirmDelete')"
+      :impact-url="`/admin/accounts/${removing?.id ?? 0}/impact`"
+      :delete-url="`/admin/accounts/${removing?.id ?? 0}`"
+      @deleted="loadAll"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { CheckIcon } from 'tdesign-icons-vue-next'
 import { api } from '../api/client'
 import BindSelect from '../components/BindSelect.vue'
+import DeleteImpactDialog from '../components/DeleteImpactDialog.vue'
 import { accountStatusDict, capabilityDict, dict, label, runStatusDict } from '../utils/dict'
-import type { Account, AccountDetail, AuthMethod, GroupInfo, LoginResp, ModelInfo, NextStep, PluginInfo } from '../api/types'
+import type { Account, AccountDetail, AuthMethod, GroupInfo, InstanceInfo, LoginResp, ModelInfo, NextStep, PluginInfo } from '../api/types'
 
 const { t } = useI18n()
+const router = useRouter()
 
 const plugins = ref<PluginInfo[]>([])
 const accounts = ref<Account[]>([])
 const groups = ref<GroupInfo[]>([])
+const instances = ref<InstanceInfo[]>([])
 const proxies = ref<{ ID: number; Scheme: string; Host: string; Port: number }[]>([])
 const loading = ref(false)
 
@@ -348,6 +376,7 @@ const loading = ref(false)
 const editVisible = ref(false)
 const editRow = ref<Account | null>(null)
 const editName = ref('')
+const editInstanceId = ref<number | undefined>(undefined) // t-select 空值用 undefined，避免显示 0
 const editGroups = ref<number[]>([])
 const editProxies = ref<number[]>([])
 const editModels = ref<{ id: string }[]>([])
@@ -382,12 +411,28 @@ const savingConfig = ref(false)
 const wizardModels = ref<{ id: string }[]>([])
 const modelsSyncing = ref(false)
 const wizardProfileName = ref('')
+const wizardInstanceId = ref<number | undefined>(undefined)
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 
 const selectedPluginLabel = computed(() => {
   const p = plugins.value.find((x) => x.name === pluginName.value)
   return p?.label || p?.name || ''
 })
+const selectedPlugin = computed(() => plugins.value.find((x) => x.name === pluginName.value))
+const selectedPluginId = computed(() => selectedPlugin.value?.id ?? 0)
+function pluginOf(id: number) {
+  return plugins.value.find((x) => x.id === id)
+}
+
+// 实例下拉：按插件过滤，展示名称（+ 地址）
+function instanceOptions(pluginID: number) {
+  return instances.value
+    .filter((i) => i.plugin_id === pluginID)
+    .map((i) => ({ value: i.id, label: i.base_url ? `${i.name} · ${i.base_url}` : i.name }))
+}
+function instanceName(id: number): string {
+  return instances.value.find((i) => i.id === id)?.name ?? (id ? `#${id}` : '-')
+}
 
 // 授权按钮文案：按登录方式形态给出（发送验证码 / 生成授权链接 / 授权）
 const submitLabel = computed(() => {
@@ -402,6 +447,7 @@ const submitLabel = computed(() => {
 const columns = computed(() => [
   { colKey: 'display_name', title: t('accounts.account'), width: 160, ellipsis: true },
   { colKey: 'plugin', title: t('accounts.colPlugin'), width: 110, ellipsis: true, cell: (_h: any, { row }: any) => pluginLabel(row.plugin_id), align: 'center' },
+  { colKey: 'instance', title: t('accounts.instance'), width: 132, ellipsis: true, cell: (_h: any, { row }: any) => instanceName(row.instance_id), align: 'center' },
   { colKey: 'group', title: t('accounts.groups'), align: 'center' },
   { colKey: 'credits', title: t('accounts.credits'), width: 120, align: 'center' },
   { colKey: 'status', title: t('accounts.status'), width: 90, align: 'center' },
@@ -431,8 +477,12 @@ async function toggleSchedule(row: Account) {
     await api.post(`/admin/accounts/${row.id}/pause`)
     MessagePlugin.success(t('accounts.pausedSchedule'))
   } else {
-    await api.post(`/admin/accounts/${row.id}/resume`)
-    MessagePlugin.success(t('accounts.resumedSchedule'))
+    try {
+      await api.post(`/admin/accounts/${row.id}/resume`)
+      MessagePlugin.success(t('accounts.resumedSchedule'))
+    } catch (e: any) {
+      MessagePlugin.warning(e?.message || String(e))
+    }
   }
   await loadAll()
 }
@@ -549,7 +599,7 @@ function sectionColumns(cols: { key: string; title: Record<string, string>; kind
 function fmtNum(v: string | undefined | null): string {
   if (v === undefined || v === null || v === '') return '-'
   const n = Number(v)
-  return Number.isFinite(n) ? String(Math.round(n * 100) / 100) : v
+  return Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) : v
 }
 
 function fmtTime(t: string | null | undefined): string {
@@ -563,7 +613,8 @@ async function openDetail(id: number) {
 
 const currentFields = computed(() => methods.value.find((m) => m.id === methodId.value)?.fields ?? [])
 const currentMethod = computed(() => methods.value.find((m) => m.id === methodId.value))
-const pluginGroups = computed(() => groups.value.filter((g) => g.plugin === pluginName.value))
+// 分组归属实例：向导第三步只列目标实例的分组
+const pluginGroups = computed(() => groups.value.filter((g) => g.plugin === pluginName.value && g.instance_id === wizardInstanceId.value))
 
 // 管理界面是否本机访问（决定 auto_wait 的走向：本机 127.0.0.1 回调可达）
 const isLocal = ['localhost', '127.0.0.1', '::1'].includes(location.hostname)
@@ -592,16 +643,18 @@ const autoPolling = computed(() => {
 async function loadAll() {
   loading.value = true
   try {
-    const [p, a, g, px] = await Promise.all([
+    const [p, a, g, px, ins] = await Promise.all([
       api.get<{ plugins: PluginInfo[] }>('/admin/plugins'),
       api.get<{ accounts: Account[] }>('/admin/accounts'),
       api.get<{ groups: GroupInfo[] }>('/admin/groups'),
       api.get<{ proxies: typeof proxies.value }>('/admin/proxies'),
+      api.get<{ instances: InstanceInfo[] }>('/admin/instances'),
     ])
     plugins.value = p.plugins ?? []
     accounts.value = a.accounts ?? []
     groups.value = g.groups ?? []
     proxies.value = px.proxies ?? []
+    instances.value = ins.instances ?? []
   } finally {
     loading.value = false
   }
@@ -614,8 +667,10 @@ const wizardGroupOptions = computed(() =>
   pluginGroups.value.map((g) => ({ value: g.id, label: `${g.name} (${g.plugin_label || g.plugin})` })),
 )
 const editGroupOptions = computed(() => {
-  const pid = editRow.value?.plugin_id
-  return groups.value.filter((g) => g.plugin_id === pid).map((g) => ({ value: g.id, label: `${g.name} (${g.plugin_label || g.plugin})` }))
+  const row = editRow.value
+  return groups.value
+    .filter((g) => g.plugin_id === row?.plugin_id && g.instance_id === editInstanceId.value)
+    .map((g) => ({ value: g.id, label: `${g.name} (${g.plugin_label || g.plugin})` }))
 })
 const endpointOptions = [
   { value: 'chat_completions', label: 'chat/completions' },
@@ -628,6 +683,7 @@ const testModelOptions = computed(() => editModels.value.map((m) => ({ value: m.
 async function openEdit(row: Account) {
   editRow.value = row
   editName.value = row.display_name
+  editInstanceId.value = row.instance_id || undefined
   editGroups.value = [...(row.group_ids ?? [])]
   editModels.value = []
   editProxies.value = []
@@ -660,7 +716,7 @@ async function submitEdit() {
   editSaving.value = true
   try {
     const id = editRow.value.id
-    await api.put(`/admin/accounts/${id}`, { display_name: editName.value, group_ids: editGroups.value })
+    await api.put(`/admin/accounts/${id}`, { display_name: editName.value, group_ids: editGroups.value, instance_id: editInstanceId.value ?? 0 })
     await api.put(`/admin/accounts/${id}/proxies`, { proxy_ids: editProxies.value })
     await api.put(`/admin/accounts/${id}/models`, { models: editModels.value })
     MessagePlugin.success(t('common.saved'))
@@ -716,11 +772,15 @@ function openAdd() {
   stopPolling()
 }
 
-// 第一步点选客户端 → 进入授权
-function choosePlugin(p: PluginInfo) {
+// 第一步点选客户端 → 进入授权（按插件拉实例列表，保证默认实例存在并预选第一个）
+async function choosePlugin(p: PluginInfo) {
   pluginName.value = p.name
   wizardStep.value = 'auth'
   loadMethods(p.name)
+  const resp = await api.get<{ instances: InstanceInfo[] }>(`/admin/instances?plugin_id=${p.id}`).catch(() => ({ instances: [] }))
+  const list = resp.instances ?? []
+  instances.value = [...instances.value.filter((i) => i.plugin_id !== p.id), ...list]
+  wizardInstanceId.value = list[0]?.id
 }
 
 async function loadMethods(name: string) {
@@ -765,8 +825,8 @@ async function submit() {
   stopPolling() // 手动提交优先于轮询，避免并发打插件
   try {
     const payload = nextStep.value
-      ? { plugin: pluginName.value, method_id: methodId.value, form: stepForm.value, state: nextStep.value.state ?? '' }
-      : { plugin: pluginName.value, method_id: methodId.value, form: form.value, state: '' }
+      ? { plugin: pluginName.value, method_id: methodId.value, form: stepForm.value, state: nextStep.value.state ?? '', instance_id: wizardInstanceId.value ?? 0 }
+      : { plugin: pluginName.value, method_id: methodId.value, form: form.value, state: '', instance_id: wizardInstanceId.value ?? 0 }
     const resp = await api.post<LoginResp>('/admin/accounts/login', payload)
     if (resp.done) {
       enterDoneStep(resp.account_id ?? 0)
@@ -844,7 +904,7 @@ function startPolling() {
     try {
       const resp = await api.post<LoginResp>('/admin/accounts/login', {
         plugin: pluginName.value, method_id: methodId.value,
-        form: {}, state: nextStep.value?.state ?? '',
+        form: {}, state: nextStep.value?.state ?? '', instance_id: wizardInstanceId.value ?? 0,
       })
       if (resp.done) {
         enterDoneStep(resp.account_id ?? 0)
@@ -866,9 +926,9 @@ function stopPolling() {
   }
 }
 
-// 行内分组：账号插件对应的分组
-function groupsOf(pluginID: number): GroupInfo[] {
-  return groups.value.filter((g) => g.plugin_id === pluginID)
+// 行内分组：账号所属实例的分组
+function groupsOf(row: Account): GroupInfo[] {
+  return groups.value.filter((g) => g.plugin_id === row.plugin_id && g.instance_id === row.instance_id)
 }
 
 function groupName(id: number): string {
@@ -898,9 +958,12 @@ async function refresh(id: number) {
   }
 }
 
-async function remove(id: number) {
-  await api.del(`/admin/accounts/${id}`)
-  await loadAll()
+const removeVisible = ref(false)
+const removing = ref<Account | null>(null)
+
+function askRemove(row: Account) {
+  removing.value = row
+  removeVisible.value = true
 }
 
 onBeforeUnmount(stopPolling)

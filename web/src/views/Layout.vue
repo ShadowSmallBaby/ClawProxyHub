@@ -2,8 +2,11 @@
   <t-layout class="layout">
     <t-aside :width="collapsed ? '64px' : '200px'" class="aside">
       <div class="logo" @click="router.push('/dashboard')">
-        <img class="logo-badge" src="/logo.png" alt="ClawProxyHub" />
-        <span v-if="!collapsed" class="logo-text">Claw<span>ProxyHub</span></span>
+        <img class="logo-badge" :src="brandLogo" :alt="branding.name" />
+        <span v-if="!collapsed" class="logo-text" :class="{ custom: brandCustom }" :title="branding.name">
+          <template v-if="brandCustom">{{ branding.name }}</template>
+          <template v-else>Claw<span>ProxyHub</span></template>
+        </span>
       </div>
       <t-menu
         :value="route.path"
@@ -44,6 +47,35 @@
               <logo-github-icon />
             </t-button>
           </t-tooltip>
+          <!-- 通知铃铛：未读红点；点击列表，条目点击标记已读并弹详情 -->
+          <t-popup trigger="click" placement="bottom-right" @visible-change="(v: boolean) => v && loadNotifications()">
+            <t-badge :count="unread" :offset="[4, 4]" size="small">
+              <t-button variant="text" shape="square" theme="default">
+                <notification-icon />
+              </t-button>
+            </t-badge>
+            <template #content>
+              <div class="notif-menu">
+                <div class="notif-head">
+                  <span>{{ $t('common.notifications') }}<span v-if="unread" class="notif-unread"> · {{ $t('common.unreadN', { n: unread }) }}</span></span>
+                  <span class="notif-actions">
+                    <t-link v-if="unread" size="small" theme="primary" @click="readAll">{{ $t('common.markAllRead') }}</t-link>
+                    <t-link v-if="notifications.some((n) => n.read)" size="small" theme="default" @click="clearRead">{{ $t('common.clearRead') }}</t-link>
+                  </span>
+                </div>
+                <div v-if="!notifications.length" class="notif-empty">{{ $t('common.noNotifications') }}</div>
+                <div v-else class="notif-list">
+                  <div v-for="n in notifications" :key="n.id" class="notif-item" :class="{ unread: !n.read, [n.level]: true }" @click="openNotification(n)">
+                    <span class="notif-dot" />
+                    <div class="notif-body">
+                      <div class="notif-title">{{ n.title }}</div>
+                      <div class="notif-time">{{ n.created_at.replace('T', ' ').slice(0, 16) }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </t-popup>
           <t-popup trigger="click">
             <t-button variant="text" shape="square" theme="default">
               <translate-icon />
@@ -87,8 +119,11 @@
                     <div class="user-menu-sub">{{ roleLabel }}</div>
                   </div>
                 </div>
-                <div class="user-menu-item disabled">
+                <div class="user-menu-item" @click="go('/profile')">
                   <user-icon /> {{ $t('common.profile') }}
+                </div>
+                <div v-if="role !== 'guest'" class="user-menu-item" @click="go('/settings')">
+                  <setting-icon /> {{ $t('menu.settings') }}
                 </div>
                 <div class="user-menu-item" @click="logout">
                   <poweroff-icon /> {{ $t('common.logout') }}
@@ -104,6 +139,12 @@
       </t-content>
     </t-layout>
 
+    <!-- 通知详情弹窗 -->
+    <t-dialog v-model:visible="notifVisible" :header="current?.title" :footer="false" width="480px">
+      <div class="notif-content">{{ current?.content }}</div>
+      <div v-if="current" class="notif-meta">{{ current.created_at.replace('T', ' ').slice(0, 19) }}</div>
+    </t-dialog>
+
     <!-- 更新日志弹窗：点版本徽标有更新时展示，右下按钮跳发布页 -->
     <t-dialog v-model:visible="changelogVisible" :header="changelogTitle" :footer="false" width="480px">
       <div class="changelog-ver">v{{ version }} → <b>v{{ latest }}</b></div>
@@ -118,20 +159,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, type Component } from 'vue'
+import { computed, onBeforeUnmount, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   DashboardIcon, AppIcon, UserIcon, FolderIcon, InternetIcon,
   LockOnIcon, TimeIcon, FileIcon, RootListIcon, SettingIcon,
   ChevronLeftIcon, ChevronRightIcon, TranslateIcon, MoonIcon, SunnyIcon,
-  PoweroffIcon, CheckIcon, LogoGithubIcon, CertificateIcon,
+  PoweroffIcon, CheckIcon, LogoGithubIcon, CertificateIcon, ServerIcon, NotificationIcon,
 } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { api, clearToken } from '../api/client'
 import i18n, { setLocale as applyLocale, type Locale } from '../i18n'
+import { branding, brandLogo, brandCustom, ensureBranding } from '../utils/branding'
 
 const route = useRoute()
 const router = useRouter()
+ensureBranding()
 const dark = ref(localStorage.getItem('cph-theme') === 'dark')
 const collapsed = ref(localStorage.getItem('cph-sidebar') === 'collapsed')
 // 用户名由 /admin/me 下发（token 已是 JWT，不能再从中拆用户名）
@@ -211,6 +254,40 @@ function gotoRelease() {
 
 checkVersion() // 首次进页自动查一次
 
+// ---------- 站内通知（任务产生；每 60s 轮询未读数，打开列表时全量刷新） ----------
+interface Notification { id: number; title: string; content: string; level: string; read: boolean; created_at: string }
+const notifications = ref<Notification[]>([])
+const unread = ref(0)
+const notifVisible = ref(false)
+const current = ref<Notification | null>(null)
+async function loadNotifications() {
+  try {
+    const r = await api.get<{ notifications: Notification[]; unread: number }>('/admin/notifications?limit=50')
+    notifications.value = r.notifications ?? []
+    unread.value = r.unread ?? 0
+  } catch { /* 静默 */ }
+}
+async function openNotification(n: Notification) {
+  current.value = n
+  notifVisible.value = true
+  if (!n.read) {
+    n.read = true
+    unread.value = Math.max(0, unread.value - 1)
+    api.post(`/admin/notifications/${n.id}/read`).catch(() => {})
+  }
+}
+async function readAll() {
+  await api.post('/admin/notifications/read-all').catch(() => {})
+  loadNotifications()
+}
+async function clearRead() {
+  await api.del('/admin/notifications').catch(() => {})
+  loadNotifications()
+}
+loadNotifications()
+const notifTimer = window.setInterval(loadNotifications, 60_000)
+onBeforeUnmount(() => window.clearInterval(notifTimer))
+
 interface MenuItem {
   value: string
   label: string // i18n key（menu.xxx）
@@ -221,6 +298,7 @@ interface MenuItem {
 const menuItems: MenuItem[] = [
   { value: '/dashboard', label: 'menu.dashboard', desc: 'menuDesc.dashboard', icon: DashboardIcon },
   { value: '/plugins', label: 'menu.plugins', desc: 'menuDesc.plugins', icon: AppIcon },
+  { value: '/instances', label: 'menu.instances', desc: 'menuDesc.instances', icon: ServerIcon },
   { value: '/accounts', label: 'menu.accounts', desc: 'menuDesc.accounts', icon: UserIcon },
   { value: '/groups', label: 'menu.groups', desc: 'menuDesc.groups', icon: FolderIcon },
   { value: '/proxies', label: 'menu.proxies', desc: 'menuDesc.proxies', icon: RootListIcon },
@@ -229,6 +307,11 @@ const menuItems: MenuItem[] = [
   { value: '/oauth', label: 'menu.oauth', desc: 'menuDesc.oauth', icon: CertificateIcon },
   { value: '/tasks', label: 'menu.tasks', desc: 'menuDesc.tasks', icon: TimeIcon },
   { value: '/logs', label: 'menu.logs', desc: 'menuDesc.logs', icon: FileIcon },
+]
+
+// 头像下拉里的页面（不在侧栏）：用于顶部标题/描述匹配
+const extraPages: MenuItem[] = [
+  { value: '/profile', label: 'common.profile', desc: 'menuDesc.profile', icon: UserIcon },
   { value: '/settings', label: 'menu.settings', desc: 'menuDesc.settings', icon: SettingIcon },
 ]
 
@@ -239,10 +322,14 @@ const visibleMenuItems = computed(() =>
     : menuItems.filter((m) => allowedMenus.value!.includes(m.value.slice(1))),
 )
 
-// 当前菜单（含子路径前缀匹配）
+// 当前页面（含子路径前缀匹配；头像下拉页也参与匹配）
 const currentPage = computed(
-  () => menuItems.find((m) => route.path.startsWith(m.value)) ?? menuItems[0],
+  () => [...menuItems, ...extraPages].find((m) => route.path.startsWith(m.value)) ?? menuItems[0],
 )
+
+function go(path: string) {
+  router.push(path)
+}
 
 // 主题切换与收起状态持久化
 watch(dark, (v) => {
@@ -298,6 +385,17 @@ function logout() {
 .logo-text {
   font-weight: 700;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+/* 自定义品牌名：蓝紫渐变字 */
+.logo-text.custom {
+  font-size: 16px;
+  background: linear-gradient(90deg, var(--td-brand-color-4), #7c5cff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 .logo-text span {
   font-weight: 300;
@@ -483,6 +581,99 @@ function logout() {
 }
 .user-menu-item.disabled:hover {
   background: none;
+}
+
+/* 通知列表 */
+.notif-menu {
+  width: 320px;
+}
+.notif-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--td-component-border);
+}
+.notif-unread {
+  font-weight: 400;
+  color: var(--td-text-color-placeholder);
+}
+.notif-actions {
+  display: flex;
+  gap: 10px;
+  font-weight: 400;
+}
+.notif-empty {
+  padding: 28px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--td-text-color-placeholder);
+}
+.notif-list {
+  max-height: 360px;
+  overflow-y: auto;
+  padding-top: 4px;
+}
+.notif-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+.notif-item:hover {
+  background: var(--td-bg-color-secondarycontainer);
+}
+.notif-dot {
+  width: 6px;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: transparent;
+  flex-shrink: 0;
+}
+.notif-item.unread .notif-dot {
+  background: var(--td-brand-color);
+}
+.notif-item.unread.warning .notif-dot {
+  background: var(--td-warning-color);
+}
+.notif-item.unread.error .notif-dot {
+  background: var(--td-error-color);
+}
+.notif-body {
+  min-width: 0;
+  flex: 1;
+}
+.notif-title {
+  font-size: 13px;
+  color: var(--td-text-color-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.notif-item:not(.unread) .notif-title {
+  color: var(--td-text-color-secondary);
+}
+.notif-time {
+  font-size: 11px;
+  color: var(--td-text-color-placeholder);
+  margin-top: 2px;
+}
+.notif-content {
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.notif-meta {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
 }
 
 /* 内容区域：占满剩余高度，内部滚动（头部/侧栏固定） */

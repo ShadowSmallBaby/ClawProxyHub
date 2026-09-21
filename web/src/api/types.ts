@@ -40,11 +40,47 @@ export interface PluginInfo {
   icon: string // 包内相对路径（空 = 前端兜底首字母）
   capabilities: string[]
   auth_methods: AuthMethod[] | null
+  instance_schema?: string // 实例级设置 JSON Schema（空 = 实例只有名称 + 地址）
+  protocol_version?: number
+  multi_instance?: boolean // 声明 instances 能力且契约 ≥2；否则只有默认实例
+}
+
+// 实例：插件下的一个站点/部署（Plugin → Instance → Account）
+export interface InstanceInfo {
+  id: number
+  plugin_id: number
+  name: string
+  base_url: string
+  settings: Record<string, unknown>
+  account_count: number
+}
+
+// 删除影响面：级联移除的数量 + 引用了被删分组、需人工复核的路由/密钥名
+export interface DeleteImpact {
+  instances: number
+  groups: number
+  accounts: number
+  task_rules: number
+  task_runs: number
+  routes: string[]
+  keys: string[]
+}
+
+// 插件源（index.json 地址）
+export interface PluginSource {
+  name: string
+  url: string
+  enabled: boolean
+  // 以下由列表接口实时计算
+  plugin_count?: number
+  installed_count?: number
+  reachable?: boolean
 }
 
 export interface Account {
   id: number
   plugin_id: number
+  instance_id: number
   group_ids: number[] | null
   display_name: string
   status: string
@@ -70,6 +106,7 @@ export interface AccountRun {
 export interface AccountDetail {
   id: number
   plugin_id: number
+  instance_id: number
   group_ids: number[]
   display_name: string
   status: string
@@ -135,6 +172,7 @@ export interface GroupInfo {
   id: number
   name: string
   plugin_id: number
+  instance_id: number
   plugin: string
   plugin_label: string
   accounts: number
@@ -152,6 +190,7 @@ export interface RouteInfo {
   Strategy: string
   GroupsJSON: string
   TimeoutSeconds: number
+  UserAgent: string
   FailoverEnabled: boolean
   FailoverOn4xx: boolean
   FailoverOn5xx: boolean
@@ -167,6 +206,11 @@ export interface TaskRule {
   capability: string // 展示名（插件声明的 label）
   trigger_type: string
   trigger_value: string
+  target_scope: string
+  target_json: string // account_ids 原始范围（编辑回填用）
+  auto: boolean // true = 系统自动生成（编辑锁定触发类型/能力/范围）
+  instance: string // account_ids 范围下账号所属实例名；空 = 全部实例
+  accounts: string[]
   enabled: boolean
   next_run_at: string | null
   last_run_at: string | null
@@ -177,6 +221,7 @@ export interface TaskRun {
   id: number
   plugin: string
   capability: string
+  instance: string // 账号所属实例名（账号已删为空）
   account: string
   status: string
   summary: string
@@ -196,13 +241,16 @@ export interface RequestLog {
   Status: number
   InputTokens: number
   OutputTokens: number
-  CachedTokens: number
+  CachedTokens: number // 缓存读取
+  CacheCreationTokens: number // 缓存写入
   FirstTokenMs: number
   LatencyMs: number
   ClientIP: string
   UserAgent: string
   ErrorBrief: string
   CreatedAt: string
+  key_name?: string // 密钥名称（列表接口附带）
+  instance_name?: string // 账号所属实例（列表接口附带；空 = 账号已删/无账号）
 }
 
 export interface Stats {

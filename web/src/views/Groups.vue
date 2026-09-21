@@ -7,6 +7,7 @@
     <t-table row-key="id" :data="groups" :columns="columns">
       <template #op="{ row }">
         <t-space size="small">
+          <t-link theme="primary" @click="openEdit(row)">{{ $t('common.edit') }}</t-link>
           <t-link theme="primary" @click="openBind(row)">{{ $t('groups.bind') }}</t-link>
           <t-popconfirm :content="$t('groups.confirmDelete')" @confirm="remove(row.id)">
             <t-link theme="danger">{{ $t('common.delete') }}</t-link>
@@ -21,11 +22,28 @@
           <t-input v-model="newName" :placeholder="$t('groups.namePh')" />
         </t-form-item>
         <t-form-item :label="$t('groups.plugin')" mark>
-          <t-select v-model="newPlugin" :placeholder="$t('groups.pickPluginPh')">
+          <t-select v-model="newPlugin" :placeholder="$t('groups.pickPluginPh')" @change="onPluginChange">
             <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
           </t-select>
         </t-form-item>
-        <t-alert theme="info" :message="$t('groups.hintCreate')" />
+        <t-form-item :label="$t('accounts.instance')" mark>
+          <t-select v-model="newInstance" :options="instanceOptions(newPlugin)" :disabled="!selectedPlugin?.multi_instance" :placeholder="$t('groups.pickInstancePh')" />
+        </t-form-item>
+        <t-alert v-if="selectedPlugin?.multi_instance && !instanceOptions(newPlugin).length" theme="warning" :message="$t('accounts.noInstance')" />
+        <t-alert v-else theme="info" :message="$t('groups.hintCreate')" />
+      </t-form>
+    </t-dialog>
+
+    <!-- 编辑：改名；多实例插件且分组为空时可换实例 -->
+    <t-dialog v-model:visible="editVisible" :header="$t('groups.editTitle')" :confirm-btn="{ loading: editing }" @confirm="submitEdit">
+      <t-form v-if="editRow" label-width="90px">
+        <t-form-item :label="$t('groups.name')" mark>
+          <t-input v-model="editName" />
+        </t-form-item>
+        <t-form-item :label="$t('accounts.instance')">
+          <t-select v-model="editInstance" :options="instanceOptions(editRow.plugin_id)" :disabled="!pluginOf(editRow.plugin_id)?.multi_instance || editRow.accounts > 0" />
+        </t-form-item>
+        <t-alert v-if="editRow.accounts > 0" theme="info" :message="$t('groups.hintEditLocked')" />
       </t-form>
     </t-dialog>
 
@@ -42,16 +60,73 @@ import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { api } from '../api/client'
 import BindSelect from '../components/BindSelect.vue'
-import type { GroupInfo } from '../api/types'
+import type { GroupInfo, InstanceInfo, PluginInfo } from '../api/types'
 
 const { t } = useI18n()
 
 const groups = ref<GroupInfo[]>([])
-const plugins = ref<{ id: number; name: string; label?: string }[]>([])
+const plugins = ref<PluginInfo[]>([])
+const instances = ref<InstanceInfo[]>([])
 const createVisible = ref(false)
 const creating = ref(false)
 const newName = ref('')
-const newPlugin = ref<number | null>(null)
+// t-select 绑定值用 undefined 作空值（0/null 会被当成真实选项显示）
+const newPlugin = ref<number | undefined>(undefined)
+const newInstance = ref<number | undefined>(undefined)
+
+// 编辑弹窗
+const editVisible = ref(false)
+const editing = ref(false)
+const editRow = ref<GroupInfo | null>(null)
+const editName = ref('')
+const editInstance = ref<number | undefined>(undefined)
+
+const selectedPlugin = computed(() => plugins.value.find((p) => p.id === newPlugin.value))
+function pluginOf(id: number) {
+  return plugins.value.find((p) => p.id === id)
+}
+function instanceOptions(pluginID: number | undefined) {
+  return instances.value
+    .filter((i) => i.plugin_id === pluginID)
+    .map((i) => ({ value: i.id, label: i.base_url ? `${i.name} · ${i.base_url}` : i.name }))
+}
+function instanceName(id: number): string {
+  return instances.value.find((i) => i.id === id)?.name ?? (id ? `#${id}` : '-')
+}
+// 切换插件：按插件拉实例（保证默认实例存在），预选第一个；单实例插件即默认实例（不可改）
+async function onPluginChange() {
+  if (!newPlugin.value) return
+  const resp = await api.get<{ instances: InstanceInfo[] }>(`/admin/instances?plugin_id=${newPlugin.value}`).catch(() => ({ instances: [] }))
+  const list = resp.instances ?? []
+  instances.value = [...instances.value.filter((i) => i.plugin_id !== newPlugin.value), ...list]
+  newInstance.value = list[0]?.id
+}
+
+function openEdit(row: GroupInfo) {
+  editRow.value = row
+  editName.value = row.name
+  editInstance.value = row.instance_id || undefined
+  editVisible.value = true
+}
+
+async function submitEdit() {
+  if (!editRow.value) return
+  if (!editName.value.trim()) {
+    MessagePlugin.warning(t('groups.errForm'))
+    return
+  }
+  editing.value = true
+  try {
+    await api.put(`/admin/groups/${editRow.value.id}`, { name: editName.value.trim(), instance_id: editInstance.value ?? 0 })
+    MessagePlugin.success(t('common.updated'))
+    editVisible.value = false
+    await load()
+  } catch (e: any) {
+    MessagePlugin.error(e.message)
+  } finally {
+    editing.value = false
+  }
+}
 
 const proxies = ref<{ ID: number; Scheme: string; Host: string; Port: number }[]>([])
 const bindVisible = ref(false)
@@ -62,8 +137,9 @@ const columns = computed(() => [
   { colKey: 'id', title: t('common.colId'), width: 70 },
   { colKey: 'name', title: t('common.colName'), align: 'center' },
   { colKey: 'plugin_label', title: t('groups.plugin'), align: 'center' },
+  { colKey: 'instance', title: t('accounts.instance'), align: 'center', cell: (_h: any, { row }: any) => instanceName(row.instance_id) },
   { colKey: 'accounts', title: t('groups.accounts'), width: 100, align: 'center' },
-  { colKey: 'op', title: t('common.colOp'), width: 160, align: 'center' },
+  { colKey: 'op', title: t('common.colOp'), width: 200, align: 'center' },
 ])
 
 const proxyOptions = computed(() =>
@@ -71,14 +147,16 @@ const proxyOptions = computed(() =>
 )
 
 async function load() {
-  const [g, p, px] = await Promise.all([
+  const [g, p, px, ins] = await Promise.all([
     api.get<{ groups: GroupInfo[] }>('/admin/groups'),
-    api.get<{ plugins: { id: number; name: string; label?: string }[] }>('/admin/plugins'),
+    api.get<{ plugins: PluginInfo[] }>('/admin/plugins'),
     api.get<{ proxies: typeof proxies.value }>('/admin/proxies'),
+    api.get<{ instances: InstanceInfo[] }>('/admin/instances'),
   ])
   groups.value = g.groups ?? []
   plugins.value = p.plugins ?? []
   proxies.value = px.proxies ?? []
+  instances.value = ins.instances ?? []
 }
 
 async function openBind(row: GroupInfo) {
@@ -96,13 +174,13 @@ async function bind() {
 }
 
 async function create() {
-  if (!newName.value || !newPlugin.value) {
+  if (!newName.value || !newPlugin.value || !newInstance.value) {
     MessagePlugin.warning(t('groups.errForm'))
     return
   }
   creating.value = true
   try {
-    await api.post('/admin/groups', { name: newName.value, plugin_id: newPlugin.value })
+    await api.post('/admin/groups', { name: newName.value, plugin_id: newPlugin.value, instance_id: newInstance.value ?? 0 })
     MessagePlugin.success(t('common.created'))
     createVisible.value = false
     newName.value = ''
