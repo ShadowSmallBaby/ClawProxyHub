@@ -88,18 +88,15 @@ body,
   letter-spacing: 0.2px;
 }
 
-/* 页面背景：明色淡蓝灰 / 暗色深蓝黑，与品牌色呼应 */
+/* 页面背景：明色淡蓝灰 / 暗色深蓝黑（纯色，不用渐变） */
 .t-layout__content {
-  background: linear-gradient(180deg, var(--cph-bg-tint), var(--td-bg-color-page) 240px);
+  background: var(--td-bg-color-page);
 }
 
-/* 卡片统一质感：圆角 + 悬浮上浮 */
+/* 卡片统一质感：1px 描边 + 中圆角，悬浮仅背景提亮（不用阴影上浮） */
 .t-card {
   border-radius: 12px;
-  transition: box-shadow 0.25s ease, transform 0.25s ease;
-}
-.t-card:hover {
-  box-shadow: var(--td-shadow-1);
+  transition: background-color 0.2s ease-out;
 }
 .t-card .t-card__header {
   font-weight: 600;
@@ -110,11 +107,6 @@ body,
   backdrop-filter: blur(8px);
   background: color-mix(in srgb, var(--td-bg-color-container) 80%, transparent);
   border-bottom: 1px solid var(--td-component-border);
-}
-
-/* 菜单图标：选中态发散光晕 */
-.t-menu__item.t-is-active .t-icon {
-  filter: drop-shadow(0 0 6px var(--td-brand-color-3));
 }
 
 /* 提示条缩小字号，避免喧宾夺主 */

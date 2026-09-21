@@ -2,6 +2,15 @@ import { writeFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
+// vendor 拆分：框架 / TDesign / echarts 独立 chunk，业务改动不影响其缓存命中
+function manualChunks(id: string): string | undefined {
+  if (!id.includes('node_modules')) return undefined
+  if (id.includes('echarts') || id.includes('zrender')) return 'echarts'
+  if (id.includes('tdesign')) return 'tdesign'
+  if (id.includes('/vue/') || id.includes('vue-router') || id.includes('vue-i18n') || id.includes('pinia') || id.includes('@vue/')) return 'vue'
+  return 'vendor'
+}
+
 export default defineConfig({
   plugins: [
     vue(),
@@ -18,5 +27,9 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    rollupOptions: {
+      output: { manualChunks },
+    },
+    chunkSizeWarningLimit: 700,
   },
 })
