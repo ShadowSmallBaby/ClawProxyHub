@@ -291,14 +291,13 @@ func Fingerprint(req *pb.ChatRequest) string {
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
-// pickGroup 按权重随机选分组。
+// pickGroup 按权重随机选分组：权重 0 = 不参与（如 100+0+0 只走第一个）；全为 0 时退回第一个。
 func pickGroup(entries []model.RouteGroupEntry) model.RouteGroupEntry {
 	total := 0
 	for _, e := range entries {
-		if e.Weight <= 0 {
-			e.Weight = 1
+		if e.Weight > 0 {
+			total += e.Weight
 		}
-		total += e.Weight
 	}
 	if total == 0 {
 		return entries[0]
@@ -306,7 +305,7 @@ func pickGroup(entries []model.RouteGroupEntry) model.RouteGroupEntry {
 	n := rand.Intn(total)
 	for _, e := range entries {
 		if e.Weight <= 0 {
-			e.Weight = 1
+			continue
 		}
 		n -= e.Weight
 		if n < 0 {

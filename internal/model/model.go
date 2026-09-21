@@ -23,6 +23,7 @@ type Plugin struct {
 	ProtocolVersion int32
 	ManifestJSON    string    `gorm:"column:manifest_json"`
 	SettingsJSON    string    `gorm:"column:settings_json;default:'{}'"`
+	Source          string    `gorm:"size:64;default:''"` // 安装来源（插件源名；官方源为空）
 	Enabled         bool      `gorm:"default:true"`
 	InstalledAt     time.Time `gorm:"column:installed_at"`
 	UpdatedAt       time.Time `gorm:"column:updated_at"`
@@ -31,10 +32,25 @@ type Plugin struct {
 // TableName 显式声明，保持与迁移 SQL 的表名一致。
 func (Plugin) TableName() string { return "plugins" }
 
+// Instance 实例：插件下的一个站点/部署（Plugin → Instance → Account）。
+// base_url 核心固定提供；站点特有字段按 manifest.instance_schema 存 SettingsJSON。
+type Instance struct {
+	ID           int64  `gorm:"primaryKey;autoIncrement"`
+	PluginID     int64  `gorm:"index"`
+	Name         string `gorm:"size:128;default:''"`
+	BaseURL      string `gorm:"column:base_url;size:512;default:''"`
+	SettingsJSON string `gorm:"column:settings_json;default:'{}'"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+func (Instance) TableName() string { return "instances" }
+
 // Account 账号（凭据 blob 由核心代管）。
 type Account struct {
 	ID             int64  `gorm:"primaryKey;autoIncrement"`
 	PluginID       int64  `gorm:"index"`
+	InstanceID     int64  `gorm:"column:instance_id;index"`
 	DisplayName    string `gorm:"size:128;default:''"`
 	CredentialBlob []byte
 	ProfileJSON    string `gorm:"column:profile_json;default:'{}'"`
@@ -62,14 +78,15 @@ type AccountGroup struct {
 
 func (AccountGroup) TableName() string { return "account_groups" }
 
-// Group 分组：某插件下的账号池（plugin_id 限定，跨插件无意义）。
+// Group 分组：某实例下的账号池（plugin_id/instance_id 限定，账号只能进同实例分组）。
 type Group struct {
-	ID        int64  `gorm:"primaryKey;autoIncrement"`
-	Name      string `gorm:"uniqueIndex;size:64"`
-	PluginID  int64  `gorm:"index"`
-	Strategy  string `gorm:"size:32;default:round_robin"` // round_robin/random/least_used
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID         int64  `gorm:"primaryKey;autoIncrement"`
+	Name       string `gorm:"uniqueIndex;size:64"`
+	PluginID   int64  `gorm:"index"`
+	InstanceID int64  `gorm:"column:instance_id;index"`
+	Strategy   string `gorm:"size:32;default:round_robin"` // round_robin/random/least_used
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // Key 对外密钥（加密存储，可回显）。授权路由为空 = 全部路由。
@@ -100,6 +117,8 @@ type Route struct {
 	GroupsJSON string `gorm:"column:groups_json;default:'[]'"`
 	// 首事件超时（秒），0 = 跟随全局设置
 	TimeoutSeconds int32 `gorm:"column:timeout_seconds;default:0"`
+	// 对话请求 UA，空 = 跟随全局（全局也空则透传客户端 UA）
+	UserAgent string `gorm:"column:user_agent;size:512;default:''"`
 	// 降级：主分组失败且状态类匹配时切到 failover 分组的指定模型（每次请求至多降一次）
 	FailoverEnabled bool   `gorm:"column:failover_enabled;default:false"`
 	FailoverOn4xx   bool   `gorm:"column:failover_on_4xx;default:false"`
@@ -154,6 +173,7 @@ type TaskRule struct {
 	TriggerValue string     `gorm:"column:trigger_value;size:128"`
 	TargetScope  string     `gorm:"column:target_scope;size:16;default:all"` // all/rotate/account_ids
 	TargetJSON   string     `gorm:"column:target_json;default:'[]'"`
+	Auto         bool       `gorm:"default:false"` // true = 系统按账号能力自动生成（编辑锁触发类型），false = 用户手动创建
 	Enabled      bool       `gorm:"default:true"`
 	LastRunAt    *time.Time `gorm:"column:last_run_at"`
 	NextRunAt    *time.Time `gorm:"column:next_run_at;index"`
@@ -181,26 +201,40 @@ func (TaskRun) TableName() string { return "task_runs" }
 
 // RequestLog 调用日志。
 type RequestLog struct {
-	ID           int64 `gorm:"primaryKey;autoIncrement"`
-	KeyID        *int64
-	PluginID     *int64
-	AccountID    *int64
-	Model        string `gorm:"size:128;default:''"`         // 实际请求上游的真实模型
-	RouteName    string `gorm:"column:route_name;size:128;default:''"` // 对外路由名（未命中路由为空）
-	Protocol     string `gorm:"size:32;default:''"`
-	Status       int32
-	InputTokens  int32     `gorm:"column:input_tokens;default:0"`
-	OutputTokens int32     `gorm:"column:output_tokens;default:0"`
-	LatencyMs    int32     `gorm:"column:latency_ms;default:0"`
-	FirstTokenMs int32     `gorm:"column:first_token_ms;default:0"` // 首字耗时
-	CachedTokens int32     `gorm:"column:cached_tokens;default:0"`  // 缓存命中 token
-	ClientIP     string    `gorm:"column:client_ip;size:64;default:''"`
-	UserAgent    string    `gorm:"column:user_agent;size:256;default:''"`
-	ErrorBrief   string    `gorm:"column:error_brief;size:512;default:''"`
-	CreatedAt    time.Time `gorm:"index"`
+	ID                  int64 `gorm:"primaryKey;autoIncrement"`
+	KeyID               *int64
+	PluginID            *int64
+	AccountID           *int64
+	Model               string `gorm:"size:128;default:''"`                   // 实际请求上游的真实模型
+	RouteName           string `gorm:"column:route_name;size:128;default:''"` // 对外路由名（未命中路由为空）
+	Protocol            string `gorm:"size:32;default:''"`
+	Status              int32
+	InputTokens         int32     `gorm:"column:input_tokens;default:0"`
+	OutputTokens        int32     `gorm:"column:output_tokens;default:0"`
+	LatencyMs           int32     `gorm:"column:latency_ms;default:0"`
+	FirstTokenMs        int32     `gorm:"column:first_token_ms;default:0"`        // 首字耗时
+	CachedTokens        int32     `gorm:"column:cached_tokens;default:0"`         // 缓存读取 token
+	CacheCreationTokens int32     `gorm:"column:cache_creation_tokens;default:0"` // 缓存写入 token
+	ClientIP            string    `gorm:"column:client_ip;size:64;default:''"`
+	UserAgent           string    `gorm:"column:user_agent;size:256;default:''"`
+	ErrorBrief          string    `gorm:"column:error_brief;size:512;default:''"`
+	CreatedAt           time.Time `gorm:"index"`
 }
 
 func (RequestLog) TableName() string { return "request_logs" }
+
+// Notification 站内通知（任务产生的提醒，头部铃铛展示；标记已读后红点消失）。
+type Notification struct {
+	ID        int64  `gorm:"primaryKey;autoIncrement"`
+	Title     string `gorm:"size:256;default:''"`
+	Content   string `gorm:"default:''"`
+	Level     string `gorm:"size:16;default:info"` // info/warning/error
+	AccountID *int64 `gorm:"column:account_id"`
+	Read      bool   `gorm:"default:false"`
+	CreatedAt time.Time
+}
+
+func (Notification) TableName() string { return "notifications" }
 
 // Setting 系统设置 KV。
 type Setting struct {

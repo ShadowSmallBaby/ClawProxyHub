@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -16,14 +15,15 @@ import (
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
-// updateAccount PUT /admin/accounts/{id} — body: {display_name?, group_ids?}
-// group_ids 给定即全量替换账号分组（须同插件分组），空数组 = 移出全部分组。
+// updateAccount PUT /admin/accounts/{id} — body: {display_name?, group_ids?, instance_id?}
+// group_ids 给定即全量替换账号分组（须同插件分组），空数组 = 移出全部分组；
+// instance_id>0 改归属实例（须同插件实例）。
 func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) {
 	id := parseInt(r.PathValue("id"))
 	var body struct {
 		DisplayName string  `json:"display_name"`
 		GroupIDs    []int64 `json:"group_ids"`
-		HasGroups   bool    `json:"-"`
+		InstanceID  int64   `json:"instance_id"`
 	}
 	if !readBody(w, r, &body) {
 		return
@@ -36,12 +36,26 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) {
 	if body.DisplayName != "" {
 		s.db.Model(&acct).Update("display_name", body.DisplayName)
 	}
+	if body.InstanceID > 0 && body.InstanceID != acct.InstanceID {
+		inst, err := account.ResolveInstance(s.db, acct.PluginID, body.InstanceID, s.multiInstance(acct.PluginID))
+		if err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			return
+		}
+		// 分组归属实例：换实例前须先移出旧实例的分组（本次请求给了 group_ids 时以其为准校验）
+		if body.GroupIDs == nil && len(accountGroupIDs(s.db, acct.ID)) > 0 {
+			http.Error(w, `{"error":"账号仍在旧实例的分组中，请先移出分组再更换实例"}`, http.StatusBadRequest)
+			return
+		}
+		s.db.Model(&acct).Update("instance_id", inst.ID)
+		acct.InstanceID = inst.ID
+	}
 	if body.GroupIDs != nil {
-		// 分组必须属于同一插件
+		// 分组必须属于同一插件且同一实例
 		for _, gid := range body.GroupIDs {
 			var g model.Group
-			if err := s.db.First(&g, gid).Error; err != nil || g.PluginID != acct.PluginID {
-				http.Error(w, `{"error":"分组不存在或与账号插件不一致"}`, http.StatusBadRequest)
+			if err := s.db.First(&g, gid).Error; err != nil || g.PluginID != acct.PluginID || g.InstanceID != acct.InstanceID {
+				http.Error(w, `{"error":"分组不存在或与账号插件/实例不一致"}`, http.StatusBadRequest)
 				return
 			}
 		}
@@ -77,8 +91,18 @@ func (s *Server) pauseAccount(w http.ResponseWriter, r *http.Request) {
 
 // resumeAccount POST /admin/accounts/{id}/resume — 恢复调度（清自动暂停）。
 // expired 账号恢复为 active 前提是凭据已重新可用，统一交由用户判断；此处一并置 active。
+// 插件仍报告 healthy=false（如尚未取得 API 密钥）时拒绝，需先刷新。
 func (s *Server) resumeAccount(w http.ResponseWriter, r *http.Request) {
-	s.db.Model(&model.Account{}).Where("id = ?", parseInt(r.PathValue("id"))).
+	var acct model.Account
+	if err := s.db.First(&acct, parseInt(r.PathValue("id"))).Error; err != nil {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		return
+	}
+	if !account.Schedulable(&acct) {
+		http.Error(w, `{"error":"凭据暂不可用于调度（如尚未取得 API 密钥），请先刷新账号"}`, http.StatusConflict)
+		return
+	}
+	s.db.Model(&acct).
 		Updates(map[string]interface{}{
 			"status": "active", "paused_until": nil, "pause_reason": "",
 		})
@@ -151,14 +175,7 @@ func (s *Server) testAccount(w http.ResponseWriter, r *http.Request) {
 			{Role: "user", Text: question},
 		},
 	}
-	cred := &pb.CredentialBlob{
-		AccountId: strconv.FormatInt(acct.ID, 10),
-		Blob:      account.DecryptCredential(s.accounts.DataDir(), acct.CredentialBlob),
-	}
-	if acct.LastRefreshAt != nil {
-		cred.UpdatedAt = acct.LastRefreshAt.Unix()
-	}
-	cred.Proxy = account.ProxyForAccount(s.db, acct.ID)
+	cred := account.BuildCred(s.db, s.accounts.DataDir(), &acct, 0)
 
 	events, err := s.plugins.Chat(req, pluginName, cred)
 	if err != nil {
@@ -210,6 +227,7 @@ func (s *Server) accountDetail(w http.ResponseWriter, r *http.Request) {
 	out := map[string]interface{}{
 		"id":              acct.ID,
 		"plugin_id":       acct.PluginID,
+		"instance_id":     acct.InstanceID,
 		"group_ids":       accountGroupIDs(s.db, acct.ID),
 		"display_name":    acct.DisplayName,
 		"status":          acct.Status,

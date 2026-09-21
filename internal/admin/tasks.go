@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +32,7 @@ func (s *Server) capabilityLabelMap(pluginName string) map[string]string {
 	if !ok {
 		return nil
 	}
-	resp, err := inst.Client().ListTaskCapabilities(context.Background(), &pb.Empty{})
+	resp, err := inst.Client().ListTaskCapabilities(context.Background(), &pb.TaskCapabilitiesRequest{})
 	if err != nil {
 		return nil
 	}
@@ -49,7 +50,7 @@ func (s *Server) capabilityLabelMap(pluginName string) map[string]string {
 	return m
 }
 
-// ruleView 规则视图：能力展示名 + 插件品牌 + 账号范围，不暴露业务 id。
+// ruleView 规则视图：能力展示名 + 插件品牌 + 实例/账号范围，不暴露业务 id。
 type ruleView struct {
 	ID           int64      `json:"id"`
 	PluginID     int64      `json:"plugin_id"`
@@ -59,29 +60,66 @@ type ruleView struct {
 	TriggerType  string     `json:"trigger_type"`
 	TriggerValue string     `json:"trigger_value"`
 	TargetScope  string     `json:"target_scope"`
-	Accounts     []string   `json:"accounts"` // account_ids 范围下的账号名
+	TargetJSON   string     `json:"target_json"` // account_ids 原始范围，编辑弹窗回填用
+	Auto         bool       `json:"auto"`        // true = 系统自动生成（编辑锁触发类型）
+	Instance     string     `json:"instance"`    // account_ids 范围下账号所属实例名（多个用 / 连接）；其余 scope 为空 = 全部
+	Accounts     []string   `json:"accounts"`    // account_ids 范围下的账号名
 	Enabled      bool       `json:"enabled"`
 	NextRunAt    *time.Time `json:"next_run_at"`
 	LastRunAt    *time.Time `json:"last_run_at"`
 }
 
-// accountNamesByID 按 id 列表取账号展示名。
-func (s *Server) accountNamesByID(ids []int64) []string {
+// instanceNameByID 实例 id → 名称（已删为空）。
+func instanceNameByID(db *gorm.DB, id int64) string {
+	var inst model.Instance
+	if id == 0 || db.Select("name").First(&inst, id).Error != nil {
+		return ""
+	}
+	return inst.Name
+}
+
+// accountNamesByID 按 id 列表取账号展示名与去重后的实例名。
+func (s *Server) accountNamesByID(ids []int64) (names []string, instances string) {
 	var accts []model.Account
 	if len(ids) > 0 {
 		s.db.Where("id IN ?", ids).Find(&accts)
 	}
-	out := make([]string, 0, len(accts))
+	names = make([]string, 0, len(accts))
+	seen := map[int64]bool{}
 	for _, a := range accts {
-		out = append(out, a.DisplayName)
+		names = append(names, a.DisplayName)
+		if seen[a.InstanceID] {
+			continue
+		}
+		seen[a.InstanceID] = true
+		if n := instanceNameByID(s.db, a.InstanceID); n != "" {
+			if instances != "" {
+				instances += " / "
+			}
+			instances += n
+		}
 	}
-	return out
+	return names, instances
 }
 
 // listTaskRules GET /admin/task-rules
+// listTaskRules GET /admin/task-rules?page=1&page_size=50 — 规则分页（page 从 1 起，page_size 限定档位）
 func (s *Server) listTaskRules(w http.ResponseWriter, r *http.Request) {
+	pageSize := 50
+	switch parseInt(r.URL.Query().Get("page_size")) {
+	case 10, 30, 50, 100, 200:
+		pageSize = int(parseInt(r.URL.Query().Get("page_size")))
+	}
+	page := int(parseInt(r.URL.Query().Get("page")))
+	if page < 1 {
+		page = 1
+	}
+	q := s.db.Model(&model.TaskRule{})
+
+	var total int64
+	q.Count(&total)
 	var rules []model.TaskRule
-	if err := s.db.Order("id").Find(&rules).Error; err != nil {
+	if err := q.Order("id").Limit(pageSize).Offset((page - 1) * pageSize).Find(&rules).Error; err != nil {
 		http.Error(w, `{"error":"db"}`, http.StatusInternalServerError)
 		return
 	}
@@ -98,8 +136,9 @@ func (s *Server) listTaskRules(w http.ResponseWriter, r *http.Request) {
 		if labels != nil && labels[cap] != "" {
 			cap = labels[cap]
 		}
-		// 账号范围展示：account_ids 解析 TargetJSON；其余 scope 给中文说明
+		// 账号范围展示：account_ids 解析 TargetJSON（附实例名）；其余 scope 给中文说明
 		var accounts []string
+		var instance string
 		switch rule.TargetScope {
 		case "all":
 			accounts = []string{"全部账号"}
@@ -108,17 +147,18 @@ func (s *Server) listTaskRules(w http.ResponseWriter, r *http.Request) {
 		case "account_ids":
 			var ids []int64
 			_ = json.Unmarshal([]byte(rule.TargetJSON), &ids)
-			accounts = s.accountNamesByID(ids)
+			accounts, instance = s.accountNamesByID(ids)
 		}
 		out = append(out, ruleView{
 			ID: rule.ID, PluginID: rule.PluginID, Plugin: s.pluginBrandByID(rule.PluginID),
 			CapabilityID: rule.CapabilityID, Capability: cap,
 			TriggerType: rule.TriggerType, TriggerValue: rule.TriggerValue,
-			TargetScope: rule.TargetScope, Accounts: accounts,
+			TargetScope: rule.TargetScope, TargetJSON: rule.TargetJSON, Auto: rule.Auto,
+			Instance: instance, Accounts: accounts,
 			Enabled: rule.Enabled, NextRunAt: rule.NextRunAt, LastRunAt: rule.LastRunAt,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"rules": out})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"rules": out, "total": total})
 }
 
 // pluginTaskCapabilities GET /admin/plugins/{name}/task-capabilities — 新建规则弹窗的能力下拉数据。
@@ -129,7 +169,7 @@ func (s *Server) pluginTaskCapabilities(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, `{"error":"plugin not found"}`, http.StatusNotFound)
 		return
 	}
-	resp, err := inst.Client().ListTaskCapabilities(context.Background(), &pb.Empty{})
+	resp, err := inst.Client().ListTaskCapabilities(context.Background(), &pb.TaskCapabilitiesRequest{})
 	if err != nil {
 		http.Error(w, `{"error":"list capabilities failed"}`, http.StatusInternalServerError)
 		return
@@ -153,7 +193,7 @@ func (s *Server) pluginTaskCapabilities(w http.ResponseWriter, r *http.Request) 
 }
 
 // createTaskRule POST /admin/task-rules
-// body: {plugin_id, capability_id, trigger_type, trigger_value, target_scope}
+// body: {plugin_id, capability_id, trigger_type, trigger_value, target_scope, target_json}
 func (s *Server) createTaskRule(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		PluginID     int64  `json:"plugin_id"`
@@ -161,6 +201,7 @@ func (s *Server) createTaskRule(w http.ResponseWriter, r *http.Request) {
 		TriggerType  string `json:"trigger_type"`
 		TriggerValue string `json:"trigger_value"`
 		TargetScope  string `json:"target_scope"`
+		TargetJSON   string `json:"target_json"`
 	}
 	if !readBody(w, r, &body) || body.PluginID == 0 || body.CapabilityID == "" {
 		http.Error(w, `{"error":"plugin_id and capability_id required"}`, http.StatusBadRequest)
@@ -169,10 +210,18 @@ func (s *Server) createTaskRule(w http.ResponseWriter, r *http.Request) {
 	if body.TargetScope == "" {
 		body.TargetScope = "all"
 	}
+	target := strings.TrimSpace(body.TargetJSON)
+	if target == "" {
+		target = "[]"
+	}
 	rule := model.TaskRule{
 		PluginID: body.PluginID, CapabilityID: body.CapabilityID,
 		TriggerType: body.TriggerType, TriggerValue: body.TriggerValue,
-		TargetScope: body.TargetScope, TargetJSON: "[]", Enabled: true,
+		TargetScope: body.TargetScope, TargetJSON: target, Enabled: true,
+	}
+	if s.ruleDuplicated(&rule, 0) {
+		http.Error(w, `{"error":"已存在实例/能力/触发条件/触发值/账号范围完全一致的规则"}`, http.StatusConflict)
+		return
 	}
 	// next_run_at 由引擎 tick 补算
 	if err := s.db.Create(&rule).Error; err != nil {
@@ -180,6 +229,73 @@ func (s *Server) createTaskRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"id": rule.ID})
+}
+
+// ruleDuplicated 能力/触发条件/触发值/账号范围完全一致视为重复（同插件内；账号范围即隐含实例）。
+// excludeID>0 时排除自身（编辑场景）。
+func (s *Server) ruleDuplicated(rule *model.TaskRule, excludeID int64) bool {
+	q := s.db.Model(&model.TaskRule{}).Where(
+		"plugin_id = ? AND capability_id = ? AND trigger_type = ? AND trigger_value = ? AND target_scope = ? AND target_json = ?",
+		rule.PluginID, rule.CapabilityID, rule.TriggerType, rule.TriggerValue, rule.TargetScope, rule.TargetJSON)
+	if excludeID > 0 {
+		q = q.Where("id <> ?", excludeID)
+	}
+	var n int64
+	q.Count(&n)
+	return n > 0
+}
+
+// updateTaskRule PUT /admin/task-rules/{id}
+// auto 规则：仅可改触发值（trigger_value），触发类型与能力/范围锁定；
+// 手动规则：能力/触发类型/触发值/账号范围均可改。改后仍受去重约束。
+func (s *Server) updateTaskRule(w http.ResponseWriter, r *http.Request) {
+	var rule model.TaskRule
+	if err := s.db.First(&rule, parseInt(r.PathValue("id"))).Error; err != nil {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		return
+	}
+	var body struct {
+		CapabilityID string `json:"capability_id"`
+		TriggerType  string `json:"trigger_type"`
+		TriggerValue string `json:"trigger_value"`
+		TargetScope  string `json:"target_scope"`
+		TargetJSON   string `json:"target_json"`
+	}
+	if !readBody(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.TriggerValue) == "" {
+		http.Error(w, `{"error":"trigger_value required"}`, http.StatusBadRequest)
+		return
+	}
+	updated := rule
+	updated.TriggerValue = body.TriggerValue
+	if !rule.Auto {
+		// 手动规则放开其余字段（给定才改）
+		if body.CapabilityID != "" {
+			updated.CapabilityID = body.CapabilityID
+		}
+		if body.TriggerType != "" {
+			updated.TriggerType = body.TriggerType
+		}
+		if body.TargetScope != "" {
+			updated.TargetScope = body.TargetScope
+		}
+		if t := strings.TrimSpace(body.TargetJSON); t != "" {
+			updated.TargetJSON = t
+		}
+	}
+	if s.ruleDuplicated(&updated, rule.ID) {
+		http.Error(w, `{"error":"已存在实例/能力/触发条件/触发值/账号范围完全一致的规则"}`, http.StatusConflict)
+		return
+	}
+	// 改了调度参数须重算下次触发时刻，交给引擎 tick（置空即下轮重排）
+	s.db.Model(&rule).Updates(map[string]interface{}{
+		"capability_id": updated.CapabilityID, "trigger_type": updated.TriggerType,
+		"trigger_value": updated.TriggerValue, "target_scope": updated.TargetScope,
+		"target_json": updated.TargetJSON, "next_run_at": nil,
+	})
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // deleteTaskRule DELETE /admin/task-rules/{id}
@@ -221,6 +337,7 @@ type runView struct {
 	ID           int64           `json:"id"`
 	Plugin       string          `json:"plugin"`
 	Capability   string          `json:"capability"`
+	Instance     string          `json:"instance"` // 账号所属实例名（账号已删为空）
 	Account      string          `json:"account"`
 	Status       string          `json:"status"`
 	Summary      string          `json:"summary"`
@@ -230,10 +347,11 @@ type runView struct {
 	FinishedAt   *time.Time      `json:"finished_at"`
 }
 
-// runViews 批量组装语义视图（规则/账号带小缓存查名字）。
+// runViews 批量组装语义视图（规则/账号/实例带小缓存查名字）。
 func (s *Server) runViews(runs []model.TaskRun) []runView {
 	ruleCache := map[int64]model.TaskRule{}
 	acctCache := map[int64]model.Account{}
+	instCache := map[int64]string{}
 	var out []runView
 	for _, run := range runs {
 		v := runView{ID: run.ID, Status: run.Status, Summary: run.Summary,
@@ -263,6 +381,10 @@ func (s *Server) runViews(runs []model.TaskRun) []runView {
 			}
 			if acct.ID != 0 {
 				v.Account = acct.DisplayName
+				if _, ok := instCache[acct.InstanceID]; !ok {
+					instCache[acct.InstanceID] = instanceNameByID(s.db, acct.InstanceID)
+				}
+				v.Instance = instCache[acct.InstanceID]
 			}
 		}
 		out = append(out, v)
@@ -270,18 +392,27 @@ func (s *Server) runViews(runs []model.TaskRun) []runView {
 	return out
 }
 
-// listTaskRuns GET /admin/task-runs?limit=50
+// listTaskRuns GET /admin/task-runs?page=1&page_size=50 — 执行历史分页（page 从 1 起，page_size 限定档位）
 func (s *Server) listTaskRuns(w http.ResponseWriter, r *http.Request) {
-	limit := 50
-	if n := parseInt(r.URL.Query().Get("limit")); n > 0 && n <= 500 {
-		limit = int(n)
+	pageSize := 50
+	switch parseInt(r.URL.Query().Get("page_size")) {
+	case 10, 30, 50, 100, 200:
+		pageSize = int(parseInt(r.URL.Query().Get("page_size")))
 	}
+	page := int(parseInt(r.URL.Query().Get("page")))
+	if page < 1 {
+		page = 1
+	}
+	q := s.db.Model(&model.TaskRun{})
+
+	var total int64
+	q.Count(&total)
 	var runs []model.TaskRun
-	if err := s.db.Order("id DESC").Limit(limit).Find(&runs).Error; err != nil {
+	if err := q.Order("id DESC").Limit(pageSize).Offset((page - 1) * pageSize).Find(&runs).Error; err != nil {
 		http.Error(w, `{"error":"db"}`, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"runs": s.runViews(runs)})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"runs": s.runViews(runs), "total": total})
 }
 
 // dashboardTrend GET /admin/stats/trend?days=7 — 请求量/成功/tokens 按天聚合。
@@ -299,7 +430,7 @@ func (s *Server) dashboardTrend(w http.ResponseWriter, r *http.Request) {
 	var points []point
 	s.db.Raw(`SELECT date(created_at) AS date, COUNT(*) AS requests,
 		SUM(CASE WHEN status < 400 THEN 1 ELSE 0 END) AS success,
-		COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
+		COALESCE(SUM(input_tokens + output_tokens + cached_tokens + cache_creation_tokens), 0) AS tokens
 		FROM request_logs WHERE created_at >= date('now', ?)
 		GROUP BY date(created_at) ORDER BY date`, fmt.Sprintf("-%d days", days)).Scan(&points)
 	writeJSON(w, http.StatusOK, map[string]interface{}{"trend": points})
@@ -307,20 +438,8 @@ func (s *Server) dashboardTrend(w http.ResponseWriter, r *http.Request) {
 
 // ---------- 请求日志 / 概览 ----------
 
-// listLogs GET /admin/logs?limit=100&key_id= — 调用日志（key_name 由 keys 表聚合）。
-func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
-	qp := r.URL.Query()
-	// 分页：page 从 1 起，page_size 限定档位（默认 30）
-	pageSize := 30
-	switch parseInt(qp.Get("page_size")) {
-	case 10, 30, 50, 100, 200:
-		pageSize = int(parseInt(qp.Get("page_size")))
-	}
-	page := int(parseInt(qp.Get("page")))
-	if page < 1 {
-		page = 1
-	}
-
+// logsQuery 日志筛选条件（列表 / 导出共用）：密钥名 / 模型 / 路由 / 插件 / 协议 / 状态类 / 时间段。
+func (s *Server) logsQuery(qp url.Values) *gorm.DB {
 	q := s.db.Model(&model.RequestLog{})
 	// 密钥名模糊：子查询命中的 key_id
 	if kw := strings.TrimSpace(qp.Get("key")); kw != "" {
@@ -353,6 +472,23 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 	if to := strings.TrimSpace(qp.Get("to")); to != "" {
 		q = q.Where("created_at <= ?", to)
 	}
+	return q
+}
+
+// listLogs GET /admin/logs?page=&page_size=&key=&model=... — 调用日志（key_name 由 keys 表聚合）。
+func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
+	qp := r.URL.Query()
+	// 分页：page 从 1 起，page_size 限定档位（默认 30）
+	pageSize := 30
+	switch parseInt(qp.Get("page_size")) {
+	case 10, 30, 50, 100, 200:
+		pageSize = int(parseInt(qp.Get("page_size")))
+	}
+	page := int(parseInt(qp.Get("page")))
+	if page < 1 {
+		page = 1
+	}
+	q := s.logsQuery(qp)
 
 	var total int64
 	q.Count(&total)
@@ -372,15 +508,31 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 	for _, k := range keys {
 		keyNames[k.ID] = k.Name
 	}
+	// 账号 → 实例名映射（日志「实例」列；账号已删则为空，前端兜底显示插件）
+	type acctInst struct {
+		ID           int64
+		InstanceName string
+	}
+	var accts []acctInst
+	s.db.Table("accounts").Select("accounts.id AS id, COALESCE(instances.name, '') AS instance_name").
+		Joins("LEFT JOIN instances ON instances.id = accounts.instance_id").Scan(&accts)
+	instNames := map[int64]string{}
+	for _, a := range accts {
+		instNames[a.ID] = a.InstanceName
+	}
 	type logView struct {
 		model.RequestLog
-		KeyName string `json:"key_name"` // 密钥名称（空 = 匿名/无密钥）
+		KeyName      string `json:"key_name"`      // 密钥名称（空 = 匿名/无密钥）
+		InstanceName string `json:"instance_name"` // 账号所属实例（空 = 账号已删/无账号）
 	}
 	out := make([]logView, 0, len(logs))
 	for _, l := range logs {
 		v := logView{RequestLog: l}
 		if l.KeyID != nil {
 			v.KeyName = keyNames[*l.KeyID]
+		}
+		if l.AccountID != nil {
+			v.InstanceName = instNames[*l.AccountID]
 		}
 		out = append(out, v)
 	}
@@ -391,18 +543,27 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 // 插件解析上游后持久化）与 profile.quota 兜底；仅对可解析为数字的值求和，无数据的插件不返回。
 func (s *Server) dashboardQuota(w http.ResponseWriter, r *http.Request) {
 	type acctRow struct {
-		PluginName  string `json:"plugin_name"`
-		CreditsJSON string `json:"credits_json"`
-		ProfileJSON string `json:"profile_json"`
+		PluginID     int64  `json:"plugin_id"`
+		PluginName   string `json:"plugin_name"`
+		InstanceID   int64  `json:"instance_id"`
+		InstanceName string `json:"instance_name"`
+		CreditsJSON  string `json:"credits_json"`
+		ProfileJSON  string `json:"profile_json"`
 	}
 	var rows []acctRow
 	s.db.Model(&model.Account{}).
-		Select("plugins.name AS plugin_name, accounts.credits_json AS credits_json, accounts.profile_json AS profile_json").
+		Select("plugins.id AS plugin_id, plugins.name AS plugin_name, accounts.instance_id AS instance_id, " +
+			"COALESCE(instances.name, '') AS instance_name, accounts.credits_json AS credits_json, accounts.profile_json AS profile_json").
 		Joins("JOIN plugins ON plugins.id = accounts.plugin_id").
+		Joins("LEFT JOIN instances ON instances.id = accounts.instance_id").
+		Order("accounts.plugin_id, accounts.instance_id").
 		Scan(&rows)
 
+	// 按实例聚合（同插件多站点分开看）
 	type pluginQuota struct {
-		Plugin    string             `json:"plugin"`
+		Plugin    string             `json:"plugin"`   // 插件 id
+		Label     string             `json:"label"`    // 展示：品牌名 · 实例名
+		Instance  string             `json:"instance"` // 实例名
 		Accounts  int                `json:"accounts"`
 		WithQuota int                `json:"with_quota"`
 		Quota     map[string]float64 `json:"quota"`
@@ -413,14 +574,18 @@ func (s *Server) dashboardQuota(w http.ResponseWriter, r *http.Request) {
 		{"total_credits", "total"},
 		{"used_credits", "used"},
 	}
-	byPlugin := map[string]*pluginQuota{}
-	var order []string
+	byKey := map[int64]*pluginQuota{}
+	var order []int64
 	for _, row := range rows {
-		pq, ok := byPlugin[row.PluginName]
+		pq, ok := byKey[row.InstanceID]
 		if !ok {
-			pq = &pluginQuota{Plugin: row.PluginName, Quota: map[string]float64{}}
-			byPlugin[row.PluginName] = pq
-			order = append(order, row.PluginName)
+			pq = &pluginQuota{Plugin: row.PluginName, Instance: row.InstanceName, Quota: map[string]float64{}}
+			pq.Label = s.pluginBrandByID(row.PluginID)
+			if row.InstanceName != "" {
+				pq.Label += " · " + row.InstanceName
+			}
+			byKey[row.InstanceID] = pq
+			order = append(order, row.InstanceID)
 		}
 		pq.Accounts++
 
@@ -471,8 +636,8 @@ func (s *Server) dashboardQuota(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	out := make([]*pluginQuota, 0, len(order))
-	for _, name := range order {
-		out = append(out, byPlugin[name])
+	for _, k := range order {
+		out = append(out, byKey[k])
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"plugins": out})
 }
@@ -495,7 +660,7 @@ func (s *Server) dashboardStats(w http.ResponseWriter, r *http.Request) {
 	if stats.TotalRequests > 0 {
 		stats.SuccessRate = okCount * 100 / stats.TotalRequests
 	}
-	s.db.Model(&model.RequestLog{}).Select("COALESCE(SUM(input_tokens+output_tokens),0)").Scan(&stats.TotalTokens)
+	s.db.Model(&model.RequestLog{}).Select("COALESCE(SUM(input_tokens+output_tokens+cached_tokens+cache_creation_tokens),0)").Scan(&stats.TotalTokens)
 	s.db.Model(&model.Key{}).Where("enabled = ?", true).Count(&stats.ActiveKeys)
 	s.db.Model(&model.Account{}).Where("status = ?", "active").Count(&stats.ActiveAccounts)
 	stats.RunningPlugins = int64(len(s.plugins.Names()))

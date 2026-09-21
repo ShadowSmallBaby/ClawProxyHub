@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"gorm.io/gorm"
 
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/version"
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
@@ -21,8 +22,8 @@ import (
 // hostBrokerID 宿主 ClawHost 服务的 broker 通道号（与 sdk.HostBrokerID 一致）。
 const hostBrokerID = sdk.HostBrokerID
 
-// CoreVersion 核心版本（构建时注入，暂为常量）。
-const CoreVersion = "0.1.0"
+// CoreVersion 核心版本（握手时告知插件，供 min_core_version 校验）。
+var CoreVersion = version.Core
 
 // Manager 持有全部已启动的插件实例。
 type Manager struct {
@@ -37,8 +38,22 @@ type Manager struct {
 type Instance struct {
 	Name     string
 	Manifest *pb.Manifest
+	Protocol int32 // 协商到的契约版本（旧插件为 1：无实例维度，字段被忽略）
 	client   *goplugin.Client
 	rpc      pb.ClawPluginClient
+}
+
+// MultiInstance 插件是否支持多实例：契约 ≥2 且声明 instances 能力；否则只有默认实例。
+func (i *Instance) MultiInstance() bool {
+	if i.Protocol < 2 || i.Manifest == nil {
+		return false
+	}
+	for _, c := range i.Manifest.Capabilities {
+		if c == sdk.CapabilityInstances {
+			return true
+		}
+	}
+	return false
 }
 
 // ClawPluginPlugin 实现 goplugin.Plugin，把 gRPC 服务暴露给 go-plugin 框架。
@@ -63,11 +78,6 @@ func (p *ClawPluginPlugin) GRPCClient(ctx context.Context, broker *goplugin.GRPC
 
 // handshakeConfig go-plugin 进程握手配置。
 var handshakeConfig = sdk.HandshakeConfig()
-
-// pluginSet 核心侧声明可对接的插件接口。
-var pluginSet = goplugin.PluginSet{
-	"claw_plugin": &ClawPluginPlugin{},
-}
 
 // NewManager 创建插件管理器。
 func NewManager(dir string, db *gorm.DB) *Manager {
@@ -115,7 +125,8 @@ func (m *Manager) Models() map[string]string {
 }
 
 // Scan 扫描插件目录，返回可启动的二进制路径列表。
-// 插件目录布局：<dir>/<name>/plugin-<os>-<arch>[.exe] + manifest.json（+ 图标）
+// 插件目录布局：<dir>/<name>/ 或 <dir>/<source>/<name>/（非官方源命名空间），
+// 每个插件目录含 plugin-<os>-<arch>[.exe] + manifest.json（+ 图标）。
 func (m *Manager) Scan() ([]string, error) {
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
@@ -129,11 +140,26 @@ func (m *Manager) Scan() ([]string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		bin, err := pluginBinary(filepath.Join(m.dir, e.Name()))
-		if err != nil {
-			continue // 目录不完整，跳过
+		sub := filepath.Join(m.dir, e.Name())
+		if isPluginDir(sub) {
+			if bin, err := pluginBinary(sub); err == nil {
+				found = append(found, bin)
+			}
+			continue
 		}
-		found = append(found, bin)
+		// 命名空间目录：下探一层
+		inner, err := os.ReadDir(sub)
+		if err != nil {
+			continue
+		}
+		for _, ie := range inner {
+			if !ie.IsDir() {
+				continue
+			}
+			if bin, err := pluginBinary(filepath.Join(sub, ie.Name())); err == nil {
+				found = append(found, bin)
+			}
+		}
 	}
 	return found, nil
 }
@@ -156,13 +182,17 @@ func pluginBinary(dir string) (string, error) {
 }
 
 // Start 启动一个插件子进程并完成契约握手。
+// go-plugin 层按 [MinProtocolVersion, ProtocolVersion] 协商版本，旧契约插件按协商到的版本握手（线格式向后兼容）。
 func (m *Manager) Start(ctx context.Context, binPath string) (*Instance, error) {
+	// 每个插件实例独立持有宿主服务，便于按插件隔离状态
+	set := goplugin.PluginSet{"claw_plugin": &ClawPluginPlugin{host: m.host}}
+	versioned := map[int]goplugin.PluginSet{}
+	for v := sdk.MinProtocolVersion; v <= sdk.ProtocolVersion; v++ {
+		versioned[int(v)] = set
+	}
 	client := goplugin.NewClient(&goplugin.ClientConfig{
-		HandshakeConfig: handshakeConfig,
-		Plugins: goplugin.PluginSet{
-			// 每个插件实例独立持有宿主服务，便于按插件隔离状态
-			"claw_plugin": &ClawPluginPlugin{host: m.host},
-		},
+		HandshakeConfig:  handshakeConfig,
+		VersionedPlugins: versioned,
 		Cmd:              execCommand(binPath),
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 	})
@@ -172,6 +202,7 @@ func (m *Manager) Start(ctx context.Context, binPath string) (*Instance, error) 
 		client.Kill()
 		return nil, fmt.Errorf("connect plugin %s: %w", binPath, err)
 	}
+	negotiated := int32(client.NegotiatedVersion())
 
 	raw, err := rpcClient.Dispense("claw_plugin")
 	if err != nil {
@@ -185,10 +216,10 @@ func (m *Manager) Start(ctx context.Context, binPath string) (*Instance, error) 
 		return nil, fmt.Errorf("unexpected plugin client type %T", raw)
 	}
 
-	// 契约握手：协议版本不一致直接拒载
+	// 契约握手：按协商版本校验，manifest 声明须一致
 	hs, err := pc.Handshake(ctx, &pb.HandshakeRequest{
 		CoreVersion:     CoreVersion,
-		ProtocolVersion: sdk.ProtocolVersion,
+		ProtocolVersion: negotiated,
 	})
 	if err != nil {
 		client.Kill()
@@ -198,13 +229,13 @@ func (m *Manager) Start(ctx context.Context, binPath string) (*Instance, error) 
 		client.Kill()
 		return nil, fmt.Errorf("plugin rejected: %s", hs.Error.Message)
 	}
-	if hs.Manifest == nil || hs.Manifest.ProtocolVersion != sdk.ProtocolVersion {
+	if hs.Manifest == nil || hs.Manifest.ProtocolVersion != negotiated {
 		client.Kill()
-		return nil, fmt.Errorf("protocol version mismatch: core=%d plugin=%d",
-			sdk.ProtocolVersion, hs.Manifest.GetProtocolVersion())
+		return nil, fmt.Errorf("protocol version mismatch: negotiated=%d plugin=%d",
+			negotiated, hs.Manifest.GetProtocolVersion())
 	}
 
-	inst := &Instance{Name: hs.Manifest.Name, Manifest: hs.Manifest, client: client, rpc: pc}
+	inst := &Instance{Name: hs.Manifest.Name, Manifest: hs.Manifest, Protocol: negotiated, client: client, rpc: pc}
 	m.mu.Lock()
 	m.plugins[inst.Name] = inst
 	m.mu.Unlock()
@@ -226,7 +257,11 @@ func (m *Manager) Get(name string) (*Instance, bool) {
 	m.mu.Lock()
 	delete(m.plugins, name)
 	m.mu.Unlock()
-	bin, err := pluginBinary(filepath.Join(m.dir, name))
+	dir, ok := m.pluginDir(name)
+	if !ok {
+		return nil, false
+	}
+	bin, err := pluginBinary(dir)
 	if err != nil {
 		return nil, false
 	}

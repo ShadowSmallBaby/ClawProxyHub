@@ -29,8 +29,12 @@ type PackageManifest struct {
 }
 
 // InstallZip 安装一个 .cphplugin 包：校验 → 解压到插件目录 → 启动。
-// 返回插件名。已存在时覆盖安装（升级）。
-func (m *Manager) InstallZip(ctx context.Context, zipPath string) (string, error) {
+// namespace 为来源命名空间（官方源/手动上传为空 → <dir>/<name>；其他源 → <dir>/<namespace>/<name>）。
+// 返回插件名。同名同命名空间时覆盖安装（升级）；同名插件已装在其他命名空间时拒绝。
+func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string) (string, error) {
+	if namespace != "" && !validPluginName(namespace) {
+		return "", fmt.Errorf("invalid source namespace")
+	}
 	zr, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return "", fmt.Errorf("open package: %w", err)
@@ -68,17 +72,22 @@ func (m *Manager) InstallZip(ctx context.Context, zipPath string) (string, error
 	if binFile == nil {
 		return "", fmt.Errorf("package missing binary for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
-	if manifest.ProtocolVersion != 0 && manifest.ProtocolVersion != sdk.ProtocolVersion {
-		return "", fmt.Errorf("protocol version mismatch: package=%d core=%d", manifest.ProtocolVersion, sdk.ProtocolVersion)
+	if pv := manifest.ProtocolVersion; pv != 0 && (pv < sdk.MinProtocolVersion || pv > sdk.ProtocolVersion) {
+		return "", fmt.Errorf("protocol version %d unsupported (core accepts %d..%d)", pv, sdk.MinProtocolVersion, sdk.ProtocolVersion)
 	}
 
-	// 2. 升级场景：先停旧进程
+	// 2. 同名冲突：已装在其他命名空间的同名插件拒绝（插件身份 = manifest.name，全局唯一）
+	target := filepath.Join(m.dir, namespace, manifest.Name)
+	if existing, ok := m.pluginDir(manifest.Name); ok && existing != target {
+		return "", fmt.Errorf("同名插件 %q 已从其他来源安装（%s），请先卸载", manifest.Name, filepath.Base(filepath.Dir(existing)))
+	}
+
+	// 3. 升级场景：先停旧进程
 	if _, running := m.Get(manifest.Name); running {
 		m.Stop(manifest.Name)
 	}
 
-	// 3. 解压到 <dir>/<name>/（清掉旧目录）
-	target := filepath.Join(m.dir, manifest.Name)
+	// 4. 解压到目标目录（清掉旧目录）
 	if err := os.RemoveAll(target); err != nil {
 		return "", fmt.Errorf("clean old install: %w", err)
 	}
@@ -106,14 +115,14 @@ func (m *Manager) InstallZip(ctx context.Context, zipPath string) (string, error
 		}
 	}
 
-	// 4. 启动
+	// 5. 启动
 	if _, err := m.Start(ctx, binPath); err != nil {
 		return manifest.Name, fmt.Errorf("installed but failed to start: %w", err)
 	}
 	return manifest.Name, nil
 }
 
-// Uninstall 停止并删除一个插件的全部本地文件。
+// Uninstall 停止并删除一个插件的全部本地文件（根目录或命名空间目录）。
 func (m *Manager) Uninstall(name string) error {
 	if !validPluginName(name) {
 		return fmt.Errorf("invalid plugin name")
@@ -121,7 +130,41 @@ func (m *Manager) Uninstall(name string) error {
 	if _, running := m.Get(name); running {
 		m.Stop(name)
 	}
-	return os.RemoveAll(filepath.Join(m.dir, name))
+	dir, ok := m.pluginDir(name)
+	if !ok {
+		return nil
+	}
+	return os.RemoveAll(dir)
+}
+
+// pluginDir 按插件名定位落盘目录：先 <dir>/<name>，再 <dir>/<source>/<name>（命名空间安装）。
+func (m *Manager) pluginDir(name string) (string, bool) {
+	if !validPluginName(name) {
+		return "", false
+	}
+	if isPluginDir(filepath.Join(m.dir, name)) {
+		return filepath.Join(m.dir, name), true
+	}
+	entries, err := os.ReadDir(m.dir)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(m.dir, e.Name(), name)
+		if isPluginDir(p) {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// isPluginDir 目录含 manifest.json 即视为插件目录（命名空间目录本身没有）。
+func isPluginDir(dir string) bool {
+	st, err := os.Stat(filepath.Join(dir, "manifest.json"))
+	return err == nil && !st.IsDir()
 }
 
 // validPluginName 防路径穿越。
@@ -134,10 +177,10 @@ func validPluginName(name string) bool {
 
 // IconFile 插件图标文件路径：以落盘 manifest.json 的 icon 声明为准（文件存在才返回）。
 func (m *Manager) IconFile(name string) (string, bool) {
-	if !validPluginName(name) {
+	dir, ok := m.pluginDir(name)
+	if !ok {
 		return "", false
 	}
-	dir := filepath.Join(m.dir, name)
 	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
 		return "", false
