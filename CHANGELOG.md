@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.1.1
+
+前端架构重构版。API 层分域、视图按域归一、布局与通用逻辑组件化、构建 vendor 拆分；界面遵循克制的明暗双主题。
+
+- Refactor API 层分域（`web/src/api/`）：`auth` / `stats` / `logs` / `entities`（插件/实例/账号/分组/代理/路由/密钥/OAuth/任务 9 域）/ `settings` 五模块，`client.ts` 精简为核心请求器；各视图散落的 `api.get('/admin/...')` 全部收口
+- Refactor 视图按域归一：`views/` 拆 14 个功能域子目录（git mv 保留历史），`Layout` 移至 `layouts/`
+- Refactor 布局拆分：`AppLayout`（709→95 行）拆出 `AppSidebar` / `AppHeader` / `header/`（版本徽标、通知铃铛、语言、主题、用户菜单各按钮独立组件化，状态与副作用下沉子组件）
+- Added 通用 hooks（`composables/`）：`useTheme` / `usePagination` / `useDialogVisible` / `useChart` / `useLocale` / `useAsync`（加载态 + 统一错误提示）
+- Added 通用组件：`PageHeader` / `EllipsisCell` / `EntityIcon` / `GroupPicker`（Accounts 行内分组选择）；`utils/` 新增 `format` / `lookup` / `common` 去重（timeAgo / pluginLabelOf 等原本 3~4 份重复实现）
+- Added TDesign 二次封装（`components/base/`）：`CButton` / `CCard` / `CTable` / `CTabs` / `CDialog` 质感集中管理，全部视图统一引用，调风格只改一处
+- Changed 主题重构：按 STYLE_PROMPTS 克制风格——去除全站渐变背景/光斑（Dashboard 统计卡、Login 品牌区、品牌名渐变字）、卡片悬浮阴影与菜单图标光晕，过渡统一 duration-200 仅颜色
+- Perf 构建优化：vite `manualChunks` 拆 vue / tdesign / echarts / vendor 独立 chunk，首屏入口 1512 kB → 44 kB，业务改动不影响 vendor 缓存命中
+- Docs `web/STYLE_PROMPTS.md`：基于项目主题色的明/暗双模式风格提示词（明亮用品牌色驱动高亮，暗色仅深蓝灰面板系统）
+
 ## v1.1.0
 
 大版本，含破坏性变更。引入实例层与插件契约 v2，插件市场改多源，新增 New API 插件。

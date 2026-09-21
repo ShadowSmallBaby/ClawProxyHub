@@ -1,5 +1,31 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
+  "release_url": "https://github.com/ShadowSmallBaby/ClawProxyHub/releases",
+  "changelog": {
+    "title": {
+      "zh": "更新日志",
+      "en": "What's New"
+    },
+    "items": [
+      {
+        "zh": "前端架构重构：API 层分域、视图按功能域归一、布局拆分子组件（侧栏 / 头部 / 功能按钮独立组件化）",
+        "en": "Frontend architecture refactor: domain-scoped API layer, views grouped by domain, layout split into sub-components"
+      },
+      {
+        "zh": "通用逻辑组件化：主题 / 分页 / 图表 / 异步 hooks 与格式化 / 关联映射工具去重",
+        "en": "Shared logic extracted: theme / pagination / chart / async hooks and deduped format & lookup utils"
+      },
+      {
+        "zh": "TDesign 二次封装（按钮 / 卡片 / 表格 / 弹窗质感集中管理）+ 界面去渐变与光晕的克制双主题",
+        "en": "TDesign wrapper components with centralized theming; restrained dual theme without gradients or glow"
+      },
+      {
+        "zh": "构建优化：vendor 拆分独立缓存，首屏入口从 1512 kB 降至 44 kB",
+        "en": "Build optimization: vendor chunks with independent caching, entry bundle from 1512 kB down to 44 kB"
+      }
+    ]
+  }
+}
   "release_url": "https://github.com/ShadowSmallBaby/ClawProxyHub/releases",
   "changelog": {
     "title": {
