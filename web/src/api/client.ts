@@ -1,4 +1,6 @@
-// API 客户端：管理员密码经 localStorage 持久化，请求走 Bearer。
+// API 客户端：核心请求器 + token 管理。分域接口见同目录 auth/stats/logs/entities/settings.ts。
+
+// 管理员 token 经 localStorage 持久化，请求走 Bearer。
 const TOKEN_KEY = 'cph-admin-token'
 
 export function getToken(): string {
@@ -27,7 +29,7 @@ export function getRole(): string {
   }
 }
 
-async function request<T = any>(method: string, path: string, body?: unknown): Promise<T> {
+export async function request<T = any>(method: string, path: string, body?: unknown): Promise<T> {
   const resp = await fetch(path, {
     method,
     headers: {
