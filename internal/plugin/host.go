@@ -3,6 +3,7 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -13,6 +14,8 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/setting"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
@@ -52,7 +55,18 @@ func (h *HostService) StorePut(ctx context.Context, r *pb.StorePutRequest) (*pb.
 	return &pb.Empty{}, nil
 }
 
+// GetProxy 取出站代理：account_id 非空时账号级绑定优先，再回退 group_id 的分组绑定。
 func (h *HostService) GetProxy(ctx context.Context, r *pb.GetProxyRequest) (*pb.ProxyConfig, error) {
+	if r.AccountId != "" {
+		if accountID, err := strconv.ParseInt(r.AccountId, 10, 64); err == nil {
+			var link model.AccountProxy
+			if err := h.db.Where("account_id = ?", accountID).Order("proxy_id").First(&link).Error; err == nil {
+				if p, err := h.proxyByID(link.ProxyID); err == nil {
+					return p, nil
+				}
+			}
+		}
+	}
 	groupID, err := strconv.ParseInt(r.GroupId, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid group id")
@@ -61,8 +75,12 @@ func (h *HostService) GetProxy(ctx context.Context, r *pb.GetProxyRequest) (*pb.
 	if err := h.db.Where("group_id = ?", groupID).Order("proxy_id").Find(&links).Error; err != nil || len(links) == 0 {
 		return nil, fmt.Errorf("no proxy bound to group %s", r.GroupId)
 	}
+	return h.proxyByID(links[0].ProxyID)
+}
+
+func (h *HostService) proxyByID(id int64) (*pb.ProxyConfig, error) {
 	var proxy model.Proxy
-	if err := h.db.First(&proxy, links[0].ProxyID).Error; err != nil {
+	if err := h.db.First(&proxy, id).Error; err != nil {
 		return nil, fmt.Errorf("proxy record missing")
 	}
 	return &pb.ProxyConfig{
@@ -72,15 +90,45 @@ func (h *HostService) GetProxy(ctx context.Context, r *pb.GetProxyRequest) (*pb.
 }
 
 // GetSettings 读插件设置（管理界面在线修改，保存即生效）。
+// instance_id>0 时返回合并视图：插件设置 ← 实例设置 ← {"base_url": 实例地址, "instance_name": 实例名}（后者覆盖前者）。
+// 另注入保留键 sdk.SettingBrowserUserAgent（全局浏览器 UA，非空才给）。
 func (h *HostService) GetSettings(ctx context.Context, r *pb.GetSettingsRequest) (*pb.GetSettingsResponse, error) {
+	merged := map[string]json.RawMessage{}
 	var p model.Plugin
-	if err := h.db.Select("settings_json").Where("name = ?", r.Plugin).First(&p).Error; err != nil {
-		return &pb.GetSettingsResponse{Values: []byte("{}")}, nil // 记录缺失按空配置处理
+	if err := h.db.Select("settings_json").Where("name = ?", r.Plugin).First(&p).Error; err == nil {
+		mergeJSON(merged, p.SettingsJSON)
 	}
-	if p.SettingsJSON == "" {
-		p.SettingsJSON = "{}"
+	if r.InstanceId > 0 {
+		var inst model.Instance
+		if err := h.db.First(&inst, r.InstanceId).Error; err == nil {
+			mergeJSON(merged, inst.SettingsJSON)
+			if inst.BaseURL != "" {
+				merged["base_url"], _ = json.Marshal(inst.BaseURL)
+			}
+			merged["instance_name"], _ = json.Marshal(inst.Name)
+		}
 	}
-	return &pb.GetSettingsResponse{Values: []byte(p.SettingsJSON)}, nil
+	if ua := setting.New(h.db).BrowserUserAgent(); ua != "" {
+		merged[sdk.SettingBrowserUserAgent], _ = json.Marshal(ua)
+	}
+	out, err := json.Marshal(merged)
+	if err != nil {
+		out = []byte("{}")
+	}
+	return &pb.GetSettingsResponse{Values: out}, nil
+}
+
+// mergeJSON 把 JSON 对象的顶层键并入 dst（非对象/解析失败忽略）。
+func mergeJSON(dst map[string]json.RawMessage, src string) {
+	if src == "" {
+		return
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(src), &m) == nil {
+		for k, v := range m {
+			dst[k] = v
+		}
+	}
 }
 
 // ServeHost 在 broker 上挂出宿主服务（由 ClawPluginPlugin.GRPCClient 调用）。

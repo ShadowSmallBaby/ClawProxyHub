@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
@@ -89,14 +90,18 @@ func (s *Server) revealKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"key": string(plain)})
 }
 
-// createKey POST /admin/keys — 创建密钥，明文只返回一次。
+// createKey POST /admin/keys — 创建密钥，明文只返回一次；名称留空用站点缩写。
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 	}
 	readBody(w, r, &body)
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		name = s.settings.SiteAbbr()
+	}
 	raw := "cph-" + randHex(24)
-	k := model.Key{KeyCipher: string(account.EncryptCredential(s.accounts.DataDir(), []byte(raw))), Name: body.Name, Enabled: true}
+	k := model.Key{KeyCipher: string(account.EncryptCredential(s.accounts.DataDir(), []byte(raw))), Name: name, Enabled: true}
 	if err := s.db.Create(&k).Error; err != nil {
 		http.Error(w, `{"error":"create failed"}`, http.StatusInternalServerError)
 		return
@@ -168,13 +173,14 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
 		ID          int64  `json:"id"`
 		Name        string `json:"name"`
 		PluginID    int64  `json:"plugin_id"`
+		InstanceID  int64  `json:"instance_id"`
 		Plugin      string `json:"plugin"`
 		PluginLabel string `json:"plugin_label"` // 品牌名
 		Accounts    int64  `json:"accounts"`
 	}
 	var out []groupView
 	for _, g := range groups {
-		v := groupView{ID: g.ID, Name: g.Name, PluginID: g.PluginID}
+		v := groupView{ID: g.ID, Name: g.Name, PluginID: g.PluginID, InstanceID: g.InstanceID}
 		var p model.Plugin
 		if err := s.db.First(&p, g.PluginID).Error; err == nil {
 			v.Plugin = p.Name
@@ -186,22 +192,89 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"groups": out})
 }
 
-// createGroup POST /admin/groups — body: {name, plugin_id}
+// createGroup POST /admin/groups — body: {name, plugin_id, instance_id?}（instance_id 缺省 = 插件默认实例）
 func (s *Server) createGroup(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name     string `json:"name"`
-		PluginID int64  `json:"plugin_id"`
+		Name       string `json:"name"`
+		PluginID   int64  `json:"plugin_id"`
+		InstanceID int64  `json:"instance_id"`
 	}
 	if !readBody(w, r, &body) || body.Name == "" || body.PluginID == 0 {
 		http.Error(w, `{"error":"name and plugin_id required"}`, http.StatusBadRequest)
 		return
 	}
-	g := model.Group{Name: body.Name, PluginID: body.PluginID}
+	inst, err := account.ResolveInstance(s.db, body.PluginID, body.InstanceID, s.multiInstance(body.PluginID))
+	if err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		return
+	}
+	g := model.Group{Name: body.Name, PluginID: body.PluginID, InstanceID: inst.ID}
 	if err := s.db.Create(&g).Error; err != nil {
 		http.Error(w, `{"error":"duplicate name"}`, http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"id": g.ID})
+}
+
+// updateGroup PUT /admin/groups/{id} — body: {name?, instance_id?}；有账号挂靠时不可换实例。
+func (s *Server) updateGroup(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name       string `json:"name"`
+		InstanceID int64  `json:"instance_id"`
+	}
+	if !readBody(w, r, &body) {
+		return
+	}
+	var g model.Group
+	if err := s.db.First(&g, parseInt(r.PathValue("id"))).Error; err != nil {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		return
+	}
+	updates := map[string]interface{}{}
+	if name := strings.TrimSpace(body.Name); name != "" && name != g.Name {
+		updates["name"] = name
+	}
+	if body.InstanceID > 0 && body.InstanceID != g.InstanceID {
+		var n int64
+		s.db.Model(&model.AccountGroup{}).Where("group_id = ?", g.ID).Count(&n)
+		if n > 0 {
+			http.Error(w, `{"error":"分组下仍有账号，请先移出账号再更换实例"}`, http.StatusBadRequest)
+			return
+		}
+		inst, err := account.ResolveInstance(s.db, g.PluginID, body.InstanceID, s.multiInstance(g.PluginID))
+		if err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			return
+		}
+		updates["instance_id"] = inst.ID
+	}
+	if len(updates) > 0 {
+		if err := s.db.Model(&g).Updates(updates).Error; err != nil {
+			http.Error(w, `{"error":"duplicate name"}`, http.StatusBadRequest)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// groupModels GET /admin/groups/{id}/models — 分组内全部账号模型目录的并集（路由映射下拉候选）。
+func (s *Server) groupModels(w http.ResponseWriter, r *http.Request) {
+	var ids []int64
+	s.db.Model(&model.AccountGroup{}).Where("group_id = ?", parseInt(r.PathValue("id"))).Pluck("account_id", &ids)
+	seen := map[string]bool{}
+	var out []string
+	for _, id := range ids {
+		for _, m := range s.accounts.StoredModels(id) {
+			if m.Id != "" && !seen[m.Id] {
+				seen[m.Id] = true
+				out = append(out, m.Id)
+			}
+		}
+	}
+	if out == nil {
+		out = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"models": out})
 }
 
 // deleteGroup DELETE /admin/groups/{id}
@@ -228,6 +301,7 @@ type routeBody struct {
 	Strategy        string                  `json:"strategy"`
 	Groups          []model.RouteGroupEntry `json:"groups"`
 	TimeoutSeconds  int32                   `json:"timeout_seconds"`
+	UserAgent       string                  `json:"user_agent"`
 	FailoverEnabled bool                    `json:"failover_enabled"`
 	FailoverOn4xx   bool                    `json:"failover_on_4xx"`
 	FailoverOn5xx   bool                    `json:"failover_on_5xx"`
@@ -235,16 +309,34 @@ type routeBody struct {
 	FailoverModel   string                  `json:"failover_model"`
 }
 
-// validate 降级开启时必须配齐：触发状态类（4xx/5xx 至少一项）+ 降级分组 + 降级模型。
+// validate 分组权重须 0–100 且合计恰好 100（如 100 / 50+50 / 100+0+0 / 30+20+50）；
+// 降级开启时必须配齐：触发状态类（4xx/5xx 至少一项）+ 降级分组 + 降级模型。
 func (b *routeBody) validate() string {
 	if b.Name == "" || len(b.Groups) == 0 {
 		return "name and groups required"
+	}
+	sum := 0
+	for _, g := range b.Groups {
+		if g.GroupID == 0 || g.Model == "" {
+			return "每个分组映射需指定分组与模型"
+		}
+		if g.Weight < 0 || g.Weight > 100 {
+			return "权重需在 0–100 之间"
+		}
+		sum += g.Weight
+	}
+	if sum != 100 {
+		return fmt.Sprintf("分组权重合计须为 100（当前 %d）", sum)
 	}
 	if b.Strategy == "" {
 		b.Strategy = "round_robin"
 	}
 	if b.TimeoutSeconds < 0 || b.TimeoutSeconds > 3600 {
 		return "timeout_seconds 需在 0–3600 秒之间（0 = 跟随全局）"
+	}
+	b.UserAgent = strings.TrimSpace(b.UserAgent)
+	if len(b.UserAgent) > 512 {
+		return "user_agent 过长（最多 512 字符）"
 	}
 	if b.FailoverEnabled {
 		if !b.FailoverOn4xx && !b.FailoverOn5xx {
@@ -270,7 +362,7 @@ func (s *Server) createRoute(w http.ResponseWriter, r *http.Request) {
 	groupsJSON, _ := json.Marshal(body.Groups)
 	rt := model.Route{
 		Name: body.Name, Strategy: body.Strategy, GroupsJSON: string(groupsJSON),
-		TimeoutSeconds: body.TimeoutSeconds, FailoverEnabled: body.FailoverEnabled,
+		TimeoutSeconds: body.TimeoutSeconds, UserAgent: body.UserAgent, FailoverEnabled: body.FailoverEnabled,
 		FailoverOn4xx: body.FailoverOn4xx, FailoverOn5xx: body.FailoverOn5xx,
 		FailoverGroupID: body.FailoverGroupID, FailoverModel: body.FailoverModel,
 	}
@@ -301,6 +393,7 @@ func (s *Server) updateRoute(w http.ResponseWriter, r *http.Request) {
 	rt.Strategy = body.Strategy
 	rt.GroupsJSON = string(groupsJSON)
 	rt.TimeoutSeconds = body.TimeoutSeconds
+	rt.UserAgent = body.UserAgent
 	rt.FailoverEnabled = body.FailoverEnabled
 	rt.FailoverOn4xx = body.FailoverOn4xx
 	rt.FailoverOn5xx = body.FailoverOn5xx

@@ -27,11 +27,11 @@ func roleOf(r *http.Request) string {
 
 // menusForRole 角色可见菜单键：admin 全量，guest 只读（隐藏系统设置）。
 func menusForRole(role string) []string {
-	all := []string{"dashboard", "plugins", "accounts", "groups", "proxies", "routes", "keys", "oauth", "tasks", "logs", "settings"}
+	all := []string{"dashboard", "plugins", "instances", "accounts", "groups", "proxies", "routes", "keys", "oauth", "tasks", "logs", "settings"}
 	if role == "admin" {
 		return all
 	}
-	// guest：只读概览与日志，隐藏配置类
+	// guest：只读概览与日志，隐藏配置类（个人资料不走侧栏，前端路由单独放行）
 	return []string{"dashboard", "logs"}
 }
 
@@ -71,8 +71,8 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
-		// guest 只读：仅放行 GET（写操作需 admin）
-		if c.Role != "admin" && r.Method != http.MethodGet {
+		// guest 只读：仅放行 GET（写操作需 admin）；改自己密码除外
+		if c.Role != "admin" && r.Method != http.MethodGet && r.URL.Path != "/admin/password" {
 			http.Error(w, `{"error":"forbidden: read-only role"}`, http.StatusForbidden)
 			return
 		}
@@ -163,9 +163,10 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"username": user.Username,
-		"role":     user.Role,
-		"menus":    menusForRole(user.Role),
+		"username":   user.Username,
+		"role":       user.Role,
+		"created_at": user.CreatedAt,
+		"menus":      menusForRole(user.Role),
 	})
 }
 
@@ -205,10 +206,11 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"initialized": true})
 }
 
-// changePassword POST /admin/password — 修改当前管理员密码（需已登录）。
+// changePassword POST /admin/password — 修改当前用户密码（需已登录并校验原密码）。
 func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Password string `json:"password"`
+		OldPassword string `json:"old_password"`
+		Password    string `json:"password"`
 	}
 	if !readBody(w, r, &body) {
 		return
@@ -217,14 +219,23 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"密码至少 6 位"}`, http.StatusBadRequest)
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
-	if err != nil {
-		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
-		return
-	}
 	username := s.lookupUsername(r)
 	if username == "" {
 		http.Error(w, `{"error":"no admin account"}`, http.StatusNotFound)
+		return
+	}
+	var user model.User
+	if err := s.db.Where("username = ?", username).First(&user).Error; err != nil {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(body.OldPassword)) != nil {
+		http.Error(w, `{"error":"原密码不正确"}`, http.StatusBadRequest)
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
 		return
 	}
 	s.db.Model(&model.User{}).Where("username = ?", username).

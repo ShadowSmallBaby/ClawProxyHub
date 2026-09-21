@@ -131,9 +131,12 @@ type Manifest struct {
 	AuthMethods     []*AuthMethod          `protobuf:"bytes,10,rep,name=auth_methods,json=authMethods,proto3" json:"auth_methods,omitempty"`                                           // 支持的授权登录方式
 	// 插件可处理的对外端点方言。网关把任意协议入口归一化为统一信封后投递；
 	// 声明之外的端点入口会被网关拒绝。空 = chat_completions + messages。
-	Endpoints     []string `protobuf:"bytes,11,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Endpoints []string `protobuf:"bytes,11,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
+	// 实例级设置的 JSON Schema（可选）。实例 = 插件下的一个站点/部署，
+	// 核心固定提供 name + base_url，此处声明站点特有的附加字段（如 client_id）。
+	InstanceSchema string `protobuf:"bytes,12,opt,name=instance_schema,json=instanceSchema,proto3" json:"instance_schema,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Manifest) Reset() {
@@ -241,6 +244,13 @@ func (x *Manifest) GetEndpoints() []string {
 		return x.Endpoints
 	}
 	return nil
+}
+
+func (x *Manifest) GetInstanceSchema() string {
+	if x != nil {
+		return x.InstanceSchema
+	}
+	return ""
 }
 
 type HandshakeRequest struct {
@@ -510,10 +520,11 @@ func (x *AuthMethod) GetCallback() string {
 
 type CredentialBlob struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	AccountId     string                 `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`  // 核心侧账号 id
-	Blob          []byte                 `protobuf:"bytes,2,opt,name=blob,proto3" json:"blob,omitempty"`                             // 凭据内容，格式由插件自定义，核心不解析
-	UpdatedAt     int64                  `protobuf:"varint,3,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"` // 凭据最后刷新时间（Unix 秒）
-	Proxy         *ProxyConfig           `protobuf:"bytes,4,opt,name=proxy,proto3" json:"proxy,omitempty"`                           // 账号所属分组的出站代理（无绑定为 nil）
+	AccountId     string                 `protobuf:"bytes,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`     // 核心侧账号 id
+	Blob          []byte                 `protobuf:"bytes,2,opt,name=blob,proto3" json:"blob,omitempty"`                                // 凭据内容，格式由插件自定义，核心不解析
+	UpdatedAt     int64                  `protobuf:"varint,3,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`    // 凭据最后刷新时间（Unix 秒）
+	Proxy         *ProxyConfig           `protobuf:"bytes,4,opt,name=proxy,proto3" json:"proxy,omitempty"`                              // 账号所属分组的出站代理（无绑定为 nil）
+	InstanceId    int64                  `protobuf:"varint,5,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"` // 账号所属实例（站点），插件据此取实例级设置
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -576,11 +587,19 @@ func (x *CredentialBlob) GetProxy() *ProxyConfig {
 	return nil
 }
 
+func (x *CredentialBlob) GetInstanceId() int64 {
+	if x != nil {
+		return x.InstanceId
+	}
+	return 0
+}
+
 type LoginRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MethodId      string                 `protobuf:"bytes,1,opt,name=method_id,json=methodId,proto3" json:"method_id,omitempty"`                                                   // 使用的授权方式
 	Form          map[string]string      `protobuf:"bytes,2,rep,name=form,proto3" json:"form,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // 本步表单值
 	State         []byte                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`                                                                         // 多步登录状态（插件签发，原样回传）
+	InstanceId    int64                  `protobuf:"varint,4,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`                                            // 目标实例（登录时即可取实例级设置，如 base_url）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -634,6 +653,13 @@ func (x *LoginRequest) GetState() []byte {
 		return x.State
 	}
 	return nil
+}
+
+func (x *LoginRequest) GetInstanceId() int64 {
+	if x != nil {
+		return x.InstanceId
+	}
+	return 0
 }
 
 // LoginNextStep 登录未完成时插件指示的下一步。
@@ -1124,6 +1150,7 @@ type RefreshResult struct {
 	Error         *Error                 `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
 	Blob          []byte                 `protobuf:"bytes,2,opt,name=blob,proto3" json:"blob,omitempty"` // 刷新后的凭据；为空表示无需变更
 	Profile       *AccountProfile        `protobuf:"bytes,3,opt,name=profile,proto3" json:"profile,omitempty"`
+	Notification  *TaskNotification      `protobuf:"bytes,4,opt,name=notification,proto3" json:"notification,omitempty"` // 非空时核心生成一条站内通知（如密钥已更换，提醒重新同步模型）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1175,6 +1202,13 @@ func (x *RefreshResult) GetBlob() []byte {
 func (x *RefreshResult) GetProfile() *AccountProfile {
 	if x != nil {
 		return x.Profile
+	}
+	return nil
+}
+
+func (x *RefreshResult) GetNotification() *TaskNotification {
+	if x != nil {
+		return x.Notification
 	}
 	return nil
 }
@@ -1426,12 +1460,16 @@ func (x *ChatRequest) GetSource() string {
 }
 
 type EnvelopeMessage struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Role          string                 `protobuf:"bytes,1,opt,name=role,proto3" json:"role,omitempty"`                                 // system / user / assistant / tool
-	Text          string                 `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`                                 // 文本内容（content block type=text 的拼接）
-	ToolCalls     []*ToolCall            `protobuf:"bytes,3,rep,name=tool_calls,json=toolCalls,proto3" json:"tool_calls,omitempty"`      // assistant 消息携带的工具调用
-	ToolCallId    string                 `protobuf:"bytes,4,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"` // role=tool 时的调用 id
-	Raw           []byte                 `protobuf:"bytes,5,opt,name=raw,proto3" json:"raw,omitempty"`                                   // 原始消息 JSON，插件需要细节时自取
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Role       string                 `protobuf:"bytes,1,opt,name=role,proto3" json:"role,omitempty"`                                 // system / user / assistant / tool
+	Text       string                 `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`                                 // 文本内容（content block type=text 的拼接）
+	ToolCalls  []*ToolCall            `protobuf:"bytes,3,rep,name=tool_calls,json=toolCalls,proto3" json:"tool_calls,omitempty"`      // assistant 消息携带的工具调用
+	ToolCallId string                 `protobuf:"bytes,4,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"` // role=tool 时的调用 id
+	Raw        []byte                 `protobuf:"bytes,5,opt,name=raw,proto3" json:"raw,omitempty"`                                   // 原始消息 JSON，插件需要细节时自取
+	// 非纯文本内容（图片 / 推理块）。为空时以 text 为准；非空时是完整有序内容
+	// （含 text 块），text 仍为文本拼接供只认文本的插件用。
+	Parts         []*ContentPart `protobuf:"bytes,6,rep,name=parts,proto3" json:"parts,omitempty"`
+	ToolError     bool           `protobuf:"varint,7,opt,name=tool_error,json=toolError,proto3" json:"tool_error,omitempty"` // role=tool：工具执行失败（Anthropic tool_result.is_error）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1501,18 +1539,128 @@ func (x *EnvelopeMessage) GetRaw() []byte {
 	return nil
 }
 
+func (x *EnvelopeMessage) GetParts() []*ContentPart {
+	if x != nil {
+		return x.Parts
+	}
+	return nil
+}
+
+func (x *EnvelopeMessage) GetToolError() bool {
+	if x != nil {
+		return x.ToolError
+	}
+	return false
+}
+
+// ContentPart 内容块：text / image / thinking / redacted_thinking。
+type ContentPart struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Type      string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Text      string                 `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`                            // text / thinking 正文
+	MediaType string                 `protobuf:"bytes,3,opt,name=media_type,json=mediaType,proto3" json:"media_type,omitempty"` // image: MIME（image/png …）
+	Data      string                 `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"`                            // image: base64 正文；redacted_thinking: 上游不透明数据
+	Url       string                 `protobuf:"bytes,5,opt,name=url,proto3" json:"url,omitempty"`                              // image: 远程地址（与 data 二选一）
+	Signature string                 `protobuf:"bytes,6,opt,name=signature,proto3" json:"signature,omitempty"`                  // thinking: 上游签名（多轮回放必须原样带回，无签名的推理块不可回放）
+	// 提示缓存断点（Anthropic cache_control 对象 JSON，如 {"type":"ephemeral"}）。
+	// 只对 Anthropic 方言上游有意义，其余上游忽略。
+	CacheControl  string `protobuf:"bytes,7,opt,name=cache_control,json=cacheControl,proto3" json:"cache_control,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ContentPart) Reset() {
+	*x = ContentPart{}
+	mi := &file_sdk_proto_cph_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContentPart) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContentPart) ProtoMessage() {}
+
+func (x *ContentPart) ProtoReflect() protoreflect.Message {
+	mi := &file_sdk_proto_cph_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContentPart.ProtoReflect.Descriptor instead.
+func (*ContentPart) Descriptor() ([]byte, []int) {
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ContentPart) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *ContentPart) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *ContentPart) GetMediaType() string {
+	if x != nil {
+		return x.MediaType
+	}
+	return ""
+}
+
+func (x *ContentPart) GetData() string {
+	if x != nil {
+		return x.Data
+	}
+	return ""
+}
+
+func (x *ContentPart) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *ContentPart) GetSignature() string {
+	if x != nil {
+		return x.Signature
+	}
+	return ""
+}
+
+func (x *ContentPart) GetCacheControl() string {
+	if x != nil {
+		return x.CacheControl
+	}
+	return ""
+}
+
 type ToolDefinition struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Name             string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Description      string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
 	ParametersSchema string                 `protobuf:"bytes,3,opt,name=parameters_schema,json=parametersSchema,proto3" json:"parameters_schema,omitempty"` // JSON Schema 字符串
+	CacheControl     string                 `protobuf:"bytes,4,opt,name=cache_control,json=cacheControl,proto3" json:"cache_control,omitempty"`             // 提示缓存断点（同 ContentPart.cache_control）
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ToolDefinition) Reset() {
 	*x = ToolDefinition{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[21]
+	mi := &file_sdk_proto_cph_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1524,7 +1672,7 @@ func (x *ToolDefinition) String() string {
 func (*ToolDefinition) ProtoMessage() {}
 
 func (x *ToolDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[21]
+	mi := &file_sdk_proto_cph_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1537,7 +1685,7 @@ func (x *ToolDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolDefinition.ProtoReflect.Descriptor instead.
 func (*ToolDefinition) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{21}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ToolDefinition) GetName() string {
@@ -1561,6 +1709,13 @@ func (x *ToolDefinition) GetParametersSchema() string {
 	return ""
 }
 
+func (x *ToolDefinition) GetCacheControl() string {
+	if x != nil {
+		return x.CacheControl
+	}
+	return ""
+}
+
 type ToolChoice struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"` // "auto" / "none" / "tool"
@@ -1571,7 +1726,7 @@ type ToolChoice struct {
 
 func (x *ToolChoice) Reset() {
 	*x = ToolChoice{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[22]
+	mi := &file_sdk_proto_cph_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1583,7 +1738,7 @@ func (x *ToolChoice) String() string {
 func (*ToolChoice) ProtoMessage() {}
 
 func (x *ToolChoice) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[22]
+	mi := &file_sdk_proto_cph_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1596,7 +1751,7 @@ func (x *ToolChoice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolChoice.ProtoReflect.Descriptor instead.
 func (*ToolChoice) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{22}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ToolChoice) GetType() string {
@@ -1624,7 +1779,7 @@ type ToolCall struct {
 
 func (x *ToolCall) Reset() {
 	*x = ToolCall{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[23]
+	mi := &file_sdk_proto_cph_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1636,7 +1791,7 @@ func (x *ToolCall) String() string {
 func (*ToolCall) ProtoMessage() {}
 
 func (x *ToolCall) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[23]
+	mi := &file_sdk_proto_cph_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1649,7 +1804,7 @@ func (x *ToolCall) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCall.ProtoReflect.Descriptor instead.
 func (*ToolCall) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{23}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ToolCall) GetId() string {
@@ -1683,6 +1838,7 @@ type StreamEvent struct {
 	//	*StreamEvent_ToolCallDelta
 	//	*StreamEvent_MessageFinish
 	//	*StreamEvent_TaskFailed
+	//	*StreamEvent_ReasoningDelta
 	Event         isStreamEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1690,7 +1846,7 @@ type StreamEvent struct {
 
 func (x *StreamEvent) Reset() {
 	*x = StreamEvent{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[24]
+	mi := &file_sdk_proto_cph_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1702,7 +1858,7 @@ func (x *StreamEvent) String() string {
 func (*StreamEvent) ProtoMessage() {}
 
 func (x *StreamEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[24]
+	mi := &file_sdk_proto_cph_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1715,7 +1871,7 @@ func (x *StreamEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamEvent.ProtoReflect.Descriptor instead.
 func (*StreamEvent) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{24}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *StreamEvent) GetEvent() isStreamEvent_Event {
@@ -1770,6 +1926,15 @@ func (x *StreamEvent) GetTaskFailed() *TaskFailed {
 	return nil
 }
 
+func (x *StreamEvent) GetReasoningDelta() *ReasoningDelta {
+	if x != nil {
+		if x, ok := x.Event.(*StreamEvent_ReasoningDelta); ok {
+			return x.ReasoningDelta
+		}
+	}
+	return nil
+}
+
 type isStreamEvent_Event interface {
 	isStreamEvent_Event()
 }
@@ -1794,6 +1959,10 @@ type StreamEvent_TaskFailed struct {
 	TaskFailed *TaskFailed `protobuf:"bytes,5,opt,name=task_failed,json=taskFailed,proto3,oneof"`
 }
 
+type StreamEvent_ReasoningDelta struct {
+	ReasoningDelta *ReasoningDelta `protobuf:"bytes,6,opt,name=reasoning_delta,json=reasoningDelta,proto3,oneof"`
+}
+
 func (*StreamEvent_MessageStart) isStreamEvent_Event() {}
 
 func (*StreamEvent_ContentDelta) isStreamEvent_Event() {}
@@ -1804,16 +1973,19 @@ func (*StreamEvent_MessageFinish) isStreamEvent_Event() {}
 
 func (*StreamEvent_TaskFailed) isStreamEvent_Event() {}
 
+func (*StreamEvent_ReasoningDelta) isStreamEvent_Event() {}
+
 type MessageStart struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Model         string                 `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"` // 实际使用的上游模型
+	Usage         *Usage                 `protobuf:"bytes,2,opt,name=usage,proto3" json:"usage,omitempty"` // 上游在流开头已知的用量（Anthropic message_start 的输入/缓存计数），可空
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MessageStart) Reset() {
 	*x = MessageStart{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[25]
+	mi := &file_sdk_proto_cph_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1825,7 +1997,7 @@ func (x *MessageStart) String() string {
 func (*MessageStart) ProtoMessage() {}
 
 func (x *MessageStart) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[25]
+	mi := &file_sdk_proto_cph_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1838,7 +2010,7 @@ func (x *MessageStart) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageStart.ProtoReflect.Descriptor instead.
 func (*MessageStart) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{25}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *MessageStart) GetModel() string {
@@ -1846,6 +2018,13 @@ func (x *MessageStart) GetModel() string {
 		return x.Model
 	}
 	return ""
+}
+
+func (x *MessageStart) GetUsage() *Usage {
+	if x != nil {
+		return x.Usage
+	}
+	return nil
 }
 
 type ContentDelta struct {
@@ -1857,7 +2036,7 @@ type ContentDelta struct {
 
 func (x *ContentDelta) Reset() {
 	*x = ContentDelta{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[26]
+	mi := &file_sdk_proto_cph_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1869,7 +2048,7 @@ func (x *ContentDelta) String() string {
 func (*ContentDelta) ProtoMessage() {}
 
 func (x *ContentDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[26]
+	mi := &file_sdk_proto_cph_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1882,12 +2061,65 @@ func (x *ContentDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContentDelta.ProtoReflect.Descriptor instead.
 func (*ContentDelta) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{26}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ContentDelta) GetText() string {
 	if x != nil {
 		return x.Text
+	}
+	return ""
+}
+
+// ReasoningDelta 推理/思考增量（OpenAI reasoning_content / Anthropic thinking）。
+type ReasoningDelta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`           // 推理文本增量
+	Signature     string                 `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"` // 推理块签名（Anthropic 在块尾一次给出；非空时 text 为空）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReasoningDelta) Reset() {
+	*x = ReasoningDelta{}
+	mi := &file_sdk_proto_cph_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReasoningDelta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReasoningDelta) ProtoMessage() {}
+
+func (x *ReasoningDelta) ProtoReflect() protoreflect.Message {
+	mi := &file_sdk_proto_cph_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReasoningDelta.ProtoReflect.Descriptor instead.
+func (*ReasoningDelta) Descriptor() ([]byte, []int) {
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ReasoningDelta) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *ReasoningDelta) GetSignature() string {
+	if x != nil {
+		return x.Signature
 	}
 	return ""
 }
@@ -1903,7 +2135,7 @@ type ToolCallDelta struct {
 
 func (x *ToolCallDelta) Reset() {
 	*x = ToolCallDelta{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[27]
+	mi := &file_sdk_proto_cph_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1915,7 +2147,7 @@ func (x *ToolCallDelta) String() string {
 func (*ToolCallDelta) ProtoMessage() {}
 
 func (x *ToolCallDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[27]
+	mi := &file_sdk_proto_cph_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1928,7 +2160,7 @@ func (x *ToolCallDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCallDelta.ProtoReflect.Descriptor instead.
 func (*ToolCallDelta) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{27}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ToolCallDelta) GetId() string {
@@ -1952,18 +2184,23 @@ func (x *ToolCallDelta) GetArgumentsDelta() string {
 	return ""
 }
 
+// Usage 统一用量，采用 Anthropic 语义：input_tokens 为非缓存输入，缓存读/写单列，
+// 三者之和才是总输入。OpenAI 方言的 prompt_tokens（含缓存）由 SDK 解析器拆开、
+// 网关出口再合回。
 type Usage struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InputTokens   int64                  `protobuf:"varint,1,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"`
-	OutputTokens  int64                  `protobuf:"varint,2,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
-	CachedTokens  int64                  `protobuf:"varint,3,opt,name=cached_tokens,json=cachedTokens,proto3" json:"cached_tokens,omitempty"` // 命中缓存的输入 token（上游有透出时上报）
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	InputTokens         int64                  `protobuf:"varint,1,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"` // 非缓存输入 token
+	OutputTokens        int64                  `protobuf:"varint,2,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
+	CachedTokens        int64                  `protobuf:"varint,3,opt,name=cached_tokens,json=cachedTokens,proto3" json:"cached_tokens,omitempty"`                        // 缓存读取（命中）token
+	CacheCreationTokens int64                  `protobuf:"varint,4,opt,name=cache_creation_tokens,json=cacheCreationTokens,proto3" json:"cache_creation_tokens,omitempty"` // 缓存写入（创建）token
+	ReasoningTokens     int64                  `protobuf:"varint,5,opt,name=reasoning_tokens,json=reasoningTokens,proto3" json:"reasoning_tokens,omitempty"`               // 输出中的推理 token（OpenAI 系上游透出时上报，含在 output_tokens 内）
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *Usage) Reset() {
 	*x = Usage{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[28]
+	mi := &file_sdk_proto_cph_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1975,7 +2212,7 @@ func (x *Usage) String() string {
 func (*Usage) ProtoMessage() {}
 
 func (x *Usage) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[28]
+	mi := &file_sdk_proto_cph_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1988,7 +2225,7 @@ func (x *Usage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Usage.ProtoReflect.Descriptor instead.
 func (*Usage) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{28}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *Usage) GetInputTokens() int64 {
@@ -2012,17 +2249,32 @@ func (x *Usage) GetCachedTokens() int64 {
 	return 0
 }
 
+func (x *Usage) GetCacheCreationTokens() int64 {
+	if x != nil {
+		return x.CacheCreationTokens
+	}
+	return 0
+}
+
+func (x *Usage) GetReasoningTokens() int64 {
+	if x != nil {
+		return x.ReasoningTokens
+	}
+	return 0
+}
+
 type MessageFinish struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	FinishReason  string                 `protobuf:"bytes,1,opt,name=finish_reason,json=finishReason,proto3" json:"finish_reason,omitempty"` // stop / tool_calls / length / content_filter
+	FinishReason  string                 `protobuf:"bytes,1,opt,name=finish_reason,json=finishReason,proto3" json:"finish_reason,omitempty"` // stop / stop_sequence / tool_calls / length / content_filter
 	Usage         *Usage                 `protobuf:"bytes,2,opt,name=usage,proto3" json:"usage,omitempty"`
+	StopSequence  string                 `protobuf:"bytes,3,opt,name=stop_sequence,json=stopSequence,proto3" json:"stop_sequence,omitempty"` // finish_reason=stop_sequence 时命中的序列原值（Anthropic 直通无损）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MessageFinish) Reset() {
 	*x = MessageFinish{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[29]
+	mi := &file_sdk_proto_cph_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2034,7 +2286,7 @@ func (x *MessageFinish) String() string {
 func (*MessageFinish) ProtoMessage() {}
 
 func (x *MessageFinish) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[29]
+	mi := &file_sdk_proto_cph_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2047,7 +2299,7 @@ func (x *MessageFinish) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageFinish.ProtoReflect.Descriptor instead.
 func (*MessageFinish) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{29}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *MessageFinish) GetFinishReason() string {
@@ -2064,6 +2316,13 @@ func (x *MessageFinish) GetUsage() *Usage {
 	return nil
 }
 
+func (x *MessageFinish) GetStopSequence() string {
+	if x != nil {
+		return x.StopSequence
+	}
+	return ""
+}
+
 type TaskFailed struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Error         *Error                 `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
@@ -2073,7 +2332,7 @@ type TaskFailed struct {
 
 func (x *TaskFailed) Reset() {
 	*x = TaskFailed{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[30]
+	mi := &file_sdk_proto_cph_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2085,7 +2344,7 @@ func (x *TaskFailed) String() string {
 func (*TaskFailed) ProtoMessage() {}
 
 func (x *TaskFailed) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[30]
+	mi := &file_sdk_proto_cph_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2098,7 +2357,7 @@ func (x *TaskFailed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskFailed.ProtoReflect.Descriptor instead.
 func (*TaskFailed) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{30}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *TaskFailed) GetError() *Error {
@@ -2121,7 +2380,7 @@ type TaskCapability struct {
 
 func (x *TaskCapability) Reset() {
 	*x = TaskCapability{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[31]
+	mi := &file_sdk_proto_cph_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2133,7 +2392,7 @@ func (x *TaskCapability) String() string {
 func (*TaskCapability) ProtoMessage() {}
 
 func (x *TaskCapability) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[31]
+	mi := &file_sdk_proto_cph_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2146,7 +2405,7 @@ func (x *TaskCapability) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskCapability.ProtoReflect.Descriptor instead.
 func (*TaskCapability) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{31}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *TaskCapability) GetId() string {
@@ -2193,7 +2452,7 @@ type TaskCapabilities struct {
 
 func (x *TaskCapabilities) Reset() {
 	*x = TaskCapabilities{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[32]
+	mi := &file_sdk_proto_cph_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2205,7 +2464,7 @@ func (x *TaskCapabilities) String() string {
 func (*TaskCapabilities) ProtoMessage() {}
 
 func (x *TaskCapabilities) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[32]
+	mi := &file_sdk_proto_cph_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2218,7 +2477,7 @@ func (x *TaskCapabilities) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskCapabilities.ProtoReflect.Descriptor instead.
 func (*TaskCapabilities) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{32}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *TaskCapabilities) GetCapabilities() []*TaskCapability {
@@ -2226,6 +2485,52 @@ func (x *TaskCapabilities) GetCapabilities() []*TaskCapability {
 		return x.Capabilities
 	}
 	return nil
+}
+
+// 能力查询：instance_id>0 时插件可按实例配置裁剪能力（如实例关闭签到则不声明 checkin）；0 = 全量声明。
+// 线格式与旧 Empty 兼容（旧插件忽略未知字段）。
+type TaskCapabilitiesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId    int64                  `protobuf:"varint,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskCapabilitiesRequest) Reset() {
+	*x = TaskCapabilitiesRequest{}
+	mi := &file_sdk_proto_cph_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskCapabilitiesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskCapabilitiesRequest) ProtoMessage() {}
+
+func (x *TaskCapabilitiesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sdk_proto_cph_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskCapabilitiesRequest.ProtoReflect.Descriptor instead.
+func (*TaskCapabilitiesRequest) Descriptor() ([]byte, []int) {
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *TaskCapabilitiesRequest) GetInstanceId() int64 {
+	if x != nil {
+		return x.InstanceId
+	}
+	return 0
 }
 
 type RunTaskRequest struct {
@@ -2239,7 +2544,7 @@ type RunTaskRequest struct {
 
 func (x *RunTaskRequest) Reset() {
 	*x = RunTaskRequest{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[33]
+	mi := &file_sdk_proto_cph_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2251,7 +2556,7 @@ func (x *RunTaskRequest) String() string {
 func (*RunTaskRequest) ProtoMessage() {}
 
 func (x *RunTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[33]
+	mi := &file_sdk_proto_cph_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2264,7 +2569,7 @@ func (x *RunTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunTaskRequest.ProtoReflect.Descriptor instead.
 func (*RunTaskRequest) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{33}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *RunTaskRequest) GetCapabilityId() string {
@@ -2288,6 +2593,67 @@ func (x *RunTaskRequest) GetContext() map[string]string {
 	return nil
 }
 
+// 任务产生的站内通知（核心落库，管理界面头部铃铛提醒）
+type TaskNotification struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Title         string                 `protobuf:"bytes,1,opt,name=title,proto3" json:"title,omitempty"`     // 缩略标题（如「New API · 主站 该签到了」）
+	Content       string                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"` // 正文（如「请前往 https://... 签到」）
+	Level         string                 `protobuf:"bytes,3,opt,name=level,proto3" json:"level,omitempty"`     // info / warning / error（空 = info）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskNotification) Reset() {
+	*x = TaskNotification{}
+	mi := &file_sdk_proto_cph_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskNotification) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskNotification) ProtoMessage() {}
+
+func (x *TaskNotification) ProtoReflect() protoreflect.Message {
+	mi := &file_sdk_proto_cph_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskNotification.ProtoReflect.Descriptor instead.
+func (*TaskNotification) Descriptor() ([]byte, []int) {
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *TaskNotification) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *TaskNotification) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *TaskNotification) GetLevel() string {
+	if x != nil {
+		return x.Level
+	}
+	return ""
+}
+
 type RunTaskResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Error         *Error                 `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
@@ -2295,13 +2661,14 @@ type RunTaskResponse struct {
 	Blob          []byte                 `protobuf:"bytes,3,opt,name=blob,proto3" json:"blob,omitempty"`                               // 变更后的凭据，核心代存
 	Summary       string                 `protobuf:"bytes,4,opt,name=summary,proto3" json:"summary,omitempty"`                         // 执行摘要，写执行历史
 	DetailJson    string                 `protobuf:"bytes,5,opt,name=detail_json,json=detailJson,proto3" json:"detail_json,omitempty"` // 结构化明细快照（如成长任务列表），核心持久化到 task_runs.detail_json
+	Notification  *TaskNotification      `protobuf:"bytes,6,opt,name=notification,proto3" json:"notification,omitempty"`               // 非空时核心生成一条站内通知
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunTaskResponse) Reset() {
 	*x = RunTaskResponse{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[34]
+	mi := &file_sdk_proto_cph_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2313,7 +2680,7 @@ func (x *RunTaskResponse) String() string {
 func (*RunTaskResponse) ProtoMessage() {}
 
 func (x *RunTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[34]
+	mi := &file_sdk_proto_cph_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2326,7 +2693,7 @@ func (x *RunTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunTaskResponse.ProtoReflect.Descriptor instead.
 func (*RunTaskResponse) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{34}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *RunTaskResponse) GetError() *Error {
@@ -2364,6 +2731,13 @@ func (x *RunTaskResponse) GetDetailJson() string {
 	return ""
 }
 
+func (x *RunTaskResponse) GetNotification() *TaskNotification {
+	if x != nil {
+		return x.Notification
+	}
+	return nil
+}
+
 type LogEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Level         string                 `protobuf:"bytes,1,opt,name=level,proto3" json:"level,omitempty"` // debug / info / warn / error
@@ -2375,7 +2749,7 @@ type LogEntry struct {
 
 func (x *LogEntry) Reset() {
 	*x = LogEntry{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[35]
+	mi := &file_sdk_proto_cph_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2387,7 +2761,7 @@ func (x *LogEntry) String() string {
 func (*LogEntry) ProtoMessage() {}
 
 func (x *LogEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[35]
+	mi := &file_sdk_proto_cph_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2400,7 +2774,7 @@ func (x *LogEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogEntry.ProtoReflect.Descriptor instead.
 func (*LogEntry) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{35}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *LogEntry) GetLevel() string {
@@ -2426,14 +2800,15 @@ func (x *LogEntry) GetFields() map[string]string {
 
 type GetProxyRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	GroupId       string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"` // 插件按账号所属分组取代理配置
+	GroupId       string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`       // 插件按账号所属分组取代理配置
+	AccountId     string                 `protobuf:"bytes,2,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"` // 账号级代理优先（非空时先查账号绑定，再回退分组）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetProxyRequest) Reset() {
 	*x = GetProxyRequest{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[36]
+	mi := &file_sdk_proto_cph_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2445,7 +2820,7 @@ func (x *GetProxyRequest) String() string {
 func (*GetProxyRequest) ProtoMessage() {}
 
 func (x *GetProxyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[36]
+	mi := &file_sdk_proto_cph_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2458,12 +2833,19 @@ func (x *GetProxyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProxyRequest.ProtoReflect.Descriptor instead.
 func (*GetProxyRequest) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{36}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *GetProxyRequest) GetGroupId() string {
 	if x != nil {
 		return x.GroupId
+	}
+	return ""
+}
+
+func (x *GetProxyRequest) GetAccountId() string {
+	if x != nil {
+		return x.AccountId
 	}
 	return ""
 }
@@ -2481,7 +2863,7 @@ type ProxyConfig struct {
 
 func (x *ProxyConfig) Reset() {
 	*x = ProxyConfig{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[37]
+	mi := &file_sdk_proto_cph_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2493,7 +2875,7 @@ func (x *ProxyConfig) String() string {
 func (*ProxyConfig) ProtoMessage() {}
 
 func (x *ProxyConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[37]
+	mi := &file_sdk_proto_cph_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2506,7 +2888,7 @@ func (x *ProxyConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProxyConfig.ProtoReflect.Descriptor instead.
 func (*ProxyConfig) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{37}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ProxyConfig) GetScheme() string {
@@ -2553,7 +2935,7 @@ type StoreGetRequest struct {
 
 func (x *StoreGetRequest) Reset() {
 	*x = StoreGetRequest{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[38]
+	mi := &file_sdk_proto_cph_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2565,7 +2947,7 @@ func (x *StoreGetRequest) String() string {
 func (*StoreGetRequest) ProtoMessage() {}
 
 func (x *StoreGetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[38]
+	mi := &file_sdk_proto_cph_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2578,7 +2960,7 @@ func (x *StoreGetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StoreGetRequest.ProtoReflect.Descriptor instead.
 func (*StoreGetRequest) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{38}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *StoreGetRequest) GetKey() string {
@@ -2598,7 +2980,7 @@ type StoreGetResponse struct {
 
 func (x *StoreGetResponse) Reset() {
 	*x = StoreGetResponse{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[39]
+	mi := &file_sdk_proto_cph_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2610,7 +2992,7 @@ func (x *StoreGetResponse) String() string {
 func (*StoreGetResponse) ProtoMessage() {}
 
 func (x *StoreGetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[39]
+	mi := &file_sdk_proto_cph_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2623,7 +3005,7 @@ func (x *StoreGetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StoreGetResponse.ProtoReflect.Descriptor instead.
 func (*StoreGetResponse) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{39}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *StoreGetResponse) GetValue() []byte {
@@ -2650,7 +3032,7 @@ type StorePutRequest struct {
 
 func (x *StorePutRequest) Reset() {
 	*x = StorePutRequest{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[40]
+	mi := &file_sdk_proto_cph_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2662,7 +3044,7 @@ func (x *StorePutRequest) String() string {
 func (*StorePutRequest) ProtoMessage() {}
 
 func (x *StorePutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[40]
+	mi := &file_sdk_proto_cph_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2675,7 +3057,7 @@ func (x *StorePutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StorePutRequest.ProtoReflect.Descriptor instead.
 func (*StorePutRequest) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{40}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *StorePutRequest) GetKey() string {
@@ -2695,14 +3077,15 @@ func (x *StorePutRequest) GetValue() []byte {
 // 插件设置（核心管理界面在线编辑，存 plugins.settings_json）
 type GetSettingsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Plugin        string                 `protobuf:"bytes,1,opt,name=plugin,proto3" json:"plugin,omitempty"` // 插件 id（插件侧调用时自带）
+	Plugin        string                 `protobuf:"bytes,1,opt,name=plugin,proto3" json:"plugin,omitempty"`                            // 插件 id（插件侧调用时自带）
+	InstanceId    int64                  `protobuf:"varint,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"` // >0 时返回合并视图：插件设置 ← 实例设置 ← {"base_url": 实例地址}
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetSettingsRequest) Reset() {
 	*x = GetSettingsRequest{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[41]
+	mi := &file_sdk_proto_cph_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2714,7 +3097,7 @@ func (x *GetSettingsRequest) String() string {
 func (*GetSettingsRequest) ProtoMessage() {}
 
 func (x *GetSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[41]
+	mi := &file_sdk_proto_cph_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2727,7 +3110,7 @@ func (x *GetSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSettingsRequest.ProtoReflect.Descriptor instead.
 func (*GetSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{41}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *GetSettingsRequest) GetPlugin() string {
@@ -2737,16 +3120,23 @@ func (x *GetSettingsRequest) GetPlugin() string {
 	return ""
 }
 
+func (x *GetSettingsRequest) GetInstanceId() int64 {
+	if x != nil {
+		return x.InstanceId
+	}
+	return 0
+}
+
 type GetSettingsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Values        []byte                 `protobuf:"bytes,1,opt,name=values,proto3" json:"values,omitempty"` // JSON 对象，结构由 manifest.settings_schema 定义
+	Values        []byte                 `protobuf:"bytes,1,opt,name=values,proto3" json:"values,omitempty"` // JSON 对象，结构由 manifest.settings_schema（+ instance_schema）定义
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetSettingsResponse) Reset() {
 	*x = GetSettingsResponse{}
-	mi := &file_sdk_proto_cph_proto_msgTypes[42]
+	mi := &file_sdk_proto_cph_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2758,7 +3148,7 @@ func (x *GetSettingsResponse) String() string {
 func (*GetSettingsResponse) ProtoMessage() {}
 
 func (x *GetSettingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sdk_proto_cph_proto_msgTypes[42]
+	mi := &file_sdk_proto_cph_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2771,7 +3161,7 @@ func (x *GetSettingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSettingsResponse.ProtoReflect.Descriptor instead.
 func (*GetSettingsResponse) Descriptor() ([]byte, []int) {
-	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{42}
+	return file_sdk_proto_cph_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *GetSettingsResponse) GetValues() []byte {
@@ -2790,7 +3180,7 @@ const file_sdk_proto_cph_proto_rawDesc = "" +
 	"\x05Error\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1c\n" +
-	"\tretryable\x18\x03 \x01(\bR\tretryable\"\xc8\x03\n" +
+	"\tretryable\x18\x03 \x01(\bR\tretryable\"\xf1\x03\n" +
 	"\bManifest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x16\n" +
@@ -2803,7 +3193,8 @@ const file_sdk_proto_cph_proto_rawDesc = "" +
 	"\fcapabilities\x18\t \x03(\tR\fcapabilities\x125\n" +
 	"\fauth_methods\x18\n" +
 	" \x03(\v2\x12.cph.v1.AuthMethodR\vauthMethods\x12\x1c\n" +
-	"\tendpoints\x18\v \x03(\tR\tendpoints\x1a8\n" +
+	"\tendpoints\x18\v \x03(\tR\tendpoints\x12'\n" +
+	"\x0finstance_schema\x18\f \x01(\tR\x0einstanceSchema\x1a8\n" +
 	"\n" +
 	"LabelEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
@@ -2834,18 +3225,22 @@ const file_sdk_proto_cph_proto_rawDesc = "" +
 	"\n" +
 	"LabelEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8d\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xae\x01\n" +
 	"\x0eCredentialBlob\x12\x1d\n" +
 	"\n" +
 	"account_id\x18\x01 \x01(\tR\taccountId\x12\x12\n" +
 	"\x04blob\x18\x02 \x01(\fR\x04blob\x12\x1d\n" +
 	"\n" +
 	"updated_at\x18\x03 \x01(\x03R\tupdatedAt\x12)\n" +
-	"\x05proxy\x18\x04 \x01(\v2\x13.cph.v1.ProxyConfigR\x05proxy\"\xae\x01\n" +
+	"\x05proxy\x18\x04 \x01(\v2\x13.cph.v1.ProxyConfigR\x05proxy\x12\x1f\n" +
+	"\vinstance_id\x18\x05 \x01(\x03R\n" +
+	"instanceId\"\xcf\x01\n" +
 	"\fLoginRequest\x12\x1b\n" +
 	"\tmethod_id\x18\x01 \x01(\tR\bmethodId\x122\n" +
 	"\x04form\x18\x02 \x03(\v2\x1e.cph.v1.LoginRequest.FormEntryR\x04form\x12\x14\n" +
-	"\x05state\x18\x03 \x01(\fR\x05state\x1a7\n" +
+	"\x05state\x18\x03 \x01(\fR\x05state\x12\x1f\n" +
+	"\vinstance_id\x18\x04 \x01(\x03R\n" +
+	"instanceId\x1a7\n" +
 	"\tFormEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x84\x02\n" +
@@ -2906,11 +3301,12 @@ const file_sdk_proto_cph_proto_rawDesc = "" +
 	"\n" +
 	"CellsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"z\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb8\x01\n" +
 	"\rRefreshResult\x12#\n" +
 	"\x05error\x18\x01 \x01(\v2\r.cph.v1.ErrorR\x05error\x12\x12\n" +
 	"\x04blob\x18\x02 \x01(\fR\x04blob\x120\n" +
-	"\aprofile\x18\x03 \x01(\v2\x16.cph.v1.AccountProfileR\aprofile\"\x80\x02\n" +
+	"\aprofile\x18\x03 \x01(\v2\x16.cph.v1.AccountProfileR\aprofile\x12<\n" +
+	"\fnotification\x18\x04 \x01(\v2\x18.cph.v1.TaskNotificationR\fnotification\"\x80\x02\n" +
 	"\tModelInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
 	"\x05label\x18\x02 \x03(\v2\x1c.cph.v1.ModelInfo.LabelEntryR\x05label\x12%\n" +
@@ -2943,7 +3339,7 @@ const file_sdk_proto_cph_proto_rawDesc = "" +
 	"\n" +
 	"ExtraEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9e\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe8\x01\n" +
 	"\x0fEnvelopeMessage\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12/\n" +
@@ -2951,11 +3347,24 @@ const file_sdk_proto_cph_proto_rawDesc = "" +
 	"tool_calls\x18\x03 \x03(\v2\x10.cph.v1.ToolCallR\ttoolCalls\x12 \n" +
 	"\ftool_call_id\x18\x04 \x01(\tR\n" +
 	"toolCallId\x12\x10\n" +
-	"\x03raw\x18\x05 \x01(\fR\x03raw\"s\n" +
+	"\x03raw\x18\x05 \x01(\fR\x03raw\x12)\n" +
+	"\x05parts\x18\x06 \x03(\v2\x13.cph.v1.ContentPartR\x05parts\x12\x1d\n" +
+	"\n" +
+	"tool_error\x18\a \x01(\bR\ttoolError\"\xbd\x01\n" +
+	"\vContentPart\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text\x12\x1d\n" +
+	"\n" +
+	"media_type\x18\x03 \x01(\tR\tmediaType\x12\x12\n" +
+	"\x04data\x18\x04 \x01(\tR\x04data\x12\x10\n" +
+	"\x03url\x18\x05 \x01(\tR\x03url\x12\x1c\n" +
+	"\tsignature\x18\x06 \x01(\tR\tsignature\x12#\n" +
+	"\rcache_control\x18\a \x01(\tR\fcacheControl\"\x98\x01\n" +
 	"\x0eToolDefinition\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12+\n" +
-	"\x11parameters_schema\x18\x03 \x01(\tR\x10parametersSchema\"=\n" +
+	"\x11parameters_schema\x18\x03 \x01(\tR\x10parametersSchema\x12#\n" +
+	"\rcache_control\x18\x04 \x01(\tR\fcacheControl\"=\n" +
 	"\n" +
 	"ToolChoice\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x1b\n" +
@@ -2963,30 +3372,38 @@ const file_sdk_proto_cph_proto_rawDesc = "" +
 	"\bToolCall\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
-	"\targuments\x18\x03 \x01(\tR\targuments\"\xc8\x02\n" +
+	"\targuments\x18\x03 \x01(\tR\targuments\"\x8b\x03\n" +
 	"\vStreamEvent\x12;\n" +
 	"\rmessage_start\x18\x01 \x01(\v2\x14.cph.v1.MessageStartH\x00R\fmessageStart\x12;\n" +
 	"\rcontent_delta\x18\x02 \x01(\v2\x14.cph.v1.ContentDeltaH\x00R\fcontentDelta\x12?\n" +
 	"\x0ftool_call_delta\x18\x03 \x01(\v2\x15.cph.v1.ToolCallDeltaH\x00R\rtoolCallDelta\x12>\n" +
 	"\x0emessage_finish\x18\x04 \x01(\v2\x15.cph.v1.MessageFinishH\x00R\rmessageFinish\x125\n" +
 	"\vtask_failed\x18\x05 \x01(\v2\x12.cph.v1.TaskFailedH\x00R\n" +
-	"taskFailedB\a\n" +
-	"\x05event\"$\n" +
+	"taskFailed\x12A\n" +
+	"\x0freasoning_delta\x18\x06 \x01(\v2\x16.cph.v1.ReasoningDeltaH\x00R\x0ereasoningDeltaB\a\n" +
+	"\x05event\"I\n" +
 	"\fMessageStart\x12\x14\n" +
-	"\x05model\x18\x01 \x01(\tR\x05model\"\"\n" +
+	"\x05model\x18\x01 \x01(\tR\x05model\x12#\n" +
+	"\x05usage\x18\x02 \x01(\v2\r.cph.v1.UsageR\x05usage\"\"\n" +
 	"\fContentDelta\x12\x12\n" +
-	"\x04text\x18\x01 \x01(\tR\x04text\"\\\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\"B\n" +
+	"\x0eReasoningDelta\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\tR\tsignature\"\\\n" +
 	"\rToolCallDelta\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12'\n" +
-	"\x0farguments_delta\x18\x03 \x01(\tR\x0eargumentsDelta\"t\n" +
+	"\x0farguments_delta\x18\x03 \x01(\tR\x0eargumentsDelta\"\xd3\x01\n" +
 	"\x05Usage\x12!\n" +
 	"\finput_tokens\x18\x01 \x01(\x03R\vinputTokens\x12#\n" +
 	"\routput_tokens\x18\x02 \x01(\x03R\foutputTokens\x12#\n" +
-	"\rcached_tokens\x18\x03 \x01(\x03R\fcachedTokens\"Y\n" +
+	"\rcached_tokens\x18\x03 \x01(\x03R\fcachedTokens\x122\n" +
+	"\x15cache_creation_tokens\x18\x04 \x01(\x03R\x13cacheCreationTokens\x12)\n" +
+	"\x10reasoning_tokens\x18\x05 \x01(\x03R\x0freasoningTokens\"~\n" +
 	"\rMessageFinish\x12#\n" +
 	"\rfinish_reason\x18\x01 \x01(\tR\ffinishReason\x12#\n" +
-	"\x05usage\x18\x02 \x01(\v2\r.cph.v1.UsageR\x05usage\"1\n" +
+	"\x05usage\x18\x02 \x01(\v2\r.cph.v1.UsageR\x05usage\x12#\n" +
+	"\rstop_sequence\x18\x03 \x01(\tR\fstopSequence\"1\n" +
 	"\n" +
 	"TaskFailed\x12#\n" +
 	"\x05error\x18\x01 \x01(\v2\r.cph.v1.ErrorR\x05error\"\xf3\x01\n" +
@@ -3002,7 +3419,10 @@ const file_sdk_proto_cph_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"N\n" +
 	"\x10TaskCapabilities\x12:\n" +
-	"\fcapabilities\x18\x01 \x03(\v2\x16.cph.v1.TaskCapabilityR\fcapabilities\"\xe8\x01\n" +
+	"\fcapabilities\x18\x01 \x03(\v2\x16.cph.v1.TaskCapabilityR\fcapabilities\":\n" +
+	"\x17TaskCapabilitiesRequest\x12\x1f\n" +
+	"\vinstance_id\x18\x01 \x01(\x03R\n" +
+	"instanceId\"\xe8\x01\n" +
 	"\x0eRunTaskRequest\x12#\n" +
 	"\rcapability_id\x18\x01 \x01(\tR\fcapabilityId\x126\n" +
 	"\n" +
@@ -3011,23 +3431,30 @@ const file_sdk_proto_cph_proto_rawDesc = "" +
 	"\acontext\x18\x03 \x03(\v2#.cph.v1.RunTaskRequest.ContextEntryR\acontext\x1a:\n" +
 	"\fContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9f\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"X\n" +
+	"\x10TaskNotification\x12\x14\n" +
+	"\x05title\x18\x01 \x01(\tR\x05title\x12\x18\n" +
+	"\acontent\x18\x02 \x01(\tR\acontent\x12\x14\n" +
+	"\x05level\x18\x03 \x01(\tR\x05level\"\xdd\x01\n" +
 	"\x0fRunTaskResponse\x12#\n" +
 	"\x05error\x18\x01 \x01(\v2\r.cph.v1.ErrorR\x05error\x12\x18\n" +
 	"\achanged\x18\x02 \x01(\bR\achanged\x12\x12\n" +
 	"\x04blob\x18\x03 \x01(\fR\x04blob\x12\x18\n" +
 	"\asummary\x18\x04 \x01(\tR\asummary\x12\x1f\n" +
 	"\vdetail_json\x18\x05 \x01(\tR\n" +
-	"detailJson\"\xab\x01\n" +
+	"detailJson\x12<\n" +
+	"\fnotification\x18\x06 \x01(\v2\x18.cph.v1.TaskNotificationR\fnotification\"\xab\x01\n" +
 	"\bLogEntry\x12\x14\n" +
 	"\x05level\x18\x01 \x01(\tR\x05level\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x124\n" +
 	"\x06fields\x18\x03 \x03(\v2\x1c.cph.v1.LogEntry.FieldsEntryR\x06fields\x1a9\n" +
 	"\vFieldsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\",\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"K\n" +
 	"\x0fGetProxyRequest\x12\x19\n" +
-	"\bgroup_id\x18\x01 \x01(\tR\agroupId\"\x85\x01\n" +
+	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12\x1d\n" +
+	"\n" +
+	"account_id\x18\x02 \x01(\tR\taccountId\"\x85\x01\n" +
 	"\vProxyConfig\x12\x16\n" +
 	"\x06scheme\x18\x01 \x01(\tR\x06scheme\x12\x12\n" +
 	"\x04host\x18\x02 \x01(\tR\x04host\x12\x12\n" +
@@ -3041,11 +3468,13 @@ const file_sdk_proto_cph_proto_rawDesc = "" +
 	"\x05found\x18\x02 \x01(\bR\x05found\"9\n" +
 	"\x0fStorePutRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\fR\x05value\",\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\"M\n" +
 	"\x12GetSettingsRequest\x12\x16\n" +
-	"\x06plugin\x18\x01 \x01(\tR\x06plugin\"-\n" +
+	"\x06plugin\x18\x01 \x01(\tR\x06plugin\x12\x1f\n" +
+	"\vinstance_id\x18\x02 \x01(\x03R\n" +
+	"instanceId\"-\n" +
 	"\x13GetSettingsResponse\x12\x16\n" +
-	"\x06values\x18\x01 \x01(\fR\x06values2\xe4\x03\n" +
+	"\x06values\x18\x01 \x01(\fR\x06values2\xf6\x03\n" +
 	"\n" +
 	"ClawPlugin\x12@\n" +
 	"\tHandshake\x12\x18.cph.v1.HandshakeRequest\x1a\x19.cph.v1.HandshakeResponse\x122\n" +
@@ -3055,8 +3484,8 @@ const file_sdk_proto_cph_proto_rawDesc = "" +
 	"GetProfile\x12\x16.cph.v1.CredentialBlob\x1a\x16.cph.v1.AccountProfile\x127\n" +
 	"\n" +
 	"ListModels\x12\x16.cph.v1.CredentialBlob\x1a\x11.cph.v1.ModelList\x122\n" +
-	"\x04Chat\x12\x13.cph.v1.ChatRequest\x1a\x13.cph.v1.StreamEvent0\x01\x12?\n" +
-	"\x14ListTaskCapabilities\x12\r.cph.v1.Empty\x1a\x18.cph.v1.TaskCapabilities\x12:\n" +
+	"\x04Chat\x12\x13.cph.v1.ChatRequest\x1a\x13.cph.v1.StreamEvent0\x01\x12Q\n" +
+	"\x14ListTaskCapabilities\x12\x1f.cph.v1.TaskCapabilitiesRequest\x1a\x18.cph.v1.TaskCapabilities\x12:\n" +
 	"\aRunTask\x12\x16.cph.v1.RunTaskRequest\x1a\x17.cph.v1.RunTaskResponse2\xa7\x02\n" +
 	"\bClawHost\x12&\n" +
 	"\x03Log\x12\x10.cph.v1.LogEntry\x1a\r.cph.v1.Empty\x12=\n" +
@@ -3077,146 +3506,155 @@ func file_sdk_proto_cph_proto_rawDescGZIP() []byte {
 	return file_sdk_proto_cph_proto_rawDescData
 }
 
-var file_sdk_proto_cph_proto_msgTypes = make([]protoimpl.MessageInfo, 58)
+var file_sdk_proto_cph_proto_msgTypes = make([]protoimpl.MessageInfo, 62)
 var file_sdk_proto_cph_proto_goTypes = []any{
-	(*Empty)(nil),               // 0: cph.v1.Empty
-	(*Error)(nil),               // 1: cph.v1.Error
-	(*Manifest)(nil),            // 2: cph.v1.Manifest
-	(*HandshakeRequest)(nil),    // 3: cph.v1.HandshakeRequest
-	(*HandshakeResponse)(nil),   // 4: cph.v1.HandshakeResponse
-	(*AuthField)(nil),           // 5: cph.v1.AuthField
-	(*AuthMethod)(nil),          // 6: cph.v1.AuthMethod
-	(*CredentialBlob)(nil),      // 7: cph.v1.CredentialBlob
-	(*LoginRequest)(nil),        // 8: cph.v1.LoginRequest
-	(*LoginNextStep)(nil),       // 9: cph.v1.LoginNextStep
-	(*LoginResult)(nil),         // 10: cph.v1.LoginResult
-	(*AccountProfile)(nil),      // 11: cph.v1.AccountProfile
-	(*ProfileSection)(nil),      // 12: cph.v1.ProfileSection
-	(*SectionEntry)(nil),        // 13: cph.v1.SectionEntry
-	(*SectionColumn)(nil),       // 14: cph.v1.SectionColumn
-	(*SectionRow)(nil),          // 15: cph.v1.SectionRow
-	(*RefreshResult)(nil),       // 16: cph.v1.RefreshResult
-	(*ModelInfo)(nil),           // 17: cph.v1.ModelInfo
-	(*ModelList)(nil),           // 18: cph.v1.ModelList
-	(*ChatRequest)(nil),         // 19: cph.v1.ChatRequest
-	(*EnvelopeMessage)(nil),     // 20: cph.v1.EnvelopeMessage
-	(*ToolDefinition)(nil),      // 21: cph.v1.ToolDefinition
-	(*ToolChoice)(nil),          // 22: cph.v1.ToolChoice
-	(*ToolCall)(nil),            // 23: cph.v1.ToolCall
-	(*StreamEvent)(nil),         // 24: cph.v1.StreamEvent
-	(*MessageStart)(nil),        // 25: cph.v1.MessageStart
-	(*ContentDelta)(nil),        // 26: cph.v1.ContentDelta
-	(*ToolCallDelta)(nil),       // 27: cph.v1.ToolCallDelta
-	(*Usage)(nil),               // 28: cph.v1.Usage
-	(*MessageFinish)(nil),       // 29: cph.v1.MessageFinish
-	(*TaskFailed)(nil),          // 30: cph.v1.TaskFailed
-	(*TaskCapability)(nil),      // 31: cph.v1.TaskCapability
-	(*TaskCapabilities)(nil),    // 32: cph.v1.TaskCapabilities
-	(*RunTaskRequest)(nil),      // 33: cph.v1.RunTaskRequest
-	(*RunTaskResponse)(nil),     // 34: cph.v1.RunTaskResponse
-	(*LogEntry)(nil),            // 35: cph.v1.LogEntry
-	(*GetProxyRequest)(nil),     // 36: cph.v1.GetProxyRequest
-	(*ProxyConfig)(nil),         // 37: cph.v1.ProxyConfig
-	(*StoreGetRequest)(nil),     // 38: cph.v1.StoreGetRequest
-	(*StoreGetResponse)(nil),    // 39: cph.v1.StoreGetResponse
-	(*StorePutRequest)(nil),     // 40: cph.v1.StorePutRequest
-	(*GetSettingsRequest)(nil),  // 41: cph.v1.GetSettingsRequest
-	(*GetSettingsResponse)(nil), // 42: cph.v1.GetSettingsResponse
-	nil,                         // 43: cph.v1.Manifest.LabelEntry
-	nil,                         // 44: cph.v1.AuthField.LabelEntry
-	nil,                         // 45: cph.v1.AuthMethod.LabelEntry
-	nil,                         // 46: cph.v1.LoginRequest.FormEntry
-	nil,                         // 47: cph.v1.LoginNextStep.PromptEntry
-	nil,                         // 48: cph.v1.AccountProfile.QuotaEntry
-	nil,                         // 49: cph.v1.ProfileSection.TitleEntry
-	nil,                         // 50: cph.v1.SectionEntry.LabelEntry
-	nil,                         // 51: cph.v1.SectionColumn.TitleEntry
-	nil,                         // 52: cph.v1.SectionRow.CellsEntry
-	nil,                         // 53: cph.v1.ModelInfo.LabelEntry
-	nil,                         // 54: cph.v1.ChatRequest.ExtraEntry
-	nil,                         // 55: cph.v1.TaskCapability.LabelEntry
-	nil,                         // 56: cph.v1.RunTaskRequest.ContextEntry
-	nil,                         // 57: cph.v1.LogEntry.FieldsEntry
+	(*Empty)(nil),                   // 0: cph.v1.Empty
+	(*Error)(nil),                   // 1: cph.v1.Error
+	(*Manifest)(nil),                // 2: cph.v1.Manifest
+	(*HandshakeRequest)(nil),        // 3: cph.v1.HandshakeRequest
+	(*HandshakeResponse)(nil),       // 4: cph.v1.HandshakeResponse
+	(*AuthField)(nil),               // 5: cph.v1.AuthField
+	(*AuthMethod)(nil),              // 6: cph.v1.AuthMethod
+	(*CredentialBlob)(nil),          // 7: cph.v1.CredentialBlob
+	(*LoginRequest)(nil),            // 8: cph.v1.LoginRequest
+	(*LoginNextStep)(nil),           // 9: cph.v1.LoginNextStep
+	(*LoginResult)(nil),             // 10: cph.v1.LoginResult
+	(*AccountProfile)(nil),          // 11: cph.v1.AccountProfile
+	(*ProfileSection)(nil),          // 12: cph.v1.ProfileSection
+	(*SectionEntry)(nil),            // 13: cph.v1.SectionEntry
+	(*SectionColumn)(nil),           // 14: cph.v1.SectionColumn
+	(*SectionRow)(nil),              // 15: cph.v1.SectionRow
+	(*RefreshResult)(nil),           // 16: cph.v1.RefreshResult
+	(*ModelInfo)(nil),               // 17: cph.v1.ModelInfo
+	(*ModelList)(nil),               // 18: cph.v1.ModelList
+	(*ChatRequest)(nil),             // 19: cph.v1.ChatRequest
+	(*EnvelopeMessage)(nil),         // 20: cph.v1.EnvelopeMessage
+	(*ContentPart)(nil),             // 21: cph.v1.ContentPart
+	(*ToolDefinition)(nil),          // 22: cph.v1.ToolDefinition
+	(*ToolChoice)(nil),              // 23: cph.v1.ToolChoice
+	(*ToolCall)(nil),                // 24: cph.v1.ToolCall
+	(*StreamEvent)(nil),             // 25: cph.v1.StreamEvent
+	(*MessageStart)(nil),            // 26: cph.v1.MessageStart
+	(*ContentDelta)(nil),            // 27: cph.v1.ContentDelta
+	(*ReasoningDelta)(nil),          // 28: cph.v1.ReasoningDelta
+	(*ToolCallDelta)(nil),           // 29: cph.v1.ToolCallDelta
+	(*Usage)(nil),                   // 30: cph.v1.Usage
+	(*MessageFinish)(nil),           // 31: cph.v1.MessageFinish
+	(*TaskFailed)(nil),              // 32: cph.v1.TaskFailed
+	(*TaskCapability)(nil),          // 33: cph.v1.TaskCapability
+	(*TaskCapabilities)(nil),        // 34: cph.v1.TaskCapabilities
+	(*TaskCapabilitiesRequest)(nil), // 35: cph.v1.TaskCapabilitiesRequest
+	(*RunTaskRequest)(nil),          // 36: cph.v1.RunTaskRequest
+	(*TaskNotification)(nil),        // 37: cph.v1.TaskNotification
+	(*RunTaskResponse)(nil),         // 38: cph.v1.RunTaskResponse
+	(*LogEntry)(nil),                // 39: cph.v1.LogEntry
+	(*GetProxyRequest)(nil),         // 40: cph.v1.GetProxyRequest
+	(*ProxyConfig)(nil),             // 41: cph.v1.ProxyConfig
+	(*StoreGetRequest)(nil),         // 42: cph.v1.StoreGetRequest
+	(*StoreGetResponse)(nil),        // 43: cph.v1.StoreGetResponse
+	(*StorePutRequest)(nil),         // 44: cph.v1.StorePutRequest
+	(*GetSettingsRequest)(nil),      // 45: cph.v1.GetSettingsRequest
+	(*GetSettingsResponse)(nil),     // 46: cph.v1.GetSettingsResponse
+	nil,                             // 47: cph.v1.Manifest.LabelEntry
+	nil,                             // 48: cph.v1.AuthField.LabelEntry
+	nil,                             // 49: cph.v1.AuthMethod.LabelEntry
+	nil,                             // 50: cph.v1.LoginRequest.FormEntry
+	nil,                             // 51: cph.v1.LoginNextStep.PromptEntry
+	nil,                             // 52: cph.v1.AccountProfile.QuotaEntry
+	nil,                             // 53: cph.v1.ProfileSection.TitleEntry
+	nil,                             // 54: cph.v1.SectionEntry.LabelEntry
+	nil,                             // 55: cph.v1.SectionColumn.TitleEntry
+	nil,                             // 56: cph.v1.SectionRow.CellsEntry
+	nil,                             // 57: cph.v1.ModelInfo.LabelEntry
+	nil,                             // 58: cph.v1.ChatRequest.ExtraEntry
+	nil,                             // 59: cph.v1.TaskCapability.LabelEntry
+	nil,                             // 60: cph.v1.RunTaskRequest.ContextEntry
+	nil,                             // 61: cph.v1.LogEntry.FieldsEntry
 }
 var file_sdk_proto_cph_proto_depIdxs = []int32{
-	43, // 0: cph.v1.Manifest.label:type_name -> cph.v1.Manifest.LabelEntry
+	47, // 0: cph.v1.Manifest.label:type_name -> cph.v1.Manifest.LabelEntry
 	6,  // 1: cph.v1.Manifest.auth_methods:type_name -> cph.v1.AuthMethod
 	1,  // 2: cph.v1.HandshakeResponse.error:type_name -> cph.v1.Error
 	2,  // 3: cph.v1.HandshakeResponse.manifest:type_name -> cph.v1.Manifest
-	44, // 4: cph.v1.AuthField.label:type_name -> cph.v1.AuthField.LabelEntry
-	45, // 5: cph.v1.AuthMethod.label:type_name -> cph.v1.AuthMethod.LabelEntry
+	48, // 4: cph.v1.AuthField.label:type_name -> cph.v1.AuthField.LabelEntry
+	49, // 5: cph.v1.AuthMethod.label:type_name -> cph.v1.AuthMethod.LabelEntry
 	5,  // 6: cph.v1.AuthMethod.fields:type_name -> cph.v1.AuthField
-	37, // 7: cph.v1.CredentialBlob.proxy:type_name -> cph.v1.ProxyConfig
-	46, // 8: cph.v1.LoginRequest.form:type_name -> cph.v1.LoginRequest.FormEntry
-	47, // 9: cph.v1.LoginNextStep.prompt:type_name -> cph.v1.LoginNextStep.PromptEntry
+	41, // 7: cph.v1.CredentialBlob.proxy:type_name -> cph.v1.ProxyConfig
+	50, // 8: cph.v1.LoginRequest.form:type_name -> cph.v1.LoginRequest.FormEntry
+	51, // 9: cph.v1.LoginNextStep.prompt:type_name -> cph.v1.LoginNextStep.PromptEntry
 	5,  // 10: cph.v1.LoginNextStep.fields:type_name -> cph.v1.AuthField
 	1,  // 11: cph.v1.LoginResult.error:type_name -> cph.v1.Error
 	11, // 12: cph.v1.LoginResult.profile:type_name -> cph.v1.AccountProfile
 	9,  // 13: cph.v1.LoginResult.next:type_name -> cph.v1.LoginNextStep
-	48, // 14: cph.v1.AccountProfile.quota:type_name -> cph.v1.AccountProfile.QuotaEntry
+	52, // 14: cph.v1.AccountProfile.quota:type_name -> cph.v1.AccountProfile.QuotaEntry
 	12, // 15: cph.v1.AccountProfile.sections:type_name -> cph.v1.ProfileSection
-	49, // 16: cph.v1.ProfileSection.title:type_name -> cph.v1.ProfileSection.TitleEntry
+	53, // 16: cph.v1.ProfileSection.title:type_name -> cph.v1.ProfileSection.TitleEntry
 	13, // 17: cph.v1.ProfileSection.entries:type_name -> cph.v1.SectionEntry
 	14, // 18: cph.v1.ProfileSection.columns:type_name -> cph.v1.SectionColumn
 	15, // 19: cph.v1.ProfileSection.items:type_name -> cph.v1.SectionRow
-	50, // 20: cph.v1.SectionEntry.label:type_name -> cph.v1.SectionEntry.LabelEntry
-	51, // 21: cph.v1.SectionColumn.title:type_name -> cph.v1.SectionColumn.TitleEntry
-	52, // 22: cph.v1.SectionRow.cells:type_name -> cph.v1.SectionRow.CellsEntry
+	54, // 20: cph.v1.SectionEntry.label:type_name -> cph.v1.SectionEntry.LabelEntry
+	55, // 21: cph.v1.SectionColumn.title:type_name -> cph.v1.SectionColumn.TitleEntry
+	56, // 22: cph.v1.SectionRow.cells:type_name -> cph.v1.SectionRow.CellsEntry
 	1,  // 23: cph.v1.RefreshResult.error:type_name -> cph.v1.Error
 	11, // 24: cph.v1.RefreshResult.profile:type_name -> cph.v1.AccountProfile
-	53, // 25: cph.v1.ModelInfo.label:type_name -> cph.v1.ModelInfo.LabelEntry
-	1,  // 26: cph.v1.ModelList.error:type_name -> cph.v1.Error
-	17, // 27: cph.v1.ModelList.models:type_name -> cph.v1.ModelInfo
-	20, // 28: cph.v1.ChatRequest.messages:type_name -> cph.v1.EnvelopeMessage
-	21, // 29: cph.v1.ChatRequest.tools:type_name -> cph.v1.ToolDefinition
-	22, // 30: cph.v1.ChatRequest.tool_choice:type_name -> cph.v1.ToolChoice
-	54, // 31: cph.v1.ChatRequest.extra:type_name -> cph.v1.ChatRequest.ExtraEntry
-	7,  // 32: cph.v1.ChatRequest.credential:type_name -> cph.v1.CredentialBlob
-	23, // 33: cph.v1.EnvelopeMessage.tool_calls:type_name -> cph.v1.ToolCall
-	25, // 34: cph.v1.StreamEvent.message_start:type_name -> cph.v1.MessageStart
-	26, // 35: cph.v1.StreamEvent.content_delta:type_name -> cph.v1.ContentDelta
-	27, // 36: cph.v1.StreamEvent.tool_call_delta:type_name -> cph.v1.ToolCallDelta
-	29, // 37: cph.v1.StreamEvent.message_finish:type_name -> cph.v1.MessageFinish
-	30, // 38: cph.v1.StreamEvent.task_failed:type_name -> cph.v1.TaskFailed
-	28, // 39: cph.v1.MessageFinish.usage:type_name -> cph.v1.Usage
-	1,  // 40: cph.v1.TaskFailed.error:type_name -> cph.v1.Error
-	55, // 41: cph.v1.TaskCapability.label:type_name -> cph.v1.TaskCapability.LabelEntry
-	31, // 42: cph.v1.TaskCapabilities.capabilities:type_name -> cph.v1.TaskCapability
-	7,  // 43: cph.v1.RunTaskRequest.credential:type_name -> cph.v1.CredentialBlob
-	56, // 44: cph.v1.RunTaskRequest.context:type_name -> cph.v1.RunTaskRequest.ContextEntry
-	1,  // 45: cph.v1.RunTaskResponse.error:type_name -> cph.v1.Error
-	57, // 46: cph.v1.LogEntry.fields:type_name -> cph.v1.LogEntry.FieldsEntry
-	3,  // 47: cph.v1.ClawPlugin.Handshake:input_type -> cph.v1.HandshakeRequest
-	8,  // 48: cph.v1.ClawPlugin.Login:input_type -> cph.v1.LoginRequest
-	7,  // 49: cph.v1.ClawPlugin.Refresh:input_type -> cph.v1.CredentialBlob
-	7,  // 50: cph.v1.ClawPlugin.GetProfile:input_type -> cph.v1.CredentialBlob
-	7,  // 51: cph.v1.ClawPlugin.ListModels:input_type -> cph.v1.CredentialBlob
-	19, // 52: cph.v1.ClawPlugin.Chat:input_type -> cph.v1.ChatRequest
-	0,  // 53: cph.v1.ClawPlugin.ListTaskCapabilities:input_type -> cph.v1.Empty
-	33, // 54: cph.v1.ClawPlugin.RunTask:input_type -> cph.v1.RunTaskRequest
-	35, // 55: cph.v1.ClawHost.Log:input_type -> cph.v1.LogEntry
-	38, // 56: cph.v1.ClawHost.StoreGet:input_type -> cph.v1.StoreGetRequest
-	40, // 57: cph.v1.ClawHost.StorePut:input_type -> cph.v1.StorePutRequest
-	36, // 58: cph.v1.ClawHost.GetProxy:input_type -> cph.v1.GetProxyRequest
-	41, // 59: cph.v1.ClawHost.GetSettings:input_type -> cph.v1.GetSettingsRequest
-	4,  // 60: cph.v1.ClawPlugin.Handshake:output_type -> cph.v1.HandshakeResponse
-	10, // 61: cph.v1.ClawPlugin.Login:output_type -> cph.v1.LoginResult
-	16, // 62: cph.v1.ClawPlugin.Refresh:output_type -> cph.v1.RefreshResult
-	11, // 63: cph.v1.ClawPlugin.GetProfile:output_type -> cph.v1.AccountProfile
-	18, // 64: cph.v1.ClawPlugin.ListModels:output_type -> cph.v1.ModelList
-	24, // 65: cph.v1.ClawPlugin.Chat:output_type -> cph.v1.StreamEvent
-	32, // 66: cph.v1.ClawPlugin.ListTaskCapabilities:output_type -> cph.v1.TaskCapabilities
-	34, // 67: cph.v1.ClawPlugin.RunTask:output_type -> cph.v1.RunTaskResponse
-	0,  // 68: cph.v1.ClawHost.Log:output_type -> cph.v1.Empty
-	39, // 69: cph.v1.ClawHost.StoreGet:output_type -> cph.v1.StoreGetResponse
-	0,  // 70: cph.v1.ClawHost.StorePut:output_type -> cph.v1.Empty
-	37, // 71: cph.v1.ClawHost.GetProxy:output_type -> cph.v1.ProxyConfig
-	42, // 72: cph.v1.ClawHost.GetSettings:output_type -> cph.v1.GetSettingsResponse
-	60, // [60:73] is the sub-list for method output_type
-	47, // [47:60] is the sub-list for method input_type
-	47, // [47:47] is the sub-list for extension type_name
-	47, // [47:47] is the sub-list for extension extendee
-	0,  // [0:47] is the sub-list for field type_name
+	37, // 25: cph.v1.RefreshResult.notification:type_name -> cph.v1.TaskNotification
+	57, // 26: cph.v1.ModelInfo.label:type_name -> cph.v1.ModelInfo.LabelEntry
+	1,  // 27: cph.v1.ModelList.error:type_name -> cph.v1.Error
+	17, // 28: cph.v1.ModelList.models:type_name -> cph.v1.ModelInfo
+	20, // 29: cph.v1.ChatRequest.messages:type_name -> cph.v1.EnvelopeMessage
+	22, // 30: cph.v1.ChatRequest.tools:type_name -> cph.v1.ToolDefinition
+	23, // 31: cph.v1.ChatRequest.tool_choice:type_name -> cph.v1.ToolChoice
+	58, // 32: cph.v1.ChatRequest.extra:type_name -> cph.v1.ChatRequest.ExtraEntry
+	7,  // 33: cph.v1.ChatRequest.credential:type_name -> cph.v1.CredentialBlob
+	24, // 34: cph.v1.EnvelopeMessage.tool_calls:type_name -> cph.v1.ToolCall
+	21, // 35: cph.v1.EnvelopeMessage.parts:type_name -> cph.v1.ContentPart
+	26, // 36: cph.v1.StreamEvent.message_start:type_name -> cph.v1.MessageStart
+	27, // 37: cph.v1.StreamEvent.content_delta:type_name -> cph.v1.ContentDelta
+	29, // 38: cph.v1.StreamEvent.tool_call_delta:type_name -> cph.v1.ToolCallDelta
+	31, // 39: cph.v1.StreamEvent.message_finish:type_name -> cph.v1.MessageFinish
+	32, // 40: cph.v1.StreamEvent.task_failed:type_name -> cph.v1.TaskFailed
+	28, // 41: cph.v1.StreamEvent.reasoning_delta:type_name -> cph.v1.ReasoningDelta
+	30, // 42: cph.v1.MessageStart.usage:type_name -> cph.v1.Usage
+	30, // 43: cph.v1.MessageFinish.usage:type_name -> cph.v1.Usage
+	1,  // 44: cph.v1.TaskFailed.error:type_name -> cph.v1.Error
+	59, // 45: cph.v1.TaskCapability.label:type_name -> cph.v1.TaskCapability.LabelEntry
+	33, // 46: cph.v1.TaskCapabilities.capabilities:type_name -> cph.v1.TaskCapability
+	7,  // 47: cph.v1.RunTaskRequest.credential:type_name -> cph.v1.CredentialBlob
+	60, // 48: cph.v1.RunTaskRequest.context:type_name -> cph.v1.RunTaskRequest.ContextEntry
+	1,  // 49: cph.v1.RunTaskResponse.error:type_name -> cph.v1.Error
+	37, // 50: cph.v1.RunTaskResponse.notification:type_name -> cph.v1.TaskNotification
+	61, // 51: cph.v1.LogEntry.fields:type_name -> cph.v1.LogEntry.FieldsEntry
+	3,  // 52: cph.v1.ClawPlugin.Handshake:input_type -> cph.v1.HandshakeRequest
+	8,  // 53: cph.v1.ClawPlugin.Login:input_type -> cph.v1.LoginRequest
+	7,  // 54: cph.v1.ClawPlugin.Refresh:input_type -> cph.v1.CredentialBlob
+	7,  // 55: cph.v1.ClawPlugin.GetProfile:input_type -> cph.v1.CredentialBlob
+	7,  // 56: cph.v1.ClawPlugin.ListModels:input_type -> cph.v1.CredentialBlob
+	19, // 57: cph.v1.ClawPlugin.Chat:input_type -> cph.v1.ChatRequest
+	35, // 58: cph.v1.ClawPlugin.ListTaskCapabilities:input_type -> cph.v1.TaskCapabilitiesRequest
+	36, // 59: cph.v1.ClawPlugin.RunTask:input_type -> cph.v1.RunTaskRequest
+	39, // 60: cph.v1.ClawHost.Log:input_type -> cph.v1.LogEntry
+	42, // 61: cph.v1.ClawHost.StoreGet:input_type -> cph.v1.StoreGetRequest
+	44, // 62: cph.v1.ClawHost.StorePut:input_type -> cph.v1.StorePutRequest
+	40, // 63: cph.v1.ClawHost.GetProxy:input_type -> cph.v1.GetProxyRequest
+	45, // 64: cph.v1.ClawHost.GetSettings:input_type -> cph.v1.GetSettingsRequest
+	4,  // 65: cph.v1.ClawPlugin.Handshake:output_type -> cph.v1.HandshakeResponse
+	10, // 66: cph.v1.ClawPlugin.Login:output_type -> cph.v1.LoginResult
+	16, // 67: cph.v1.ClawPlugin.Refresh:output_type -> cph.v1.RefreshResult
+	11, // 68: cph.v1.ClawPlugin.GetProfile:output_type -> cph.v1.AccountProfile
+	18, // 69: cph.v1.ClawPlugin.ListModels:output_type -> cph.v1.ModelList
+	25, // 70: cph.v1.ClawPlugin.Chat:output_type -> cph.v1.StreamEvent
+	34, // 71: cph.v1.ClawPlugin.ListTaskCapabilities:output_type -> cph.v1.TaskCapabilities
+	38, // 72: cph.v1.ClawPlugin.RunTask:output_type -> cph.v1.RunTaskResponse
+	0,  // 73: cph.v1.ClawHost.Log:output_type -> cph.v1.Empty
+	43, // 74: cph.v1.ClawHost.StoreGet:output_type -> cph.v1.StoreGetResponse
+	0,  // 75: cph.v1.ClawHost.StorePut:output_type -> cph.v1.Empty
+	41, // 76: cph.v1.ClawHost.GetProxy:output_type -> cph.v1.ProxyConfig
+	46, // 77: cph.v1.ClawHost.GetSettings:output_type -> cph.v1.GetSettingsResponse
+	65, // [65:78] is the sub-list for method output_type
+	52, // [52:65] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_sdk_proto_cph_proto_init() }
@@ -3224,12 +3662,13 @@ func file_sdk_proto_cph_proto_init() {
 	if File_sdk_proto_cph_proto != nil {
 		return
 	}
-	file_sdk_proto_cph_proto_msgTypes[24].OneofWrappers = []any{
+	file_sdk_proto_cph_proto_msgTypes[25].OneofWrappers = []any{
 		(*StreamEvent_MessageStart)(nil),
 		(*StreamEvent_ContentDelta)(nil),
 		(*StreamEvent_ToolCallDelta)(nil),
 		(*StreamEvent_MessageFinish)(nil),
 		(*StreamEvent_TaskFailed)(nil),
+		(*StreamEvent_ReasoningDelta)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -3237,7 +3676,7 @@ func file_sdk_proto_cph_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sdk_proto_cph_proto_rawDesc), len(file_sdk_proto_cph_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   58,
+			NumMessages:   62,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

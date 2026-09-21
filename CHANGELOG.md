@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.1.0
+
+大版本，含破坏性变更。引入实例层与插件契约 v2，插件市场改多源，新增 New API 插件。
+
+- Breaking 插件契约 v2（`instance_id` / `account_id` / `instance_schema`，`ProtocolVersion` 1→2）；核心按 `[1,2]` 协商向后兼容 v1 插件，v1 插件仅默认实例
+- Breaking 系统设置移除 `marketplace_url`，改由 `/admin/plugin-sources` 管理源列表（旧值导入为 `custom` 源）
+- Breaking 分组归属实例（`groups.instance_id`），账号只能进同实例分组；新增 `PUT /admin/groups/{id}`；`POST /admin/accounts/login` 新增可选 `instance_id`
+- Added 实例层（迁移 000005）：Plugin → Instance → Account，`instances` 表 + `accounts/groups.instance_id`；单例插件自动落默认实例，多实例插件由 `Manifest.capabilities:instances` + `instance_schema` 自声明；`/admin/instances` CRUD + 前端「实例」页
+- Added 插件市场多源（`network.plugin_sources`）：按源懒加载、可达探测、每源计数、命名空间目录隔离、同名跨源拒装；前端「插件源」抽屉管理
+- Added New API 插件（`plugins/newapi`，protocol v2 多实例）：api_key / password / cred_file / oauth 四种授权，余额折算与每日签到
+- Added 站内通知（迁移 000006）：任务提醒落库，头部铃铛展示未读
+- Added 调用日志缓存写入 token（迁移 000007，`cache_creation_tokens`）：区分缓存写入与读取，三协议 usage 信封统一带出
+- Added 日志保留清理（`internal/janitor`，`logs.retention_days`）、CSV 导出（`GET /admin/logs/export`）与清空
+- Added 系统信息 / 备份 / 恢复（`/admin/system/info|backup|restore`）：`VACUUM INTO` 快照 + `secret.key`，恢复重启换入
+- Added 删除影响面预览与级联（`/admin/*/impact`）：预览受影响实例/分组/账号/规则/执行历史 + 引用路由与密钥名，事务内按层级级联
+- Added 路由级 User-Agent（迁移 000008）+ 全局网关 UA / 浏览器 UA 设置
+- Added 站点品牌自定义（`site.name/abbr/logo`，`GET /admin/branding` 免鉴权）
+- Added 任务规则自动生成（迁移 000009，`task_rules.auto`）+ 规则去重 + `PUT /admin/task-rules/{id}` + 规则/执行历史分页
+- Added 个人资料页（用户名 / 角色 / 可访问菜单，改密弹窗）；「设置」移至头像下拉，guest 可改自己密码
+- Added 流式错误帧：上游中途失败按入口协议下发合规错误帧，不再静默断流
+- Added 插件 `GetProxy` 支持 `account_id`：账号级代理优先，回退分组
+- Changed 握手 `core_version` 改为真实版本号（原写死 0.1.0）
+
+## v1.0.5
+
+鉴权底座升级为 JWT + 角色访问控制；新增第三方平台凭证托管；日志页重构。
+
+- Added JWT 鉴权 + RBAC：登录签发 HS256 JWT（claims 带 role/exp）替代每请求 bcrypt；`admin` 全量、`guest` 只读（隐藏系统设置、非 GET 拦 403）；`/admin/me` 按角色下发可见菜单，前端路由守卫 + 菜单过滤
+- Added 第三方平台凭证托管（`oauth_credentials` 表，迁移 000003）：集中管理 LinuxDo / GitHub 等平台登录态，`TokenBlob` 经 AES-256-GCM 加密；`/admin/oauth-credentials` CRUD + 前端「凭证」管理页
+- Added 日志页多条件搜索（密钥 / 模型 / 路由模糊 + 插件 / 协议 / 状态类下拉 + 日期区间）与分页（页大小 10 / 30 / 50 / 100 / 200）
+- Added 日期区间快捷选项：今天 / 昨天 / 本周 / 上周 / 最近 7 天 / 最近 30 天
+- Added 路由名列（`request_logs.route_name`，迁移 000004）：区分对外路由名与真实模型
+- Fixed 日志延迟统计：网关统一 `startedAt` 计时源，杜绝「首字 3s 总耗时 300ms」的反常数据
+- Fixed 版本检查误判：`GET /admin/version` 改用语义化比较（`compareSemver`），仅远端严格大于本机时才提示更新
+- Changed 移除旧 Basic Auth 兼容（升级后需重新登录换取 JWT）；有更新时点击版本徽标先弹更新日志（中英双语）
+
 ## v1.0.3
 
 - Added 账号级出站代理：优先级 账号 > 分组（`account_proxies` 表），账号编辑弹窗可绑定

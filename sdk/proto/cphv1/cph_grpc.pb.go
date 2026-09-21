@@ -46,7 +46,7 @@ type ClawPluginClient interface {
 	// 核心链路：统一信封进，事件流出
 	Chat(ctx context.Context, in *ChatRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamEvent], error)
 	// 任务能力（核心调度触发时调用）
-	ListTaskCapabilities(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*TaskCapabilities, error)
+	ListTaskCapabilities(ctx context.Context, in *TaskCapabilitiesRequest, opts ...grpc.CallOption) (*TaskCapabilities, error)
 	RunTask(ctx context.Context, in *RunTaskRequest, opts ...grpc.CallOption) (*RunTaskResponse, error)
 }
 
@@ -127,7 +127,7 @@ func (c *clawPluginClient) Chat(ctx context.Context, in *ChatRequest, opts ...gr
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ClawPlugin_ChatClient = grpc.ServerStreamingClient[StreamEvent]
 
-func (c *clawPluginClient) ListTaskCapabilities(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*TaskCapabilities, error) {
+func (c *clawPluginClient) ListTaskCapabilities(ctx context.Context, in *TaskCapabilitiesRequest, opts ...grpc.CallOption) (*TaskCapabilities, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TaskCapabilities)
 	err := c.cc.Invoke(ctx, ClawPlugin_ListTaskCapabilities_FullMethodName, in, out, cOpts...)
@@ -164,7 +164,7 @@ type ClawPluginServer interface {
 	// 核心链路：统一信封进，事件流出
 	Chat(*ChatRequest, grpc.ServerStreamingServer[StreamEvent]) error
 	// 任务能力（核心调度触发时调用）
-	ListTaskCapabilities(context.Context, *Empty) (*TaskCapabilities, error)
+	ListTaskCapabilities(context.Context, *TaskCapabilitiesRequest) (*TaskCapabilities, error)
 	RunTask(context.Context, *RunTaskRequest) (*RunTaskResponse, error)
 	mustEmbedUnimplementedClawPluginServer()
 }
@@ -194,7 +194,7 @@ func (UnimplementedClawPluginServer) ListModels(context.Context, *CredentialBlob
 func (UnimplementedClawPluginServer) Chat(*ChatRequest, grpc.ServerStreamingServer[StreamEvent]) error {
 	return status.Error(codes.Unimplemented, "method Chat not implemented")
 }
-func (UnimplementedClawPluginServer) ListTaskCapabilities(context.Context, *Empty) (*TaskCapabilities, error) {
+func (UnimplementedClawPluginServer) ListTaskCapabilities(context.Context, *TaskCapabilitiesRequest) (*TaskCapabilities, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListTaskCapabilities not implemented")
 }
 func (UnimplementedClawPluginServer) RunTask(context.Context, *RunTaskRequest) (*RunTaskResponse, error) {
@@ -323,7 +323,7 @@ func _ClawPlugin_Chat_Handler(srv interface{}, stream grpc.ServerStream) error {
 type ClawPlugin_ChatServer = grpc.ServerStreamingServer[StreamEvent]
 
 func _ClawPlugin_ListTaskCapabilities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
+	in := new(TaskCapabilitiesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -335,7 +335,7 @@ func _ClawPlugin_ListTaskCapabilities_Handler(srv interface{}, ctx context.Conte
 		FullMethod: ClawPlugin_ListTaskCapabilities_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ClawPluginServer).ListTaskCapabilities(ctx, req.(*Empty))
+		return srv.(ClawPluginServer).ListTaskCapabilities(ctx, req.(*TaskCapabilitiesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }

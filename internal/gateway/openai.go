@@ -4,6 +4,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
@@ -11,21 +12,33 @@ import (
 // parseChatCompletions 把 /v1/chat/completions 请求体转成统一信封。
 func parseChatCompletions(body []byte) (*pb.ChatRequest, error) {
 	var raw struct {
-		Model       string          `json:"model"`
-		Messages    []openaiMessage `json:"messages"`
-		MaxTokens   int32           `json:"max_tokens"`
-		Temperature *float64        `json:"temperature"`
-		TopP        *float64        `json:"top_p"`
-		Stop        json.RawMessage `json:"stop"`
-		Tools       []openaiTool    `json:"tools"`
-		ToolChoice  json.RawMessage `json:"tool_choice"`
-		Stream      bool            `json:"stream"`
+		Model               string          `json:"model"`
+		Messages            []openaiMessage `json:"messages"`
+		MaxTokens           int32           `json:"max_tokens"`
+		MaxCompletionTokens int32           `json:"max_completion_tokens"` // 新版字段，max_tokens 的替代
+		Temperature         *float64        `json:"temperature"`
+		TopP                *float64        `json:"top_p"`
+		Stop                json.RawMessage `json:"stop"`
+		Tools               []openaiTool    `json:"tools"`
+		ToolChoice          json.RawMessage `json:"tool_choice"`
+		Stream              bool            `json:"stream"`
+		ReasoningEffort     string          `json:"reasoning_effort"`
+		// 只对 OpenAI 系上游有意义的采样/控制参数：原样透传
+		FrequencyPenalty  json.RawMessage `json:"frequency_penalty"`
+		PresencePenalty   json.RawMessage `json:"presence_penalty"`
+		Seed              json.RawMessage `json:"seed"`
+		ParallelToolCalls json.RawMessage `json:"parallel_tool_calls"`
+		ResponseFormat    json.RawMessage `json:"response_format"`
+		User              string          `json:"user"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("invalid json: %w", err)
 	}
 	if len(raw.Messages) == 0 {
 		return nil, fmt.Errorf("messages is required")
+	}
+	if raw.MaxTokens == 0 {
+		raw.MaxTokens = raw.MaxCompletionTokens
 	}
 
 	req := &pb.ChatRequest{
@@ -35,16 +48,37 @@ func parseChatCompletions(body []byte) (*pb.ChatRequest, error) {
 		Temperature: deref(raw.Temperature),
 		Extra:       map[string]string{},
 	}
+	setTemperature(req, raw.Temperature)
 	if raw.TopP != nil {
 		req.Extra["top_p"] = fmt.Sprintf("%g", *raw.TopP)
 	}
 	if len(raw.Stop) > 0 {
 		req.Extra["stop"] = string(raw.Stop)
 	}
+	if raw.ReasoningEffort != "" {
+		req.Extra["reasoning_effort"] = raw.ReasoningEffort
+	}
+	for k, v := range map[string]json.RawMessage{
+		"frequency_penalty": raw.FrequencyPenalty, "presence_penalty": raw.PresencePenalty,
+		"seed": raw.Seed, "parallel_tool_calls": raw.ParallelToolCalls, "response_format": raw.ResponseFormat,
+	} {
+		if len(v) > 0 && string(v) != "null" {
+			req.Extra[k] = string(v)
+		}
+	}
+	if raw.User != "" {
+		req.Extra["user"] = raw.User
+	}
 
 	for i := range raw.Messages {
 		m := &raw.Messages[i]
-		em := &pb.EnvelopeMessage{Role: normalizeRole(m.Role), Text: extractText(m.Content), Raw: m.Content}
+		parts := openaiParts(m.Content)
+		em := &pb.EnvelopeMessage{Role: normalizeRole(m.Role), Text: partsText(parts), Raw: m.Content}
+		if m.ReasoningContent != "" && em.Role == "assistant" {
+			// 推理正文放最前（Anthropic 要求 thinking 块先于 text）
+			parts = append([]*pb.ContentPart{{Type: "thinking", Text: m.ReasoningContent}}, parts...)
+		}
+		em.Parts = finishParts(parts)
 		for _, tc := range m.ToolCalls {
 			em.ToolCalls = append(em.ToolCalls, &pb.ToolCall{
 				Id: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
@@ -81,7 +115,41 @@ type openaiMessage struct {
 			Arguments string `json:"arguments"`
 		} `json:"function"`
 	} `json:"tool_calls"`
-	ToolCallID string `json:"tool_call_id"`
+	ToolCallID       string `json:"tool_call_id"`
+	ReasoningContent string `json:"reasoning_content"` // DeepSeek / New API 方言的历史推理
+}
+
+// openaiParts OpenAI content（string 或 parts 数组）→ 内容块：text / image_url。
+func openaiParts(raw json.RawMessage) []*pb.ContentPart {
+	if len(raw) == 0 {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return []*pb.ContentPart{{Type: "text", Text: s}}
+	}
+	var items []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
+	}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil
+	}
+	var parts []*pb.ContentPart
+	for _, it := range items {
+		switch it.Type {
+		case "text":
+			parts = append(parts, &pb.ContentPart{Type: "text", Text: it.Text})
+		case "image_url":
+			if it.ImageURL.URL != "" {
+				parts = append(parts, imagePart(it.ImageURL.URL))
+			}
+		}
+	}
+	return parts
 }
 
 type openaiTool struct {
@@ -134,7 +202,7 @@ type openaiSSEState struct {
 }
 
 func newOpenAISSEState() *openaiSSEState {
-	return &openaiSSEState{id: "chatcmpl-" + randHex(12), toolIdx: map[string]int{}}
+	return &openaiSSEState{id: "chatcmpl-" + randHex(12), created: time.Now().Unix(), toolIdx: map[string]int{}}
 }
 
 // convertEvent 信封事件 → OpenAI chat.completion.chunk SSE 行。
@@ -143,6 +211,15 @@ func (s *openaiSSEState) convertEvent(ev *pb.StreamEvent) string {
 	case *pb.StreamEvent_MessageStart:
 		s.model = e.MessageStart.Model
 		return ""
+
+	case *pb.StreamEvent_ReasoningDelta:
+		// 签名对 OpenAI 客户端无意义，只透推理文本
+		if e.ReasoningDelta.Text == "" {
+			return ""
+		}
+		return s.chunk(map[string]interface{}{
+			"role": "assistant", "reasoning_content": e.ReasoningDelta.Text,
+		}, "")
 
 	case *pb.StreamEvent_ContentDelta:
 		return s.chunk(map[string]interface{}{
@@ -167,17 +244,13 @@ func (s *openaiSSEState) convertEvent(ev *pb.StreamEvent) string {
 		}, "")
 
 	case *pb.StreamEvent_MessageFinish:
-		out := s.chunk(map[string]interface{}{}, e.MessageFinish.FinishReason)
+		out := s.chunk(map[string]interface{}{}, openaiFinish(e.MessageFinish.FinishReason))
 		// 带 usage 的终止块（stream_options.include_usage 的客户端靠它收用量）
 		if e.MessageFinish.Usage != nil {
 			out += s.chunkRaw(map[string]interface{}{
 				"id": s.id, "object": "chat.completion.chunk", "created": s.created,
 				"model": s.model, "choices": []interface{}{},
-				"usage": map[string]interface{}{
-					"prompt_tokens":     e.MessageFinish.Usage.InputTokens,
-					"completion_tokens": e.MessageFinish.Usage.OutputTokens,
-					"total_tokens":      e.MessageFinish.Usage.InputTokens + e.MessageFinish.Usage.OutputTokens,
-				},
+				"usage": openaiUsage(e.MessageFinish.Usage),
 			})
 		}
 		return out
@@ -204,18 +277,20 @@ func (s *openaiSSEState) chunkRaw(payload map[string]interface{}) string {
 
 // openaiAggregate 非流式聚合。
 type openaiAggregate struct {
-	model  string
-	text   string
-	tools  map[string]*aggrTool
-	finish string
-	input  int64
-	output int64
+	model     string
+	reasoning string
+	text      string
+	tools     map[string]*aggrTool
+	finish    string
+	usage     *pb.Usage
 }
 
 func (a *openaiAggregate) feed(ev *pb.StreamEvent) {
 	switch e := ev.Event.(type) {
 	case *pb.StreamEvent_MessageStart:
 		a.model = e.MessageStart.Model
+	case *pb.StreamEvent_ReasoningDelta:
+		a.reasoning += e.ReasoningDelta.Text
 	case *pb.StreamEvent_ContentDelta:
 		a.text += e.ContentDelta.Text
 	case *pb.StreamEvent_ToolCallDelta:
@@ -229,15 +304,16 @@ func (a *openaiAggregate) feed(ev *pb.StreamEvent) {
 		}
 		t.input += e.ToolCallDelta.ArgumentsDelta
 	case *pb.StreamEvent_MessageFinish:
-		a.finish = e.MessageFinish.FinishReason
-		if e.MessageFinish.Usage != nil {
-			a.input, a.output = e.MessageFinish.Usage.InputTokens, e.MessageFinish.Usage.OutputTokens
-		}
+		a.finish = openaiFinish(e.MessageFinish.FinishReason)
+		a.usage = e.MessageFinish.Usage
 	}
 }
 
 func (a *openaiAggregate) result() map[string]interface{} {
 	msg := map[string]interface{}{"role": "assistant", "content": a.text}
+	if a.reasoning != "" {
+		msg["reasoning_content"] = a.reasoning
+	}
 	if len(a.tools) > 0 {
 		msg["content"] = nil
 		var tcs []interface{}
@@ -256,10 +332,7 @@ func (a *openaiAggregate) result() map[string]interface{} {
 	})
 	return map[string]interface{}{
 		"id": "chatcmpl-" + randHex(12), "object": "chat.completion",
-		"created": 0, "model": a.model, "choices": choices,
-		"usage": map[string]interface{}{
-			"prompt_tokens": a.input, "completion_tokens": a.output,
-			"total_tokens": a.input + a.output,
-		},
+		"created": time.Now().Unix(), "model": a.model, "choices": choices,
+		"usage": openaiUsage(a.usage),
 	}
 }

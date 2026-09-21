@@ -41,9 +41,8 @@
         <span v-if="row.key_name">{{ row.key_name }}</span>
         <span v-else class="dim">-</span>
       </template>
-      <template #route="{ row }">
-        <span v-if="row.RouteName">{{ row.RouteName }}</span>
-        <span v-else class="dim">-</span>
+      <template #model="{ row }">
+        <span :title="modelLabel(row)">{{ modelLabel(row) }}</span>
       </template>
       <template #status="{ row }">
         <t-tooltip
@@ -57,44 +56,10 @@
         <t-tag v-else :theme="row.Status < 400 ? 'success' : 'danger'" variant="light">{{ row.Status }}</t-tag>
       </template>
       <template #tokens="{ row }">
-        <t-tooltip placement="top-left" :overlay-style="{ minWidth: '220px' }">
-          <span class="tokens">
-            <span class="tok-in">↓ {{ fmt(row.InputTokens) }}</span>
-            <span class="tok-out">↑ {{ fmt(row.OutputTokens) }}</span>
-            <t-tooltip v-if="row.CachedTokens" :content="`${$t('logs.cached')} ${fmt(row.CachedTokens)}`" placement="top">
-              <span class="tok-cache">✎ {{ fmtCache(row.CachedTokens) }}</span>
-            </t-tooltip>
-          </span>
-          <template #content>
-            <div class="tok-detail">
-              <div class="tok-detail-title">{{ $t('logs.tokenDetail') }}</div>
-              <div class="tok-detail-row"><span>{{ $t('logs.inputTokens') }}</span><b>{{ fmt(row.InputTokens) }}</b></div>
-              <div class="tok-detail-row"><span>{{ $t('logs.outputTokens') }}</span><b>{{ fmt(row.OutputTokens) }}</b></div>
-              <div class="tok-detail-row" v-if="row.CachedTokens">
-                <span>{{ $t('logs.cached') }}</span><b>{{ fmt(row.CachedTokens) }}</b>
-              </div>
-              <div class="tok-detail-total"><span>{{ $t('logs.totalTokens') }}</span><b>{{ fmt(sumTokens(row)) }}</b></div>
-            </div>
-          </template>
-        </t-tooltip>
+        <log-cells kind="tokens" :row="row" />
       </template>
       <template #latency="{ row }">
-        <t-tooltip placement="top-left">
-          <div class="latency">
-            <span class="latency-bar"></span>
-            <div class="latency-nums">
-              <div>{{ $t('logs.firstToken') }} <b>{{ fmtMs(row.FirstTokenMs) }}</b></div>
-              <div>{{ $t('logs.totalTime') }} <b>{{ fmtMs(row.LatencyMs) }}</b></div>
-            </div>
-          </div>
-          <template #content>
-            <div class="tok-detail">
-              <div class="tok-detail-title">{{ $t('logs.latencyTitle') }}</div>
-              <div class="tok-detail-row"><span>{{ $t('logs.firstToken') }}</span><b>{{ fmtMs(row.FirstTokenMs) }}</b></div>
-              <div class="tok-detail-row"><span>{{ $t('logs.totalTime') }}</span><b>{{ fmtMs(row.LatencyMs) }}</b></div>
-            </div>
-          </template>
-        </t-tooltip>
+        <log-cells kind="latency" :row="row" />
       </template>
       <template #ua="{ row }">
         <t-tooltip v-if="row.UserAgent" :content="row.UserAgent" placement="top-left">
@@ -122,7 +87,9 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../api/client'
+import LogCells from '../components/LogCells.vue'
 import { dict, protocolDict } from '../utils/dict'
+import { modelLabel } from '../utils/logfmt'
 import type { RequestLog } from '../api/types'
 
 const { t } = useI18n()
@@ -184,9 +151,8 @@ function pluginLabel(pluginID: number | null): string {
 
 const columns = computed(() => [
   { colKey: 'key', title: t('logs.key'), width: 120, ellipsis: true },
-  { colKey: 'route', title: t('logs.route'), width: 140, ellipsis: true, align: 'center' },
-  { colKey: 'Model', title: t('logs.model'), width: 160, ellipsis: true, align: 'center' },
-  { colKey: 'plugin', title: t('logs.plugin'), width: 100, cell: (_h: any, { row }: any) => pluginLabel(row.PluginID), align: 'center' },
+  { colKey: 'model', title: t('logs.model'), width: 260, ellipsis: true, align: 'center' },
+  { colKey: 'instance', title: t('accounts.instance'), width: 110, ellipsis: true, cell: (_h: any, { row }: any) => row.instance_name || pluginLabel(row.PluginID), align: 'center' },
   { colKey: 'Protocol', title: t('logs.protocol'), width: 150, cell: (_h: any, { row }: any) => dict(protocolDict, row.Protocol), align: 'center' },
   { colKey: 'status', title: t('common.colStatus'), width: 80, align: 'center' },
   { colKey: 'tokens', title: 'Token', width: 190, align: 'center' },
@@ -195,29 +161,6 @@ const columns = computed(() => [
   { colKey: 'ua', title: t('logs.client'), width: 140, align: 'center' },
   { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => row.CreatedAt?.replace('T', ' ').slice(0, 19) ?? '-', align: 'center' },
 ])
-
-// 大数缩写：如 35.9K / 110.2K
-function fmt(n: number): string {
-  if (!n) return '0'
-  if (n < 1000) return String(n)
-  if (n < 1000000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}K`
-  return `${(n / 1000000).toFixed(2)}M`
-}
-
-function fmtCache(n: number): string {
-  return fmt(n)
-}
-
-// 毫秒展示：<1s 展示 ms，否则秒（如 3.50s）
-function fmtMs(ms: number): string {
-  if (!ms) return '-'
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(2)}s`
-}
-
-function sumTokens(row: RequestLog): number {
-  return (row.InputTokens || 0) + (row.OutputTokens || 0) + (row.CachedTokens || 0)
-}
 
 // buildQuery 组装过滤参数（空值不带）
 function buildQuery(): string {
@@ -295,75 +238,5 @@ onMounted(load)
 }
 .dim {
   color: var(--td-text-color-placeholder);
-}
-.tokens {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  white-space: nowrap;
-  cursor: default;
-}
-.tok-in {
-  color: var(--td-success-color);
-}
-.tok-out {
-  color: var(--td-brand-color);
-}
-.tok-cache {
-  color: var(--td-warning-color);
-  cursor: default;
-}
-.tok-detail {
-  min-width: 200px;
-}
-.tok-detail-title {
-  font-weight: 700;
-  margin-bottom: 8px;
-}
-.tok-detail-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 2px 0;
-}
-.tok-detail-row b {
-  font-variant-numeric: tabular-nums;
-}
-.tok-detail-total {
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid rgba(255, 255, 255, 0.2);
-}
-.tok-detail-total b {
-  font-variant-numeric: tabular-nums;
-}
-.latency {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: default;
-}
-.latency-bar {
-  width: 3px;
-  height: 28px;
-  border-radius: 2px;
-  background: var(--td-success-color);
-  flex-shrink: 0;
-}
-.latency-nums {
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: nowrap;
-}
-.latency-nums div {
-  display: flex;
-  justify-content: space-between;
-  gap: 6px;
-}
-.latency-nums b {
-  font-variant-numeric: tabular-nums;
 }
 </style>

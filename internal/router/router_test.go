@@ -48,14 +48,17 @@ func TestParseGroups(t *testing.T) {
 }
 
 func TestPickGroupRespectsWeights(t *testing.T) {
-	entries := []model.RouteGroupEntry{{GroupID: 1, Weight: 100}, {GroupID: 2, Weight: 0}} // 权重0按1计
+	entries := []model.RouteGroupEntry{{GroupID: 1, Weight: 100}, {GroupID: 2, Weight: 0}} // 权重 0 = 不参与
 	counts := map[int64]int{}
 	for i := 0; i < 200; i++ {
 		counts[pickGroup(entries).GroupID]++
 	}
-	// 全量权重几乎都落在分组1
-	if counts[1] < 190 {
-		t.Errorf("weight distribution unexpected: %+v", counts)
+	if counts[1] != 200 {
+		t.Errorf("zero-weight group must never be picked: %+v", counts)
+	}
+	// 全为 0：退回第一个
+	if pickGroup([]model.RouteGroupEntry{{GroupID: 7, Weight: 0}, {GroupID: 8, Weight: 0}}).GroupID != 7 {
+		t.Error("all-zero should fall back to first entry")
 	}
 }
 

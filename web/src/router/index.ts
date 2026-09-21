@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { getToken, getRole } from '../api/client'
 
 // guest 角色可访问的路径（与后端 menusForRole 保持一致）
-const GUEST_PATHS = ['dashboard', 'logs']
+const GUEST_PATHS = ['dashboard', 'logs', 'profile']
 
 const router = createRouter({
   history: createWebHistory(),
@@ -16,6 +16,7 @@ const router = createRouter({
         { path: '', redirect: '/dashboard' },
         { path: 'dashboard', component: () => import('../views/Dashboard.vue') },
         { path: 'plugins', component: () => import('../views/Plugins.vue') },
+        { path: 'instances', component: () => import('../views/Instances.vue') },
         { path: 'accounts', component: () => import('../views/Accounts.vue') },
         { path: 'groups', component: () => import('../views/Groups.vue') },
         { path: 'proxies', component: () => import('../views/Proxies.vue') },
@@ -25,6 +26,7 @@ const router = createRouter({
         { path: 'tasks', component: () => import('../views/Tasks.vue') },
         { path: 'logs', component: () => import('../views/Logs.vue') },
         { path: 'settings', component: () => import('../views/Settings.vue') },
+        { path: 'profile', component: () => import('../views/Profile.vue') },
       ],
     },
   ],

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -18,8 +19,8 @@ import (
 
 // Runner 是调度引擎对插件调用层的抽象（由 plugin.Manager 适配注入）。
 type Runner interface {
-	// ListCapabilities 返回插件声明的任务能力。
-	ListCapabilities(ctx context.Context, pluginName string) ([]*pb.TaskCapability, error)
+	// ListCapabilities 返回插件声明的任务能力；instanceID>0 时插件可按实例配置裁剪。
+	ListCapabilities(ctx context.Context, pluginName string, instanceID int64) ([]*pb.TaskCapability, error)
 	// RunTask 触发一次能力执行。credential 为 nil 表示不针对具体账号。
 	RunTask(ctx context.Context, pluginName string, req *pb.RunTaskRequest) (*pb.RunTaskResponse, error)
 }
@@ -131,15 +132,7 @@ func (e *Engine) executeRule(ctx context.Context, rule *model.TaskRule) {
 		req := &pb.RunTaskRequest{CapabilityId: rule.CapabilityID}
 		if acct != nil {
 			run.AccountID = &acct.ID
-			cred := &pb.CredentialBlob{
-				AccountId: fmt.Sprintf("%d", acct.ID),
-				Blob:      account.DecryptCredential(e.dataDir, acct.CredentialBlob),
-			}
-			if acct.LastRefreshAt != nil {
-				cred.UpdatedAt = acct.LastRefreshAt.Unix()
-			}
-			cred.Proxy = account.ProxyForAccount(e.db, acct.ID)
-			req.Credential = cred
+			req.Credential = account.BuildCred(e.db, e.dataDir, acct, 0)
 		}
 
 		resp, err := e.runner.RunTask(ctx, pluginNameByID(e.db, rule.PluginID), req)
@@ -165,6 +158,13 @@ func (e *Engine) executeRule(ctx context.Context, rule *model.TaskRule) {
 					})
 			}
 		}
+		// 插件要求提醒用户（如站点签到需人工前往）→ 落站内通知，成功/失败均可携带
+		if resp != nil && resp.Notification != nil && resp.Notification.Title != "" {
+			e.db.Create(&model.Notification{
+				Title: truncate(resp.Notification.Title, 256), Content: truncate(resp.Notification.Content, 4000),
+				Level: orDefault(resp.Notification.Level, "info"), AccountID: run.AccountID,
+			})
+		}
 		fin := time.Now()
 		run.FinishedAt = &fin
 		e.db.Save(&run)
@@ -176,11 +176,13 @@ func (e *Engine) executeRule(ctx context.Context, rule *model.TaskRule) {
 }
 
 // selectAccounts 按 target_scope 选出目标账号；返回 nil 元素表示"全局执行一次"。
+// 任务与对话调度分离：disabled（停用调度）账号仍跑任务，只排除 expired（凭据失效）。
 func (e *Engine) selectAccounts(rule *model.TaskRule) ([]*model.Account, error) {
+	taskable := []string{"active", "disabled"}
 	switch rule.TargetScope {
 	case "all":
 		var accts []model.Account
-		if err := e.db.Where("plugin_id = ? AND status = ?", rule.PluginID, "active").Find(&accts).Error; err != nil {
+		if err := e.db.Where("plugin_id = ? AND status IN ?", rule.PluginID, taskable).Find(&accts).Error; err != nil {
 			return nil, err
 		}
 		out := make([]*model.Account, len(accts))
@@ -190,7 +192,7 @@ func (e *Engine) selectAccounts(rule *model.TaskRule) ([]*model.Account, error) 
 		return out, nil
 	case "rotate":
 		var acct model.Account
-		if err := e.db.Where("plugin_id = ? AND status = ?", rule.PluginID, "active").
+		if err := e.db.Where("plugin_id = ? AND status IN ?", rule.PluginID, taskable).
 			Order("last_refresh_at IS NULL, last_refresh_at").First(&acct).Error; err != nil {
 			return nil, err
 		}
@@ -201,7 +203,7 @@ func (e *Engine) selectAccounts(rule *model.TaskRule) ([]*model.Account, error) 
 			return nil, err
 		}
 		var accts []model.Account
-		if err := e.db.Where("id IN ? AND plugin_id = ? AND status = ?", ids, rule.PluginID, "active").
+		if err := e.db.Where("id IN ? AND plugin_id = ? AND status IN ?", ids, rule.PluginID, taskable).
 			Find(&accts).Error; err != nil {
 			return nil, err
 		}
@@ -214,6 +216,9 @@ func (e *Engine) selectAccounts(rule *model.TaskRule) ([]*model.Account, error) 
 		return []*model.Account{nil}, nil
 	}
 }
+
+// dailyJitter daily 触发的最大随机抖动窗口（设定时刻之后 0~此值随机延迟）。
+const dailyJitter = 30 * time.Minute
 
 // computeNext 计算下次触发时刻。
 func (e *Engine) computeNext(rule *model.TaskRule, from time.Time) *time.Time {
@@ -234,6 +239,8 @@ func (e *Engine) computeNext(rule *model.TaskRule, from time.Time) *time.Time {
 		if !next.After(from) {
 			next = next.Add(24 * time.Hour)
 		}
+		// 随机抖动：在设定时刻之后延迟 0~dailyJitter，错开多账号同刻打上游（每天各自随机）
+		next = next.Add(time.Duration(rand.Int63n(int64(dailyJitter))))
 	case "cron":
 		next = nextCron(rule.TriggerValue, from)
 		if next.IsZero() {
@@ -281,6 +288,13 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
 // ScheduleOnce 创建一条立即执行的 once 规则（手动触发/失败重跑都用它）。
 func (e *Engine) ScheduleOnce(pluginID int64, capabilityID string, accountID int64) error {
 	scope, target := "all", "[]"
@@ -300,14 +314,16 @@ func (e *Engine) ScheduleOnce(pluginID int64, capabilityID string, accountID int
 	return e.db.Create(&rule).Error
 }
 
-// EnsureAccountRules 新账号建档后，按插件声明的账号级任务能力自动生成规则。
-// 生成的规则默认停用，用户在任务页确认调度后再启用。
+// EnsureAccountRules 新账号建档后，按插件声明的账号级任务能力自动生成规则（按账号所属实例查询，
+// 实例关闭的能力不建规则）。生成的规则默认停用，用户在任务页确认调度后再启用。
 func (e *Engine) EnsureAccountRules(ctx context.Context, pluginName string, accountID int64) {
 	var p model.Plugin
 	if err := e.db.Where("name = ?", pluginName).First(&p).Error; err != nil {
 		return
 	}
-	caps, err := e.runner.ListCapabilities(ctx, pluginName)
+	var acct model.Account
+	e.db.Select("instance_id").First(&acct, accountID)
+	caps, err := e.runner.ListCapabilities(ctx, pluginName, acct.InstanceID)
 	if err != nil {
 		return
 	}
@@ -321,7 +337,7 @@ func (e *Engine) EnsureAccountRules(ctx context.Context, pluginName string, acco
 			PluginID: p.ID, CapabilityID: c.Id,
 			TriggerType: tt, TriggerValue: tv,
 			TargetScope: "account_ids", TargetJSON: target,
-			Enabled: false,
+			Auto: true, Enabled: false,
 		})
 	}
 }

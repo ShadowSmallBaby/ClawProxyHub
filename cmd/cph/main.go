@@ -17,6 +17,7 @@ import (
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/database"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/event"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/gateway"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/janitor"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/plugin"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/router"
@@ -82,6 +83,11 @@ func run() error {
 		return fmt.Errorf("create plugin dir: %w", err)
 	}
 
+	// 管理界面上传的备份在此换入（打开库之前）
+	dbPath := database.DSNToFilepath(cfg.DatabaseDSN)
+	if err := database.ApplyPendingRestore(dbPath, cfg.DataDir); err != nil {
+		return err
+	}
 	db, err := database.Open(ctx, cfg.DatabaseDSN)
 	if err != nil {
 		return err
@@ -113,8 +119,9 @@ func run() error {
 	engine.Start(ctx)
 	defer engine.Stop()
 	settings := setting.New(db)
+	janitor.StartLogRetention(ctx, db, settings)
 	gw := gateway.New(db, cfg.DataDir, plugins, router.New(db), accounts, settings)
-	adminSrv := admin.New(db, accounts, plugins, engine, settings, cfg.MarketplaceURL)
+	adminSrv := admin.New(db, accounts, plugins, engine, settings, cfg.MarketplaceURL, cfg.DataDir, dbPath)
 
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", gw.Handler())

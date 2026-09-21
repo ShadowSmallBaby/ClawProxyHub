@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -169,4 +170,42 @@ func DSNToFilepath(dsn string) string {
 		}
 	}
 	return dsn
+}
+
+// ApplyPendingRestore 启动时（打开库之前）换入管理界面上传的备份：
+// <dataDir>/restore/cph.db 存在 → 当前库另存 cph.db.bak-<时间>，暂存文件移入；secret.key 同理。
+// 换入后清理 -wal/-shm 残留，避免旧日志混入新库。
+func ApplyPendingRestore(dbPath, dataDir string) error {
+	dir := filepath.Join(dataDir, "restore")
+	pending := filepath.Join(dir, "cph.db")
+	if _, err := os.Stat(pending); err != nil {
+		return nil
+	}
+	stamp := time.Now().Format("20060102-150405")
+	if _, err := os.Stat(dbPath); err == nil {
+		if err := os.Rename(dbPath, dbPath+".bak-"+stamp); err != nil {
+			return fmt.Errorf("backup current db: %w", err)
+		}
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		os.Remove(dbPath + suffix)
+	}
+	if err := os.Rename(pending, dbPath); err != nil {
+		return fmt.Errorf("move restored db: %w", err)
+	}
+	if key := filepath.Join(dir, "secret.key"); fileExists(key) {
+		dst := filepath.Join(dataDir, "secret.key")
+		if fileExists(dst) {
+			os.Rename(dst, dst+".bak-"+stamp)
+		}
+		os.Rename(key, dst)
+	}
+	os.RemoveAll(dir)
+	fmt.Printf("[database] restored backup into %s (previous saved as .bak-%s)\n", dbPath, stamp)
+	return nil
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }

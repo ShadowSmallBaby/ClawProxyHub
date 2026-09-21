@@ -38,6 +38,9 @@ message Manifest {
   // 插件可处理的对外端点方言。网关把任意协议入口归一化为统一信封后投递；
   // 声明之外的端点入口会被网关拒绝。空 = chat_completions + messages。
   repeated string endpoints = 11;
+  // 实例级设置的 JSON Schema（可选）。实例 = 插件下的一个站点/部署，
+  // 核心固定提供 name + base_url，此处声明站点特有的附加字段（如 client_id）。
+  string instance_schema = 12;
 }
 
 message HandshakeRequest {
@@ -82,12 +85,14 @@ message CredentialBlob {
   bytes blob = 2;          // 凭据内容，格式由插件自定义，核心不解析
   int64 updated_at = 3;    // 凭据最后刷新时间（Unix 秒）
   ProxyConfig proxy = 4;   // 账号所属分组的出站代理（无绑定为 nil）
+  int64 instance_id = 5;   // 账号所属实例（站点），插件据此取实例级设置
 }
 
 message LoginRequest {
   string method_id = 1;           // 使用的授权方式
   map<string, string> form = 2;   // 本步表单值
   bytes state = 3;                // 多步登录状态（插件签发，原样回传）
+  int64 instance_id = 4;          // 目标实例（登录时即可取实例级设置，如 base_url）
 }
 
 // LoginNextStep 登录未完成时插件指示的下一步。
@@ -157,6 +162,7 @@ message RefreshResult {
   Error error = 1;
   bytes blob = 2;           // 刷新后的凭据；为空表示无需变更
   AccountProfile profile = 3;
+  TaskNotification notification = 4; // 非空时核心生成一条站内通知（如密钥已更换，提醒重新同步模型）
 }
 
 // ---------- 模型目录 ----------
@@ -197,12 +203,30 @@ message EnvelopeMessage {
   repeated ToolCall tool_calls = 3; // assistant 消息携带的工具调用
   string tool_call_id = 4;      // role=tool 时的调用 id
   bytes raw = 5;                // 原始消息 JSON，插件需要细节时自取
+  // 非纯文本内容（图片 / 推理块）。为空时以 text 为准；非空时是完整有序内容
+  // （含 text 块），text 仍为文本拼接供只认文本的插件用。
+  repeated ContentPart parts = 6;
+  bool tool_error = 7;          // role=tool：工具执行失败（Anthropic tool_result.is_error）
+}
+
+// ContentPart 内容块：text / image / thinking / redacted_thinking。
+message ContentPart {
+  string type = 1;
+  string text = 2;       // text / thinking 正文
+  string media_type = 3; // image: MIME（image/png …）
+  string data = 4;       // image: base64 正文；redacted_thinking: 上游不透明数据
+  string url = 5;        // image: 远程地址（与 data 二选一）
+  string signature = 6;  // thinking: 上游签名（多轮回放必须原样带回，无签名的推理块不可回放）
+  // 提示缓存断点（Anthropic cache_control 对象 JSON，如 {"type":"ephemeral"}）。
+  // 只对 Anthropic 方言上游有意义，其余上游忽略。
+  string cache_control = 7;
 }
 
 message ToolDefinition {
   string name = 1;
   string description = 2;
   string parameters_schema = 3; // JSON Schema 字符串
+  string cache_control = 4;     // 提示缓存断点（同 ContentPart.cache_control）
 }
 
 message ToolChoice {
@@ -224,15 +248,23 @@ message StreamEvent {
     ToolCallDelta tool_call_delta = 3;
     MessageFinish message_finish = 4;
     TaskFailed task_failed = 5;
+    ReasoningDelta reasoning_delta = 6;
   }
 }
 
 message MessageStart {
   string model = 1;   // 实际使用的上游模型
+  Usage usage = 2;    // 上游在流开头已知的用量（Anthropic message_start 的输入/缓存计数），可空
 }
 
 message ContentDelta {
   string text = 1;    // 增量文本
+}
+
+// ReasoningDelta 推理/思考增量（OpenAI reasoning_content / Anthropic thinking）。
+message ReasoningDelta {
+  string text = 1;      // 推理文本增量
+  string signature = 2; // 推理块签名（Anthropic 在块尾一次给出；非空时 text 为空）
 }
 
 message ToolCallDelta {
@@ -241,15 +273,21 @@ message ToolCallDelta {
   string arguments_delta = 3;
 }
 
+// Usage 统一用量，采用 Anthropic 语义：input_tokens 为非缓存输入，缓存读/写单列，
+// 三者之和才是总输入。OpenAI 方言的 prompt_tokens（含缓存）由 SDK 解析器拆开、
+// 网关出口再合回。
 message Usage {
-  int64 input_tokens = 1;
+  int64 input_tokens = 1;          // 非缓存输入 token
   int64 output_tokens = 2;
-  int64 cached_tokens = 3; // 命中缓存的输入 token（上游有透出时上报）
+  int64 cached_tokens = 3;         // 缓存读取（命中）token
+  int64 cache_creation_tokens = 4; // 缓存写入（创建）token
+  int64 reasoning_tokens = 5;      // 输出中的推理 token（OpenAI 系上游透出时上报，含在 output_tokens 内）
 }
 
 message MessageFinish {
-  string finish_reason = 1; // stop / tool_calls / length / content_filter
+  string finish_reason = 1; // stop / stop_sequence / tool_calls / length / content_filter
   Usage usage = 2;
+  string stop_sequence = 3; // finish_reason=stop_sequence 时命中的序列原值（Anthropic 直通无损）
 }
 
 message TaskFailed {
@@ -270,10 +308,23 @@ message TaskCapabilities {
   repeated TaskCapability capabilities = 1;
 }
 
+// 能力查询：instance_id>0 时插件可按实例配置裁剪能力（如实例关闭签到则不声明 checkin）；0 = 全量声明。
+// 线格式与旧 Empty 兼容（旧插件忽略未知字段）。
+message TaskCapabilitiesRequest {
+  int64 instance_id = 1;
+}
+
 message RunTaskRequest {
   string capability_id = 1;
   CredentialBlob credential = 2;    // per_account 时逐账号注入
   map<string, string> context = 3;  // 上次执行摘要等上下文
+}
+
+// 任务产生的站内通知（核心落库，管理界面头部铃铛提醒）
+message TaskNotification {
+  string title = 1;    // 缩略标题（如「New API · 主站 该签到了」）
+  string content = 2;  // 正文（如「请前往 https://... 签到」）
+  string level = 3;    // info / warning / error（空 = info）
 }
 
 message RunTaskResponse {
@@ -282,6 +333,7 @@ message RunTaskResponse {
   bytes blob = 3;                  // 变更后的凭据，核心代存
   string summary = 4;              // 执行摘要，写执行历史
   string detail_json = 5;          // 结构化明细快照（如成长任务列表），核心持久化到 task_runs.detail_json
+  TaskNotification notification = 6; // 非空时核心生成一条站内通知
 }
 
 // ---------- 宿主能力（反向：插件调用核心） ----------
@@ -293,7 +345,8 @@ message LogEntry {
 }
 
 message GetProxyRequest {
-  string group_id = 1; // 插件按账号所属分组取代理配置
+  string group_id = 1;   // 插件按账号所属分组取代理配置
+  string account_id = 2; // 账号级代理优先（非空时先查账号绑定，再回退分组）
 }
 
 message ProxyConfig {
@@ -310,10 +363,11 @@ message StorePutRequest { string key = 1; bytes value = 2; }
 
 // 插件设置（核心管理界面在线编辑，存 plugins.settings_json）
 message GetSettingsRequest {
-  string plugin = 1; // 插件 id（插件侧调用时自带）
+  string plugin = 1;     // 插件 id（插件侧调用时自带）
+  int64 instance_id = 2; // >0 时返回合并视图：插件设置 ← 实例设置 ← {"base_url": 实例地址}
 }
 message GetSettingsResponse {
-  bytes values = 1; // JSON 对象，结构由 manifest.settings_schema 定义
+  bytes values = 1; // JSON 对象，结构由 manifest.settings_schema（+ instance_schema）定义
 }
 
 // ============================================================
@@ -333,7 +387,7 @@ service ClawPlugin {
   // 核心链路：统一信封进，事件流出
   rpc Chat(ChatRequest) returns (stream StreamEvent);
   // 任务能力（核心调度触发时调用）
-  rpc ListTaskCapabilities(Empty) returns (TaskCapabilities);
+  rpc ListTaskCapabilities(TaskCapabilitiesRequest) returns (TaskCapabilities);
   rpc RunTask(RunTaskRequest) returns (RunTaskResponse);
 }
 

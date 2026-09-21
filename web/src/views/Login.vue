@@ -3,8 +3,11 @@
     <!-- 左侧：品牌宣发区 -->
     <div class="login-brand">
       <div class="brand-header">
-        <img class="brand-logo" src="/logo.png" alt="ClawProxyHub" />
-        <h1>Claw<span>ProxyHub</span></h1>
+        <img class="brand-logo" :src="brandLogo" :alt="branding.name" />
+        <h1 :class="{ custom: brandCustom }">
+          <template v-if="brandCustom">{{ branding.name }}</template>
+          <template v-else>Claw<span>ProxyHub</span></template>
+        </h1>
       </div>
       <p class="brand-slogan">{{ $t('login.slogan') }}</p>
       <ul class="brand-features">
@@ -22,7 +25,7 @@
     <!-- 右侧：登录区域 -->
     <div class="login-panel">
       <div class="login-card">
-        <img class="login-logo" src="/logo.png" alt="ClawProxyHub" />
+        <img class="login-logo" :src="brandLogo" :alt="branding.name" />
         <h2>{{ $t('login.welcome') }}</h2>
         <p class="login-sub">{{ $t('login.sub') }}</p>
         <t-form @submit="onLogin">
@@ -54,12 +57,14 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { api, setToken } from '../api/client'
+import { branding, brandLogo, brandCustom, ensureBranding } from '../utils/branding'
 
 const { t } = useI18n()
 const router = useRouter()
 const username = ref('')
 const password = ref('')
 const loading = ref(false)
+ensureBranding()
 
 const features = computed(() => [
   { icon: '🔀', title: t('login.featRouting'), desc: t('login.featRoutingDesc') },
@@ -140,6 +145,14 @@ async function onLogin() {
 .brand-header h1 span {
   font-weight: 300;
   opacity: 0.8;
+}
+
+/* 自定义品牌名：浅蓝→紫渐变字（深色底上可读） */
+.brand-header h1.custom {
+  background: linear-gradient(90deg, #b8ccff, #c4b5ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .brand-slogan {

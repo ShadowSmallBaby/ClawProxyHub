@@ -9,11 +9,14 @@
         <t-tag variant="light">{{ dict(strategyDict, row.Strategy) }}</t-tag>
       </template>
       <template #groups="{ row }">
-        <t-space size="small">
-          <t-tag v-for="(g, i) in parseGroups(row.GroupsJSON)" :key="i" theme="primary" variant="light-outline">
+        <div class="group-cell">
+          <t-tag v-for="(g, i) in visibleGroups(row)" :key="i" theme="primary" variant="light-outline">
             {{ groupLabel(g) }}
           </t-tag>
-        </t-space>
+          <t-link v-if="parseGroups(row.GroupsJSON).length > GROUP_FOLD" theme="primary" size="small" @click="toggleExpand(row.ID)">
+            {{ expanded.has(row.ID) ? $t('common.collapse') : $t('common.moreItems', { n: parseGroups(row.GroupsJSON).length - GROUP_FOLD }) }}
+          </t-link>
+        </div>
       </template>
       <template #timeout="{ row }">
         {{ row.TimeoutSeconds > 0 ? row.TimeoutSeconds + 's' : $t('routes.global') }}
@@ -50,17 +53,32 @@
         <t-form-item :label="$t('routes.groupMapping')" mark>
           <div class="entries">
             <div v-for="(e, i) in form.groups" :key="i" class="entry">
-              <bind-select v-model="e.group_id" :multiple="false" :options="groupOptions" :placeholder="$t('routes.groupPh')" style="width: 160px" />
-              <t-input v-model="e.model" :placeholder="$t('routes.modelPh')" style="flex: 1" />
-              <t-input-number v-model="e.weight" :min="1" :max="100" theme="column" style="width: 110px" :placeholder="$t('routes.weightPh')" />
+              <bind-select v-model="e.group_id" :multiple="false" :options="groupOptions" :placeholder="$t('routes.groupPh')" style="width: 160px" @update:model-value="loadGroupModels(e.group_id)" />
+              <!-- 模型：下拉取分组账号模型并集，也可手动输入 -->
+              <t-select
+                v-model="e.model"
+                filterable
+                creatable
+                clearable
+                :options="modelOptions(e.group_id)"
+                :placeholder="$t('routes.modelPh')"
+                style="flex: 1"
+              />
+              <t-input-number v-model="e.weight" :min="0" :max="100" theme="column" style="width: 110px" :placeholder="$t('routes.weightPh')" />
               <t-link theme="danger" @click="form.groups.splice(i, 1)">{{ $t('routes.removeEntry') }}</t-link>
             </div>
-            <t-link theme="primary" @click="form.groups.push({ group_id: null, weight: 100, model: '' })">{{ $t('routes.addGroup') }}</t-link>
+            <div class="entry-foot">
+              <t-link theme="primary" @click="form.groups.push({ group_id: undefined, weight: 0, model: '' })">{{ $t('routes.addGroup') }}</t-link>
+              <span class="hint" :class="{ bad: weightSum !== 100 }">{{ $t('routes.weightSum', { n: weightSum }) }}</span>
+            </div>
           </div>
         </t-form-item>
         <t-form-item :label="$t('routes.timeout')">
           <t-input-number v-model="form.timeout_seconds" :min="0" :max="3600" theme="column" style="width: 140px" />
           <span class="hint">{{ $t('routes.timeoutHint') }}</span>
+        </t-form-item>
+        <t-form-item :label="$t('routes.userAgent')" :help="$t('routes.userAgentHint')">
+          <t-input v-model="form.user_agent" :placeholder="$t('routes.userAgentPh')" />
         </t-form-item>
         <t-form-item :label="$t('routes.failover')">
           <t-switch v-model="form.failover_enabled" />
@@ -106,6 +124,7 @@ const form = reactive({
   strategy: 'round_robin',
   groups: [{ group_id: undefined, weight: 100, model: '' }] as RouteGroupEntry[],
   timeout_seconds: 0,
+  user_agent: '',
   failover_enabled: false,
   failover_codes: [] as string[],
   failover_group_id: null as number | null,
@@ -126,8 +145,36 @@ const groupOptions = computed(() =>
   groups.value.map((g) => ({ value: g.id, label: `${g.name} (${g.plugin_label || g.plugin})` })),
 )
 
+// 分组 → 账号模型并集（按需拉取并缓存）
+const groupModelsCache = ref<Record<number, string[]>>({})
+async function loadGroupModels(groupID: number | null | undefined) {
+  if (!groupID || groupModelsCache.value[groupID]) return
+  const resp = await api.get<{ models: string[] }>(`/admin/groups/${groupID}/models`).catch(() => ({ models: [] }))
+  groupModelsCache.value = { ...groupModelsCache.value, [groupID]: resp.models ?? [] }
+}
+function modelOptions(groupID: number | null | undefined) {
+  return (groupID ? groupModelsCache.value[groupID] ?? [] : []).map((m) => ({ value: m, label: m }))
+}
+
+const weightSum = computed(() => form.groups.reduce((s, e) => s + (Number(e.weight) || 0), 0))
+
 function parseGroups(json: string): RouteGroupEntry[] {
   try { return JSON.parse(json) } catch { return [] }
+}
+
+// 分组列默认只展示前 GROUP_FOLD 条，其余点「更多」展开
+const GROUP_FOLD = 3
+const expanded = ref(new Set<number>())
+
+function visibleGroups(row: RouteInfo): RouteGroupEntry[] {
+  const all = parseGroups(row.GroupsJSON)
+  return expanded.value.has(row.ID) ? all : all.slice(0, GROUP_FOLD)
+}
+
+function toggleExpand(id: number) {
+  const next = new Set(expanded.value)
+  next.has(id) ? next.delete(id) : next.add(id)
+  expanded.value = next
 }
 
 function groupLabel(e: RouteGroupEntry): string {
@@ -149,30 +196,37 @@ function openCreate() {
   editingID.value = 0
   Object.assign(form, {
     name: '', strategy: 'round_robin',
-    groups: [{ group_id: null, weight: 100, model: '' }],
-    timeout_seconds: 0, failover_enabled: false, failover_codes: [], failover_group_id: null, failover_model: '',
+    groups: [{ group_id: undefined, weight: 100, model: '' }],
+    timeout_seconds: 0, user_agent: '', failover_enabled: false, failover_codes: [], failover_group_id: null, failover_model: '',
   })
   dialogVisible.value = true
 }
 
 function openEdit(row: RouteInfo) {
   editingID.value = row.ID
+  const parsed = parseGroups(row.GroupsJSON)
   Object.assign(form, {
     name: row.Name,
     strategy: row.Strategy,
-    groups: parseGroups(row.GroupsJSON).length ? parseGroups(row.GroupsJSON) : [{ group_id: null, weight: 100, model: '' }],
+    groups: parsed.length ? parsed : [{ group_id: undefined, weight: 100, model: '' }],
     timeout_seconds: row.TimeoutSeconds,
+    user_agent: row.UserAgent ?? '',
     failover_enabled: row.FailoverEnabled,
     failover_codes: [row.FailoverOn4xx && '4xx', row.FailoverOn5xx && '5xx'].filter(Boolean) as string[],
     failover_group_id: row.FailoverGroupID,
     failover_model: row.FailoverModel,
   })
+  parsed.forEach((e) => loadGroupModels(e.group_id))
   dialogVisible.value = true
 }
 
 function validate(): boolean {
   if (!form.name || !form.groups.length || form.groups.some((e) => !e.group_id || !e.model)) {
     MessagePlugin.warning(t('routes.errForm'))
+    return false
+  }
+  if (form.groups.some((e) => e.weight < 0 || e.weight > 100) || weightSum.value !== 100) {
+    MessagePlugin.warning(t('routes.errWeight', { n: weightSum.value }))
     return false
   }
   if (form.failover_enabled) {
@@ -196,6 +250,7 @@ async function save() {
     strategy: form.strategy,
     groups: form.groups,
     timeout_seconds: form.timeout_seconds,
+    user_agent: form.user_agent.trim(),
     failover_enabled: form.failover_enabled,
     failover_on_4xx: form.failover_codes.includes('4xx'),
     failover_on_5xx: form.failover_codes.includes('5xx'),
@@ -239,5 +294,8 @@ onMounted(load)
 <style scoped>
 .entries { width: 100% }
 .entry { display: flex; gap: 8px; align-items: center; margin-bottom: 8px }
+.entry-foot { display: flex; align-items: center; gap: 12px }
 .hint { margin-left: 8px; color: var(--td-text-color-placeholder); font-size: 12px }
+.hint.bad { color: var(--td-error-color) }
+.group-cell { display: flex; flex-direction: column; align-items: center; gap: 4px }
 </style>

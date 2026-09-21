@@ -223,7 +223,7 @@ func (s *stubPlugin) GetProfile(ctx context.Context, cred *pb.CredentialBlob) (*
 	return &pb.AccountProfile{DisplayName: "stub-account", Healthy: true}, nil
 }
 
-func (s *stubPlugin) ListTaskCapabilities(ctx context.Context, _ *pb.Empty) (*pb.TaskCapabilities, error) {
+func (s *stubPlugin) ListTaskCapabilities(ctx context.Context, _ *pb.TaskCapabilitiesRequest) (*pb.TaskCapabilities, error) {
 	return &pb.TaskCapabilities{
 		Capabilities: []*pb.TaskCapability{
 			{

@@ -28,17 +28,19 @@ type Server struct {
 	engine         *task.Engine
 	settings       *setting.Store
 	marketplaceURL string
+	dataDir        string // 数据目录（备份含 secret.key / restore 暂存）
+	dbPath         string // SQLite 文件路径（系统信息体积 / 备份）
 }
 
 // New 创建管理后台；表空且配置了 CPH_ADMIN_PASSWORD 时自动引导建号。
-func New(db *gorm.DB, accounts *account.Service, plugins *plugin.Manager, engine *task.Engine, settings *setting.Store, marketplaceURL string) *Server {
+func New(db *gorm.DB, accounts *account.Service, plugins *plugin.Manager, engine *task.Engine, settings *setting.Store, marketplaceURL, dataDir, dbPath string) *Server {
 	s := &Server{
 		db: db, accounts: accounts, plugins: plugins, engine: engine,
-		settings: settings, marketplaceURL: marketplaceURL,
+		settings: settings, marketplaceURL: marketplaceURL, dataDir: dataDir, dbPath: dbPath,
 	}
-	// 市场地址初始化：未配置时落官方默认（config 默认 = env 覆盖或官方地址），
-	// 用户后续可在系统设置改为自建市场；生效顺序：settings 配置 > config 默认 > 离线兜底
-	settings.EnsureDefault(setting.KeyMarketplaceURL, marketplaceURL)
+	// 插件源初始化：源列表缺失时用官方地址（config 默认 = env 覆盖或官方地址）建 official 源，
+	// 旧版 marketplace_url 自建地址一并导入；生效顺序：启用源聚合 > 离线兜底
+	settings.EnsurePluginSources(marketplaceURL)
 	s.ensureAdminSeed()
 	return s
 }
@@ -58,17 +60,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/setup-status", s.setupStatus)
 	mux.HandleFunc("POST /admin/setup", s.setup)
 	mux.HandleFunc("POST /admin/login", s.login)
+	mux.HandleFunc("GET /admin/branding", s.getBranding)
 
 	r := authed{mux: mux, s: s}
 	s.routeSession(r)
 	s.routePlugins(r)
 	s.routeAccounts(r)
+	s.routeInstances(r)
 	s.routeKeys(r)
 	s.routeGroups(r)
 	s.routeProxies(r)
 	s.routeRoutes(r)
 	s.routeTasks(r)
 	s.routeOAuth(r)
+	s.routeLogs(r)
+	s.routeNotifications(r)
+	s.routeSystem(r)
 	s.routeSettingsStats(r)
 	return mux
 }
@@ -97,9 +104,13 @@ func (s *Server) routePlugins(r authed) {
 	r.h("GET /admin/plugins/marketplace", s.marketplace)
 	r.h("POST /admin/plugins/install-market", s.installMarket)
 	r.h("POST /admin/plugins/install-upload", s.installUpload)
+	r.h("GET /admin/plugin-sources", s.listPluginSources)
+	r.h("GET /admin/plugin-sources/probe", s.probePluginSource)
+	r.h("PUT /admin/plugin-sources", s.putPluginSources)
 	r.h("POST /admin/plugins/{name}/stop", s.stopPlugin)
 	r.h("POST /admin/plugins/{name}/start", s.startPlugin)
 	r.h("DELETE /admin/plugins/{name}", s.uninstallPlugin)
+	r.h("GET /admin/plugins/{name}/impact", s.pluginImpact)
 }
 
 // routeAccounts 账号：登录 / 详情 / 模型 / 代理 / 调度 / 测试。
@@ -110,6 +121,7 @@ func (s *Server) routeAccounts(r authed) {
 	r.h("GET /admin/accounts/{id}/models", s.accountModels)
 	r.h("PUT /admin/accounts/{id}/models", s.saveAccountModels)
 	r.h("DELETE /admin/accounts/{id}", s.deleteAccount)
+	r.h("GET /admin/accounts/{id}/impact", s.accountImpact)
 	r.h("POST /admin/accounts/{id}/refresh", s.refreshAccount)
 	r.h("POST /admin/accounts/{id}/pause", s.pauseAccount)
 	r.h("POST /admin/accounts/{id}/resume", s.resumeAccount)
@@ -134,9 +146,11 @@ func (s *Server) routeKeys(r authed) {
 func (s *Server) routeGroups(r authed) {
 	r.h("GET /admin/groups", s.listGroups)
 	r.h("POST /admin/groups", s.createGroup)
+	r.h("PUT /admin/groups/{id}", s.updateGroup)
 	r.h("DELETE /admin/groups/{id}", s.deleteGroup)
 	r.h("PUT /admin/groups/{id}/proxies", s.bindGroupProxies)
 	r.h("GET /admin/groups/{id}/proxies", s.listGroupProxies)
+	r.h("GET /admin/groups/{id}/models", s.groupModels)
 }
 
 // routeProxies 出站代理增删改查 + 连通性测试。
@@ -161,16 +175,16 @@ func (s *Server) routeTasks(r authed) {
 	r.h("GET /admin/task-rules", s.listTaskRules)
 	r.h("POST /admin/task-rules", s.createTaskRule)
 	r.h("POST /admin/task-rules/{id}/toggle", s.toggleTaskRule)
+	r.h("PUT /admin/task-rules/{id}", s.updateTaskRule)
 	r.h("DELETE /admin/task-rules/{id}", s.deleteTaskRule)
 	r.h("POST /admin/task-rules/{id}/run", s.runTaskRule)
 	r.h("GET /admin/task-runs", s.listTaskRuns)
 }
 
-// routeSettingsStats 系统设置 / 日志 / 仪表盘统计。
+// routeSettingsStats 系统设置 / 仪表盘统计。
 func (s *Server) routeSettingsStats(r authed) {
 	r.h("GET /admin/settings", s.getSettings)
 	r.h("PUT /admin/settings", s.putSettings)
-	r.h("GET /admin/logs", s.listLogs)
 	r.h("GET /admin/stats", s.dashboardStats)
 	r.h("GET /admin/stats/quota", s.dashboardQuota)
 	r.h("GET /admin/stats/trend", s.dashboardTrend)
@@ -188,6 +202,11 @@ func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request) {
 		Icon        string            `json:"icon"` // 包内相对路径（空 = 前端兜底）
 		Capability  []string          `json:"capabilities"`
 		AuthMethods []*authMethodView `json:"auth_methods"`
+		// 实例级设置 JSON Schema（空 = 实例只有 name + base_url）
+		InstanceSchema string `json:"instance_schema,omitempty"`
+		// 契约版本与多实例能力（旧契约 / 未声明 instances 的插件只有默认实例，前端不展示实例选择）
+		ProtocolVersion int32 `json:"protocol_version"`
+		MultiInstance   bool  `json:"multi_instance"`
 	}
 	var out []pluginView
 	for _, name := range s.plugins.Names() {
@@ -198,6 +217,9 @@ func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request) {
 		m := inst.Manifest
 		v := pluginView{Name: m.Name, Label: brandName(m), Version: m.Version, Author: m.Author,
 			Capability: m.Capabilities}
+		v.InstanceSchema = m.InstanceSchema
+		v.ProtocolVersion = inst.Protocol
+		v.MultiInstance = inst.MultiInstance()
 		// icon：以落盘文件为准（前端 <img> 直接引用，免鉴权静态端点）
 		if _, ok := s.plugins.IconFile(m.Name); ok {
 			v.Icon = "/assets/plugins/" + m.Name + "/icon"
@@ -229,13 +251,14 @@ func (s *Server) authMethods(w http.ResponseWriter, r *http.Request) {
 }
 
 // submitLogin POST /admin/accounts/login — 提交一步登录（首步或后续步）。
-// body: {plugin, method_id, form: {..}, state: "<base64>"}
+// body: {plugin, method_id, form: {..}, state: "<base64>", instance_id?}（instance_id 缺省 = 插件默认实例）
 func (s *Server) submitLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Plugin   string            `json:"plugin"`
-		MethodID string            `json:"method_id"`
-		Form     map[string]string `json:"form"`
-		State    string            `json:"state"`
+		Plugin     string            `json:"plugin"`
+		MethodID   string            `json:"method_id"`
+		Form       map[string]string `json:"form"`
+		State      string            `json:"state"`
+		InstanceID int64             `json:"instance_id"`
 	}
 	if !readBody(w, r, &body) {
 		return
@@ -249,7 +272,7 @@ func (s *Server) submitLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	outcome, err := s.accounts.SubmitLogin(r.Context(), body.Plugin, body.MethodID, body.Form, state)
+	outcome, err := s.accounts.SubmitLogin(r.Context(), body.Plugin, body.MethodID, body.Form, state, body.InstanceID)
 	if err != nil {
 		// 业务错误（验证码错误/凭据格式/上游拒绝）用 400：401 专属管理员会话失效，
 		// 前端见 401 会清 token 跳登录页
@@ -287,6 +310,7 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 	type acctView struct {
 		ID          int64   `json:"id"`
 		PluginID    int64   `json:"plugin_id"`
+		InstanceID  int64   `json:"instance_id"`
 		GroupIDs    []int64 `json:"group_ids"`
 		Name        string  `json:"display_name"`
 		Status      string  `json:"status"`
@@ -300,7 +324,7 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	var out []acctView
 	for _, a := range accts {
-		v := acctView{ID: a.ID, PluginID: a.PluginID, GroupIDs: accountGroupIDs(s.db, a.ID), Name: a.DisplayName,
+		v := acctView{ID: a.ID, PluginID: a.PluginID, InstanceID: a.InstanceID, GroupIDs: accountGroupIDs(s.db, a.ID), Name: a.DisplayName,
 			Status: a.Status, PauseReason: a.PauseReason}
 		if a.PausedUntil != nil {
 			t := a.PausedUntil.Format("2006-01-02T15:04:05Z07:00")
@@ -328,13 +352,21 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"accounts": out})
 }
 
-// deleteAccount DELETE /admin/accounts/{id}
+// deleteAccount DELETE /admin/accounts/{id} — 级联删除只指向该账号的任务规则与执行历史。
 func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request) {
-	if err := s.accounts.Delete(parseInt(r.PathValue("id"))); err != nil {
+	id := parseInt(r.PathValue("id"))
+	var acct model.Account
+	if err := s.db.First(&acct, id).Error; err != nil {
 		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+	sc := scopeAccount(s.db, id)
+	impact := s.impact(sc)
+	if err := s.cascadeDelete(sc); err != nil {
+		http.Error(w, `{"error":"db"}`, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"deleted": true, "impact": impact})
 }
 
 // refreshAccount POST /admin/accounts/{id}/refresh

@@ -19,6 +19,7 @@ import (
 	accountpkg "github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/router"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
@@ -56,6 +57,7 @@ type PluginRegistry interface {
 // SettingsReader 全局设置读取（setting.Store 注入，nil 时走默认值）。
 type SettingsReader interface {
 	FirstEventTimeout() time.Duration
+	GatewayUserAgent() string
 }
 
 // New 创建网关。
@@ -257,10 +259,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 	}
 	var pluginName string
 	var groupID int64 // 路由命中的分组（凭据出站代理优先用它）
+	var routeUA string
 	if resolved != nil {
 		isRoute = true
 		req.Model = resolved.RealModel // 对外名 → 分组真实模型
 		account = resolved.Account
+		if resolved.Route != nil {
+			routeUA = resolved.Route.UserAgent
+		}
 		if account == nil {
 			// 路由分组里没有可用账号（未分组 / 全部过期）——明确报错，
 			// 不把空凭据丢给插件
@@ -296,6 +302,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 				fmt.Errorf("model %q not in authorized routes", req.Model)))
 			return
 		}
+	}
+	// 对话 UA：路由 > 全局 > 客户端；只做解析下发，是否透传上游由插件决定
+	if ua := firstNonEmpty(routeUA, s.settings.GatewayUserAgent(), r.UserAgent()); ua != "" {
+		if req.Extra == nil {
+			req.Extra = map[string]string{}
+		}
+		req.Extra[sdk.ExtraClientUserAgent] = ua
 	}
 
 	var cred *pb.CredentialBlob
@@ -529,34 +542,27 @@ func (s *Server) firstEventTimeout(route *model.Route) time.Duration {
 
 // buildCred 账号 → 凭据信封（groupID 为路由命中的分组，出站代理优先用它）。
 func (s *Server) buildCred(account *model.Account, groupID int64) *pb.CredentialBlob {
-	cred := &pb.CredentialBlob{
-		AccountId: fmt.Sprintf("%d", account.ID),
-		Blob:      accountpkg.DecryptCredential(s.dataDir, account.CredentialBlob),
-	}
-	if account.LastRefreshAt != nil {
-		cred.UpdatedAt = account.LastRefreshAt.Unix()
-	}
-	cred.Proxy = accountpkg.ProxyForAccountIn(s.db, account.ID, groupID)
-	return cred
+	return accountpkg.BuildCred(s.db, s.dataDir, account, groupID)
 }
 
 // requestLogCtx 单次请求的日志上下文。
 type requestLogCtx struct {
-	key          *model.Key
-	account      *model.Account
-	model        string
-	routeName    string // 对外路由名（未命中路由时为空）
-	protocol     string
-	stream       bool
-	input        int64
-	output       int64
-	cached       int64
-	status       int
-	startedAt    time.Time // 请求计时起点（首字/总耗时同源，保证总耗时 ≥ 首字）
-	firstTokenMs int32
-	clientIP     string
-	userAgent    string
-	errBrief     string
+	key           *model.Key
+	account       *model.Account
+	model         string
+	routeName     string // 对外路由名（未命中路由时为空）
+	protocol      string
+	stream        bool
+	input         int64
+	output        int64
+	cached        int64 // 缓存读取
+	cacheCreation int64 // 缓存写入
+	status        int
+	startedAt     time.Time // 请求计时起点（首字/总耗时同源，保证总耗时 ≥ 首字）
+	firstTokenMs  int32
+	clientIP      string
+	userAgent     string
+	errBrief      string
 }
 
 // write 落库 request_logs。总耗时从 c.startedAt 算，与首字同源（保证 ≥ 首字）。
@@ -568,7 +574,7 @@ func (c *requestLogCtx) write(db *gorm.DB) {
 	rl := &model.RequestLog{
 		Model: c.model, RouteName: c.routeName, Protocol: c.protocol, Status: int32(c.status),
 		InputTokens: int32(c.input), OutputTokens: int32(c.output),
-		CachedTokens: int32(c.cached), LatencyMs: latencyMs,
+		CachedTokens: int32(c.cached), CacheCreationTokens: int32(c.cacheCreation), LatencyMs: latencyMs,
 		FirstTokenMs: c.firstTokenMs, ClientIP: c.clientIP, UserAgent: c.userAgent,
 		ErrorBrief: c.errBrief,
 	}
@@ -603,4 +609,13 @@ func truncStr(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

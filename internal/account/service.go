@@ -51,15 +51,23 @@ func (s *Service) AuthMethods(pluginName string) ([]*pb.AuthMethod, error) {
 }
 
 // SubmitLogin 提交一步登录。完成时自动建档并返回账号 id；未完成返回下一步。
-// 调用方（管理 API）只需把 next 原样透给前端。
-func (s *Service) SubmitLogin(ctx context.Context, pluginName, methodID string, form map[string]string, state []byte) (*LoginOutcome, error) {
+// instanceID 为目标实例（0 = 插件默认实例）；调用方（管理 API）只需把 next 原样透给前端。
+func (s *Service) SubmitLogin(ctx context.Context, pluginName, methodID string, form map[string]string, state []byte, instanceID int64) (*LoginOutcome, error) {
 	inst, ok := s.mgr.Get(pluginName)
 	if !ok {
 		return nil, fmt.Errorf("plugin %q not running", pluginName)
 	}
+	var p model.Plugin
+	if err := s.db.Where("name = ?", pluginName).First(&p).Error; err != nil {
+		return nil, fmt.Errorf("plugin record missing for %q", pluginName)
+	}
+	target, err := ResolveInstance(s.db, p.ID, instanceID, inst.MultiInstance())
+	if err != nil {
+		return nil, err
+	}
 
 	result, err := inst.Client().Login(ctx, &pb.LoginRequest{
-		MethodId: methodID, Form: form, State: state,
+		MethodId: methodID, Form: form, State: state, InstanceId: target.ID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("plugin login: %w", err)
@@ -71,8 +79,8 @@ func (s *Service) SubmitLogin(ctx context.Context, pluginName, methodID string, 
 		return &LoginOutcome{Next: result.Next}, nil
 	}
 
-	// 登录完成 → 建档（plugin 记录按名补查）
-	acct, err := s.create(inst.Manifest.Name, result.Blob, result.Profile)
+	// 登录完成 → 建档
+	acct, err := s.create(p.ID, target.ID, result.Blob, result.Profile)
 	if err != nil {
 		return nil, err
 	}
@@ -88,16 +96,13 @@ type LoginOutcome struct {
 	Profile   *pb.AccountProfile
 }
 
-// create 凭据入库。
-func (s *Service) create(pluginName string, blob []byte, profile *pb.AccountProfile) (*model.Account, error) {
-	var p model.Plugin
-	if err := s.db.Where("name = ?", pluginName).First(&p).Error; err != nil {
-		return nil, fmt.Errorf("plugin record missing for %q", pluginName)
-	}
-	pluginID := p.ID
+// create 凭据入库（账号归属 pluginID/instanceID 已由调用方校验）。
+// profile.healthy=false：鉴权有效但暂不可用于对话调度（如尚未取得 API 密钥）→ 以 disabled 入库，任务照常。
+func (s *Service) create(pluginID, instanceID int64, blob []byte, profile *pb.AccountProfile) (*model.Account, error) {
 	name := ""
 	profileJSON := "{}"
 	creditsJSON := ""
+	status, reason := "active", ""
 	if profile != nil {
 		name = profile.DisplayName
 		// 登录返回的 profile（含 quota）直接入库，积分首刷前即有值
@@ -105,16 +110,34 @@ func (s *Service) create(pluginName string, blob []byte, profile *pb.AccountProf
 			profileJSON = string(b)
 		}
 		creditsJSON = profile.CreditsJson
+		if !profile.Healthy {
+			status, reason = "disabled", unhealthyReason
+		}
 	}
 	acct := &model.Account{
-		PluginID: pluginID, DisplayName: name,
-		CredentialBlob: EncryptCredential(s.dataDir, blob), Status: "active",
+		PluginID: pluginID, InstanceID: instanceID, DisplayName: name,
+		CredentialBlob: EncryptCredential(s.dataDir, blob), Status: status, PauseReason: reason,
 		ProfileJSON: profileJSON, CreditsJSON: creditsJSON, LastRefreshAt: ptrTime(time.Now()),
 	}
 	if err := s.db.Create(acct).Error; err != nil {
 		return nil, err
 	}
 	return acct, nil
+}
+
+// unhealthyReason 插件报告 healthy=false 时的停用原因（前端调度列展示）。
+const unhealthyReason = "凭据暂不可用于调度（如未取得 API 密钥），刷新取得后可手动启用"
+
+// Schedulable 账号凭据是否可用于对话调度（profile.healthy；无快照视为可用）。
+func Schedulable(acct *model.Account) bool {
+	if acct.ProfileJSON == "" {
+		return true
+	}
+	var p pb.AccountProfile
+	if protojson.Unmarshal([]byte(acct.ProfileJSON), &p) != nil {
+		return true
+	}
+	return p.Healthy
 }
 
 // Refresh 刷新单账号凭据。刷新失败且凭据确已失效时标记 expired。
@@ -132,11 +155,7 @@ func (s *Service) Refresh(ctx context.Context, accountID int64) (*model.Account,
 		return nil, fmt.Errorf("plugin %q not running", pluginName)
 	}
 
-	cred := &pb.CredentialBlob{AccountId: fmt.Sprintf("%d", acct.ID), Blob: DecryptCredential(s.dataDir, acct.CredentialBlob)}
-	if acct.LastRefreshAt != nil {
-		cred.UpdatedAt = acct.LastRefreshAt.Unix()
-	}
-	cred.Proxy = ProxyForAccount(s.db, acct.ID)
+	cred := BuildCred(s.db, s.dataDir, &acct, 0)
 	result, err := inst.Client().Refresh(ctx, cred)
 	if err != nil {
 		return nil, fmt.Errorf("plugin refresh: %w", err)
@@ -163,10 +182,33 @@ func (s *Service) Refresh(ctx context.Context, accountID int64) (*model.Account,
 			updates["credits_json"] = result.Profile.CreditsJson
 		}
 	}
-	updates["status"] = "active" // 刷新成功即恢复
+	// 状态：expired → active（凭据已恢复）；disabled 保留（用户手动停用 / 尚不可调度，取得凭据后手动启用）；
+	// 插件报告 healthy=false → disabled 并标注原因
+	switch {
+	case result.Profile != nil && !result.Profile.Healthy:
+		updates["status"], updates["pause_reason"] = "disabled", unhealthyReason
+	case acct.Status == "expired":
+		updates["status"] = "active"
+	case acct.Status == "disabled" && acct.PauseReason == unhealthyReason:
+		updates["pause_reason"] = "" // 凭据已可用，等待手动启用
+	}
 	s.db.Model(&acct).Updates(updates)
+	// 插件要求提醒（如密钥已更换需重新同步模型）→ 站内通知
+	if n := result.Notification; n != nil && n.Title != "" {
+		s.db.Create(&model.Notification{
+			Title: truncStr(n.Title, 256), Content: truncStr(n.Content, 4000),
+			Level: orDefault(n.Level, "info"), AccountID: &acct.ID,
+		})
+	}
 	s.db.First(&acct, accountID)
 	return &acct, nil
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 // Models 用账号凭据拉插件模型目录（账号级可见模型）。
@@ -179,13 +221,7 @@ func (s *Service) Models(ctx context.Context, accountID int64) ([]*pb.ModelInfo,
 	if err != nil {
 		return nil, err
 	}
-	cred := &pb.CredentialBlob{
-		AccountId: fmt.Sprintf("%d", acct.ID),
-		Blob:      DecryptCredential(s.dataDir, acct.CredentialBlob),
-	}
-	if acct.LastRefreshAt != nil {
-		cred.UpdatedAt = acct.LastRefreshAt.Unix()
-	}
+	cred := BuildCred(s.db, s.dataDir, &acct, 0)
 	inst, ok := s.mgr.Get(pluginName)
 	if !ok {
 		return nil, fmt.Errorf("plugin %q not running", pluginName)
@@ -292,10 +328,6 @@ func (s *Service) List(pluginID int64) ([]model.Account, error) {
 }
 
 // Delete 删除账号（凭据随之清除）。
-func (s *Service) Delete(accountID int64) error {
-	return s.db.Delete(&model.Account{}, accountID).Error
-}
-
 func (s *Service) pluginName(pluginID int64) (string, error) {
 	var p model.Plugin
 	if err := s.db.First(&p, pluginID).Error; err != nil {

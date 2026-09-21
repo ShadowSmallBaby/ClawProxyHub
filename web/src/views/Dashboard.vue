@@ -28,6 +28,7 @@
       </t-col>
       <t-col :span="4">
         <t-card :header="$t('dashboard.modelTitle')" :bordered="false">
+          <!-- 与左侧趋势图等高（.chart 280px），条目多时卡片内滚动 -->
           <div v-if="modelStats.length" class="model-list">
             <div v-for="m in modelStats" :key="m.name" class="model-row">
               <span class="model-name">{{ m.name }}</span>
@@ -37,7 +38,9 @@
               <span class="model-count">{{ m.count }}</span>
             </div>
           </div>
-          <t-empty v-else :description="$t('dashboard.noModelData')" />
+          <div v-else class="model-empty">
+            <t-empty :description="$t('dashboard.noModelData')" />
+          </div>
         </t-card>
       </t-col>
     </t-row>
@@ -47,9 +50,9 @@
       <t-col :span="12">
         <t-card :header="$t('dashboard.channelTitle')" :bordered="false">
           <div v-if="quotaPlugins.length" class="quota-grid">
-            <div v-for="p in quotaPlugins" :key="p.plugin" class="quota-card">
+            <div v-for="p in quotaPlugins" :key="p.plugin + '/' + p.instance" class="quota-card">
               <div class="quota-head">
-                <span class="quota-plugin">{{ p.plugin }}</span>
+                <span class="quota-plugin">{{ p.label || p.plugin }}</span>
                 <span class="quota-accounts">{{ $t('dashboard.accountsN', { n: p.accounts }) }}</span>
               </div>
               <div class="quota-row">
@@ -75,9 +78,24 @@
     <t-row :gutter="[16, 16]" class="block">
       <t-col :span="12">
         <t-card :header="$t('dashboard.recentTitle')" :bordered="false">
-          <t-table row-key="ID" size="small" :data="recent" :columns="recentColumns">
+          <t-table row-key="ID" size="small" :data="recent" :columns="recentColumns" max-height="45vh">
+            <template #model="{ row }">
+              <span :title="modelLabel(row)">{{ modelLabel(row) }}</span>
+            </template>
             <template #status="{ row }">
               <t-tag :theme="row.Status < 400 ? 'success' : 'danger'" variant="light">{{ row.Status }}</t-tag>
+            </template>
+            <template #tokens="{ row }">
+              <log-cells kind="tokens" :row="row" />
+            </template>
+            <template #latency="{ row }">
+              <log-cells kind="latency" :row="row" />
+            </template>
+            <template #ua="{ row }">
+              <t-tooltip v-if="row.UserAgent" :content="row.UserAgent" placement="top-left">
+                <span class="ellipsis">{{ row.UserAgent }}</span>
+              </t-tooltip>
+              <span v-else>-</span>
             </template>
           </t-table>
         </t-card>
@@ -97,7 +115,9 @@ import {
   DashboardIcon, CheckCircleIcon, ChartBarIcon, UserIcon, AppIcon, LockOnIcon,
 } from 'tdesign-icons-vue-next'
 import { api } from '../api/client'
+import LogCells from '../components/LogCells.vue'
 import { dict, protocolDict } from '../utils/dict'
+import { modelLabel } from '../utils/logfmt'
 import type { RequestLog, Stats } from '../api/types'
 
 const { t } = useI18n()
@@ -107,7 +127,7 @@ echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, Canvas
 const stats = ref<Stats | null>(null)
 const trend = ref<{ date: string; requests: number; success: number; tokens: number }[]>([])
 const recent = ref<RequestLog[]>([])
-const quotaPlugins = ref<{ plugin: string; accounts: number; quota: Record<string, number> }[]>([])
+const quotaPlugins = ref<{ plugin: string; label?: string; instance?: string; accounts: number; quota: Record<string, number> }[]>([])
 const trendEl = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
 // 容器尺寸变化（侧栏展开收起、窗口缩放等）时自动重载图表
@@ -123,12 +143,12 @@ const cards = computed(() => [
 ])
 
 const recentColumns = computed(() => [
-  { colKey: 'Model', title: t('dashboard.model'), width: 180, ellipsis: true },
+  { colKey: 'model', title: t('dashboard.model'), width: 260, ellipsis: true },
   { colKey: 'Protocol', title: t('dashboard.protocol'), width: 150, cell: (_h: any, { row }: any) => dict(protocolDict, row.Protocol), align: 'center' },
   { colKey: 'status', title: t('common.colStatus'), width: 80, align: 'center' },
-  { colKey: 'InputTokens', title: t('dashboard.input'), width: 90, align: 'center' },
-  { colKey: 'OutputTokens', title: t('dashboard.output'), width: 90, align: 'center' },
-  { colKey: 'LatencyMs', title: t('dashboard.latency'), width: 90, cell: (_h: any, { row }: any) => `${row.LatencyMs}ms`, align: 'center' },
+  { colKey: 'tokens', title: 'Token', width: 190, align: 'center' },
+  { colKey: 'latency', title: t('dashboard.latency'), width: 130, align: 'center' },
+  { colKey: 'ua', title: t('logs.client'), width: 140, align: 'center' },
   { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => row.CreatedAt?.replace('T', ' ').slice(0, 19) ?? '-', align: 'center' },
 ])
 
@@ -141,7 +161,7 @@ const modelStats = computed(() => {
   const rows = [...counts.entries()]
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count)
-    .slice(0, 8)
+    .slice(0, 20)
   const max = rows[0]?.count ?? 1
   return rows.map((r) => ({ ...r, percent: Math.max(4, (r.count / max) * 100) }))
 })
@@ -191,7 +211,7 @@ onMounted(async () => {
   const [s, t, l, q] = await Promise.all([
     api.get<Stats>('/admin/stats'),
     api.get<{ trend: typeof trend.value }>('/admin/stats/trend?days=7'),
-    api.get<{ logs: RequestLog[] }>('/admin/logs?limit=200'),
+    api.get<{ logs: RequestLog[] }>('/admin/logs?limit=100'),
     api.get<{ plugins: typeof quotaPlugins.value }>('/admin/stats/quota'),
   ])
   stats.value = s
@@ -253,10 +273,19 @@ onBeforeUnmount(() => {
   height: 280px;
   width: 100%;
 }
+/* 模型分布与趋势图等高；超出条目内部滚动 */
 .model-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  height: 280px;
+  overflow-y: auto;
+}
+.model-empty {
+  height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .model-row {
   display: flex;
@@ -333,4 +362,5 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
+.ellipsis { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 </style>

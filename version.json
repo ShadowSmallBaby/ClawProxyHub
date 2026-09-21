@@ -1,5 +1,5 @@
 {
-  "version": "1.0.5",
+  "version": "1.1.0",
   "release_url": "https://github.com/ShadowSmallBaby/ClawProxyHub/releases",
   "changelog": {
     "title": {
@@ -8,24 +8,40 @@
     },
     "items": [
       {
-        "zh": "JWT 鉴权与访客只读角色（RBAC）",
-        "en": "JWT authentication and guest read-only role (RBAC)"
+        "zh": "实例层：插件 → 实例（站点地址 + 站点级配置）→ 账号 / 分组；多实例由插件自声明，同一插件可挂多个部署",
+        "en": "Instance layer: Plugin → Instance (base URL + site-level settings) → Account / Group; multi-instance is plugin-declared"
       },
       {
-        "zh": "第三方平台凭证托管（供插件换取上游 token）",
-        "en": "Third-party platform credential management (for plugins to exchange upstream tokens)"
+        "zh": "插件契约 v2（instance_id 维度），核心向后兼容 v1 插件（协商握手，旧插件仅默认实例）",
+        "en": "Plugin protocol v2 (instance_id dimension); core stays compatible with v1 plugins (negotiated handshake, default instance only)"
       },
       {
-        "zh": "日志页支持多条件模糊搜索、日期区间快捷选项、分页与固定高度滚动",
-        "en": "Logs page: multi-filter fuzzy search, date-range presets, pagination and fixed-height scrolling"
+        "zh": "插件市场多源：源列表管理、聚合索引、非官方源按源名目录隔离、同名跨源拒装",
+        "en": "Multi-source marketplace: source list, aggregated index, per-source namespace isolation"
       },
       {
-        "zh": "修复日志延迟统计：总耗时与首字同源",
-        "en": "Fix log latency: total time now shares the same origin as first-token"
+        "zh": "新增 New API 插件：API 密钥 / 密码 / 凭据文件登录、模型列表、余额、每日签到",
+        "en": "New plugin: New API — API key / password / cred-file login, model list, balance, daily check-in"
       },
       {
-        "zh": "修复版本检查：改用语义化比较，仅远端更新时才提示",
-        "en": "Fix update check: semantic version comparison, prompt only when remote is newer"
+        "zh": "站内通知（任务提醒铃铛）、日志缓存写入 token、日志保留清理与 CSV 导出",
+        "en": "In-app notifications, cache-write token accounting, log retention & CSV export"
+      },
+      {
+        "zh": "系统信息 / 备份恢复、删除影响面预览与级联删除",
+        "en": "System info, backup & restore, delete-impact preview with cascade delete"
+      },
+      {
+        "zh": "路由级 User-Agent、站点品牌自定义（名称 / 缩写 / logo）、个人资料页",
+        "en": "Per-route User-Agent, site branding (name / abbr / logo), profile page"
+      },
+      {
+        "zh": "任务规则自动生成与去重、上游中途失败下发合规流式错误帧",
+        "en": "Auto-generated task rules with dedup; compliant streaming error frames on mid-stream upstream failure"
+      },
+      {
+        "zh": "插件 GetProxy 支持账号级代理优先",
+        "en": "Plugin GetProxy now prefers account-level proxy binding"
       }
     ]
   }
