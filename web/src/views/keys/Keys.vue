@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <div class="page-header">
+    <page-header>
       
       <t-button theme="primary" @click="createVisible = true">{{ $t('keys.create') }}</t-button>
-    </div>
-    <t-table row-key="id" :data="keys" :columns="columns">
+    </page-header>
+    <c-table row-key="id" :data="keys" :columns="columns" :loading="loading">
       <template #key="{ row }">
         <span class="key-mask">
           {{ row.key_mask }}
@@ -33,46 +33,52 @@
           </t-popconfirm>
         </t-space>
       </template>
-    </t-table>
+    </c-table>
 
     <!-- 创建密钥 -->
-    <t-dialog v-model:visible="createVisible" :header="$t('keys.create')" :confirm-btn="{ loading: creating }" @confirm="submitCreate">
+    <c-dialog v-model:visible="createVisible" :header="$t('keys.create')" :confirm-btn="{ loading: creating }" @confirm="submitCreate">
       <t-form label-width="90px">
         <t-form-item :label="$t('keys.name')">
           <t-input v-model="createName" :placeholder="$t('keys.namePh')" clearable @enter="submitCreate" />
         </t-form-item>
       </t-form>
-    </t-dialog>
+    </c-dialog>
 
     <!-- 明文只在创建时展示一次 -->
-    <t-dialog v-model:visible="newKeyVisible" :header="$t('keys.createdTitle')" :footer="false">
+    <c-dialog v-model:visible="newKeyVisible" :header="$t('keys.createdTitle')" :footer="false">
       <div class="new-key">{{ newKey }}</div>
       <t-button block variant="outline" @click="copy">{{ $t('keys.copy') }}</t-button>
-    </t-dialog>
+    </c-dialog>
 
-    <t-dialog v-model:visible="bindVisibleBool" :header="$t('keys.bindTitle')" @confirm="bind">
+    <c-dialog v-model:visible="bindVisibleBool" :header="$t('keys.bindTitle')" @confirm="bind">
       <bind-select v-model="bindRoutes" :options="routeOptions" :placeholder="$t('keys.bindPh')" />
-    </t-dialog>
+    </c-dialog>
 
     <!-- 改名 -->
-    <t-dialog v-model:visible="renameVisibleBool" :header="$t('keys.rename')" @confirm="submitRename">
+    <c-dialog v-model:visible="renameVisibleBool" :header="$t('keys.rename')" @confirm="submitRename">
       <t-form label-width="90px">
         <t-form-item :label="$t('keys.name')">
           <t-input v-model="renameName" :placeholder="$t('keys.namePh')" clearable @enter="submitRename" />
         </t-form-item>
       </t-form>
-    </t-dialog>
+    </c-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { CDialog } from '../../components/base'
+import { CCard, CTable } from '../../components/base'
+import PageHeader from '../../components/PageHeader.vue'
+import { useAsync } from '../../composables'
+import { useDialogVisible } from '../../composables'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { FileCopyIcon } from 'tdesign-icons-vue-next'
-import { api } from '../api/client'
-import BindSelect from '../components/BindSelect.vue'
-import type { KeyInfo, RouteInfo } from '../api/types'
+import { keyApi, routeApi } from '../../api/entities'
+import { timeAgo } from '../../utils/format'
+import BindSelect from '../../components/BindSelect.vue'
+import type { KeyInfo, RouteInfo } from '../../api/types'
 
 const { t } = useI18n()
 
@@ -95,7 +101,7 @@ const plainKeys = ref<Record<number, string>>({})
 async function copyKey(row: KeyInfo) {
   try {
     if (!plainKeys.value[row.id]) {
-      const resp = await api.get<{ key: string }>(`/admin/keys/${row.id}/reveal`)
+      const resp = await keyApi.reveal(row.id)
       plainKeys.value[row.id] = resp.key
     }
     await navigator.clipboard.writeText(plainKeys.value[row.id])
@@ -105,15 +111,9 @@ async function copyKey(row: KeyInfo) {
   }
 }
 
-const bindVisibleBool = computed({
-  get: () => bindVisible.value !== null,
-  set: (v: boolean) => { if (!v) bindVisible.value = null },
-})
+const bindVisibleBool = useDialogVisible(bindVisible)
 
-const renameVisibleBool = computed({
-  get: () => renameVisible.value !== null,
-  set: (v: boolean) => { if (!v) renameVisible.value = null },
-})
+const renameVisibleBool = useDialogVisible(renameVisible)
 
 function openRename(row: KeyInfo) {
   renameVisible.value = row.id
@@ -122,7 +122,7 @@ function openRename(row: KeyInfo) {
 
 async function submitRename() {
   if (renameVisible.value === null) return
-  await api.put(`/admin/keys/${renameVisible.value}`, { name: renameName.value })
+  await keyApi.update(renameVisible.value, { name: renameName.value })
   MessagePlugin.success(t('common.updated'))
   renameVisible.value = null
   await load()
@@ -139,40 +139,26 @@ const columns = computed(() => [
   { colKey: 'op', title: t('common.colOp'), width: 150, align: 'center' },
 ])
 
-// 相对时间：如 5分钟前 / 1天前 / 3个月前
-function timeAgo(ts: string): string {
-  const diff = Date.now() - new Date(ts.replace(' ', 'T')).getTime()
-  const min = Math.floor(diff / 60000)
-  if (min < 1) return t('common.justNow')
-  if (min < 60) return t('common.minutesAgo', { n: min })
-  const h = Math.floor(min / 60)
-  if (h < 24) return t('common.hoursAgo', { n: h })
-  const d = Math.floor(h / 24)
-  if (d < 30) return t('common.daysAgo', { n: d })
-  const mo = Math.floor(d / 30)
-  if (mo < 12) return t('common.monthsAgo', { n: mo })
-  return t('common.yearsAgo', { n: Math.floor(mo / 12) })
-}
-
 function routeName(id: number): string {
   return routes.value.find((r) => r.ID === id)?.Name ?? `#${id}`
 }
 
 const routeOptions = computed(() => routes.value.map((r) => ({ value: r.ID, label: r.Name })))
 
+const { loading, run } = useAsync()
+
 async function load() {
-  const [k, r] = await Promise.all([
-    api.get<{ keys: KeyInfo[] }>('/admin/keys'),
-    api.get<{ routes: RouteInfo[] }>('/admin/routes'),
-  ])
-  keys.value = k.keys ?? []
-  routes.value = r.routes ?? []
+  await run(async () => {
+    const [k, r] = await Promise.all([keyApi.list(), routeApi.list()])
+    keys.value = k.keys ?? []
+    routes.value = r.routes ?? []
+  })
 }
 
 async function submitCreate() {
   creating.value = true
   try {
-    const resp = await api.post<{ key: string }>('/admin/keys', { name: createName.value })
+    const resp = await keyApi.create(createName.value)
     newKey.value = resp.key
     createVisible.value = false
     createName.value = ''
@@ -186,18 +172,18 @@ async function submitCreate() {
 }
 
 async function toggle(row: KeyInfo) {
-  await api.post(`/admin/keys/${row.id}/toggle`)
+  await keyApi.toggle(row.id)
   await load()
 }
 
 async function remove(id: number) {
-  await api.del(`/admin/keys/${id}`)
+  await keyApi.remove(id)
   await load()
 }
 
 async function bind() {
   if (bindVisible.value === null) return
-  await api.put(`/admin/keys/${bindVisible.value}/routes`, { route_ids: bindRoutes.value })
+  await keyApi.routes(bindVisible.value, bindRoutes.value)
   MessagePlugin.success(t('common.updated'))
   bindVisible.value = null
   await load()

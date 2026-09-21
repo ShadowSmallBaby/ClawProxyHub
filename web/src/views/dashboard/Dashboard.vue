@@ -5,7 +5,7 @@
     <!-- 统计卡片 -->
     <t-row :gutter="[16, 16]">
       <t-col v-for="c in cards" :key="c.label" :span="2">
-        <t-card :bordered="false" class="stat-card">
+        <c-card :bordered="false" class="stat-card">
           <div class="stat-inner">
             <div class="stat-icon" :style="{ background: c.bg, color: c.fg }">
               <component :is="c.icon" />
@@ -15,19 +15,19 @@
               <div class="stat-label">{{ c.label }}</div>
             </div>
           </div>
-        </t-card>
+        </c-card>
       </t-col>
     </t-row>
 
     <!-- 趋势 + 模型分布 -->
     <t-row :gutter="[16, 16]" class="block">
       <t-col :span="8">
-        <t-card :header="$t('dashboard.trendTitle')" :bordered="false">
+        <c-card :header="$t('dashboard.trendTitle')" :bordered="false">
           <div ref="trendEl" class="chart" />
-        </t-card>
+        </c-card>
       </t-col>
       <t-col :span="4">
-        <t-card :header="$t('dashboard.modelTitle')" :bordered="false">
+        <c-card :header="$t('dashboard.modelTitle')" :bordered="false">
           <!-- 与左侧趋势图等高（.chart 280px），条目多时卡片内滚动 -->
           <div v-if="modelStats.length" class="model-list">
             <div v-for="m in modelStats" :key="m.name" class="model-row">
@@ -41,14 +41,14 @@
           <div v-else class="model-empty">
             <t-empty :description="$t('dashboard.noModelData')" />
           </div>
-        </t-card>
+        </c-card>
       </t-col>
     </t-row>
 
     <!-- 按插件积分 -->
     <t-row :gutter="[16, 16]" class="block">
       <t-col :span="12">
-        <t-card :header="$t('dashboard.channelTitle')" :bordered="false">
+        <c-card :header="$t('dashboard.channelTitle')" :bordered="false">
           <div v-if="quotaPlugins.length" class="quota-grid">
             <div v-for="p in quotaPlugins" :key="p.plugin + '/' + p.instance" class="quota-card">
               <div class="quota-head">
@@ -70,15 +70,15 @@
             </div>
           </div>
           <t-empty v-else :description="$t('dashboard.noQuotaData')" />
-        </t-card>
+        </c-card>
       </t-col>
     </t-row>
 
     <!-- 最近请求 -->
     <t-row :gutter="[16, 16]" class="block">
       <t-col :span="12">
-        <t-card :header="$t('dashboard.recentTitle')" :bordered="false">
-          <t-table row-key="ID" size="small" :data="recent" :columns="recentColumns" max-height="45vh">
+        <c-card :header="$t('dashboard.recentTitle')" :bordered="false">
+          <c-table row-key="ID" size="small" :data="recent" :columns="recentColumns" max-height="45vh">
             <template #model="{ row }">
               <span :title="modelLabel(row)">{{ modelLabel(row) }}</span>
             </template>
@@ -97,15 +97,16 @@
               </t-tooltip>
               <span v-else>-</span>
             </template>
-          </t-table>
-        </t-card>
+          </c-table>
+        </c-card>
       </t-col>
     </t-row>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { CCard, CTable } from '../../components/base'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
@@ -114,32 +115,32 @@ import { CanvasRenderer } from 'echarts/renderers'
 import {
   DashboardIcon, CheckCircleIcon, ChartBarIcon, UserIcon, AppIcon, LockOnIcon,
 } from 'tdesign-icons-vue-next'
-import { api } from '../api/client'
-import LogCells from '../components/LogCells.vue'
-import { dict, protocolDict } from '../utils/dict'
-import { modelLabel } from '../utils/logfmt'
-import type { RequestLog, Stats } from '../api/types'
+import { statsApi, type QuotaPlugin, type TrendPoint } from '../../api/stats'
+import { useChart } from '../../composables'
+import LogCells from '../../components/LogCells.vue'
+import { dict, protocolDict } from '../../utils/dict'
+import { modelLabel } from '../../utils/logfmt'
+import type { RequestLog, Stats } from '../../api/types'
 
 const { t } = useI18n()
 
 echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 const stats = ref<Stats | null>(null)
-const trend = ref<{ date: string; requests: number; success: number; tokens: number }[]>([])
+const trend = ref<TrendPoint[]>([])
 const recent = ref<RequestLog[]>([])
-const quotaPlugins = ref<{ plugin: string; label?: string; instance?: string; accounts: number; quota: Record<string, number> }[]>([])
-const trendEl = ref<HTMLElement>()
-let chart: echarts.ECharts | null = null
-// 容器尺寸变化（侧栏展开收起、窗口缩放等）时自动重载图表
-let resizeObserver: ResizeObserver | null = null
+const quotaPlugins = ref<QuotaPlugin[]>([])
+// 图表容器（useChart 管实例生命周期 + 容器尺寸自适应）
+const { el: trendEl, render: renderChart } = useChart(() => chartOption.value)
 
 const cards = computed(() => [
-  { label: t('dashboard.todayRequests'), value: stats.value?.today_requests ?? '-', icon: DashboardIcon, bg: 'linear-gradient(135deg, var(--td-brand-color-4), var(--td-brand-color-6))', fg: '#fff' },
-  { label: t('dashboard.successRate'), value: stats.value ? `${stats.value.success_rate}%` : '-', icon: CheckCircleIcon, bg: 'linear-gradient(135deg, var(--td-success-color-4), var(--td-success-color-6))', fg: '#fff' },
-  { label: t('dashboard.totalTokens'), value: fmt(stats.value?.total_tokens ?? 0), icon: ChartBarIcon, bg: 'linear-gradient(135deg, var(--td-warning-color-4), var(--td-warning-color-6))', fg: '#fff' },
-  { label: t('dashboard.activeAccounts'), value: stats.value?.active_accounts ?? '-', icon: UserIcon, bg: 'linear-gradient(135deg, var(--td-error-color-4), var(--td-error-color-6))', fg: '#fff' },
-  { label: t('dashboard.runningPlugins'), value: stats.value?.running_plugins ?? '-', icon: AppIcon, bg: 'linear-gradient(135deg, #7f8dff, #5a5fd8)', fg: '#fff' },
-  { label: t('dashboard.activeKeys'), value: stats.value?.active_keys ?? '-', icon: LockOnIcon, bg: 'linear-gradient(135deg, #4fc3d9, #2a8fa8)', fg: '#fff' },
+  // 高亮色只作图标底淡色 + 图标色，不作渐变大背景
+  { label: t('dashboard.todayRequests'), value: stats.value?.today_requests ?? '-', icon: DashboardIcon, bg: 'var(--td-brand-color-1)', fg: 'var(--td-brand-color)' },
+  { label: t('dashboard.successRate'), value: stats.value ? `${stats.value.success_rate}%` : '-', icon: CheckCircleIcon, bg: 'var(--td-success-color-1)', fg: 'var(--td-success-color)' },
+  { label: t('dashboard.totalTokens'), value: fmt(stats.value?.total_tokens ?? 0), icon: ChartBarIcon, bg: 'var(--td-warning-color-1)', fg: 'var(--td-warning-color)' },
+  { label: t('dashboard.activeAccounts'), value: stats.value?.active_accounts ?? '-', icon: UserIcon, bg: 'var(--td-error-color-1)', fg: 'var(--td-error-color)' },
+  { label: t('dashboard.runningPlugins'), value: stats.value?.running_plugins ?? '-', icon: AppIcon, bg: 'var(--td-brand-color-1)', fg: 'var(--td-brand-color)' },
+  { label: t('dashboard.activeKeys'), value: stats.value?.active_keys ?? '-', icon: LockOnIcon, bg: 'var(--td-brand-color-1)', fg: 'var(--td-brand-color)' },
 ])
 
 const recentColumns = computed(() => [
@@ -178,69 +179,46 @@ function fmtThousands(n: number | undefined): string {
   return n.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
 }
 
-function renderChart() {
-  if (!trendEl.value) return
-  chart = chart ?? echarts.init(trendEl.value)
-  chart.setOption({
-    grid: { left: 40, right: 40, top: 32, bottom: 28 },
-    tooltip: { trigger: 'axis' },
-    legend: { data: [t('dashboard.legendRequests'), t('dashboard.legendSuccess')], right: 0, top: 0 },
-    xAxis: { type: 'category', data: trend.value.map((p) => p.date.slice(5)), axisLine: { lineStyle: { opacity: 0.3 } }, axisTick: { show: false } },
-    yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { opacity: 0.15 } } },
-    series: [
-      { name: t('dashboard.legendRequests'), type: 'line', smooth: true, data: trend.value.map((p) => p.requests),
-        lineStyle: { width: 2.5 }, itemStyle: { color: '#4c7dff' },
-        areaStyle: { opacity: 0.18, color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(76, 125, 255, 0.35)' },
-          { offset: 1, color: 'rgba(76, 125, 255, 0)' },
-        ]) } },
-      { name: t('dashboard.legendSuccess'), type: 'line', smooth: true, data: trend.value.map((p) => p.success),
-        lineStyle: { width: 2 }, itemStyle: { color: '#2ba471' } },
-    ],
-  })
-}
-
-function onResize() {
-  chart?.resize()
-}
+// 图表配置（语言切换后图例/系列名跟随重绘）
+const chartOption = computed<echarts.EChartsCoreOption>(() => ({
+  grid: { left: 40, right: 40, top: 32, bottom: 28 },
+  tooltip: { trigger: 'axis' },
+  legend: { data: [t('dashboard.legendRequests'), t('dashboard.legendSuccess')], right: 0, top: 0 },
+  xAxis: { type: 'category', data: trend.value.map((p) => p.date.slice(5)), axisLine: { lineStyle: { opacity: 0.3 } }, axisTick: { show: false } },
+  yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { opacity: 0.15 } } },
+  series: [
+    { name: t('dashboard.legendRequests'), type: 'line', smooth: true, data: trend.value.map((p) => p.requests),
+      lineStyle: { width: 2.5 }, itemStyle: { color: '#4c7dff' },
+      areaStyle: { opacity: 0.18, color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+        { offset: 0, color: 'rgba(76, 125, 255, 0.35)' },
+        { offset: 1, color: 'rgba(76, 125, 255, 0)' },
+      ]) } },
+    { name: t('dashboard.legendSuccess'), type: 'line', smooth: true, data: trend.value.map((p) => p.success),
+      lineStyle: { width: 2 }, itemStyle: { color: '#2ba471' } },
+  ],
+}))
 
 // 语言切换后重绘图表（图例/系列名跟随）
-watch(() => t('dashboard.legendRequests'), renderChart)
+watch(() => t('dashboard.legendRequests'), () => renderChart())
 
 onMounted(async () => {
   const [s, t, l, q] = await Promise.all([
-    api.get<Stats>('/admin/stats'),
-    api.get<{ trend: typeof trend.value }>('/admin/stats/trend?days=7'),
-    api.get<{ logs: RequestLog[] }>('/admin/logs?limit=100'),
-    api.get<{ plugins: typeof quotaPlugins.value }>('/admin/stats/quota'),
+    statsApi.get(),
+    statsApi.trend(7),
+    statsApi.recentLogs(100),
+    statsApi.quota(),
   ])
   stats.value = s
   trend.value = t.trend ?? []
   recent.value = l.logs ?? []
   quotaPlugins.value = q.plugins ?? []
   renderChart()
-  window.addEventListener('resize', onResize)
-  if (trendEl.value) {
-    resizeObserver = new ResizeObserver(() => chart?.resize())
-    resizeObserver.observe(trendEl.value)
-  }
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', onResize)
-  resizeObserver?.disconnect()
-  resizeObserver = null
-  chart?.dispose()
-  chart = null
 })
 </script>
 
 <style scoped>
 .block {
   margin-top: 16px;
-}
-.stat-card:hover {
-  transform: translateY(-2px);
 }
 .stat-inner {
   display: flex;
@@ -256,7 +234,6 @@ onBeforeUnmount(() => {
   justify-content: center;
   font-size: 22px;
   flex-shrink: 0;
-  box-shadow: 0 4px 10px rgba(42, 79, 196, 0.15);
 }
 .stat-value {
   font-size: 26px;
@@ -310,7 +287,7 @@ onBeforeUnmount(() => {
 .model-bar {
   height: 100%;
   border-radius: 4px;
-  background: linear-gradient(90deg, var(--td-brand-color-4), var(--td-brand-color-6));
+  background: var(--td-brand-color);
   transition: width 0.5s ease;
 }
 .model-count {

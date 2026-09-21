@@ -1,7 +1,7 @@
 <template>
   <!-- 设置页：tab 切换，页面整体固定占满内容区，tab 内容各自内部滚动 -->
   <div class="settings-page">
-    <t-tabs v-model="tab" class="settings-tabs" size="medium">
+    <c-tabs v-model="tab" class="settings-tabs" size="medium">
       <t-tab-panel value="gateway" :label="$t('settings.gateway')">
         <div class="panel">
           <t-form label-width="140px">
@@ -118,17 +118,19 @@
           </t-form>
         </div>
       </t-tab-panel>
-    </t-tabs>
+    </c-tabs>
   </div>
 </template>
 
 <script setup lang="ts">
+import { CTabs } from '../../components/base'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { DeleteIcon, DownloadIcon, UploadIcon } from 'tdesign-icons-vue-next'
-import { api, getToken } from '../api/client'
-import { refreshBranding } from '../utils/branding'
+import { settingsApi, systemApi, type SysInfo } from '../../api/settings'
+import { logsApi } from '../../api/logs'
+import { refreshBranding } from '../../utils/branding'
 
 const { t } = useI18n()
 
@@ -144,11 +146,6 @@ const restoring = ref(false)
 const fileEl = ref<HTMLInputElement>()
 const logoEl = ref<HTMLInputElement>()
 
-interface SysInfo {
-  version: string; protocol_version: number; go_version: string; os: string; arch: string; started_at: string; uptime_seconds: number
-  data_dir: string; db_size_bytes: number; migration_version: number
-  mem_alloc_bytes: number; goroutines: number; counts: Record<string, number>; pending_restore: boolean
-}
 const sys = ref<SysInfo | null>(null)
 const countItems = [
   { key: 'plugins', label: 'settings.countPlugins' }, { key: 'instances', label: 'settings.countInstances' },
@@ -162,7 +159,7 @@ const uptime = computed(() => {
 })
 
 async function load() {
-  const r = await api.get<{ settings: { first_event_timeout: number; user_agent?: string; browser_user_agent?: string; github_proxy?: string; log_retention_days?: number; site_name?: string; site_abbr?: string; site_logo?: string } }>('/admin/settings')
+  const r = await settingsApi.get()
   gwForm.first_event_timeout = r.settings?.first_event_timeout ?? 90
   gwForm.user_agent = r.settings?.user_agent ?? ''
   gwForm.browser_user_agent = r.settings?.browser_user_agent ?? ''
@@ -173,14 +170,14 @@ async function load() {
   siteForm.site_logo = r.settings?.site_logo ?? ''
 }
 async function loadSys() {
-  sys.value = await api.get<SysInfo>('/admin/system/info').catch(() => null)
+  sys.value = await systemApi.info().catch(() => null)
 }
 
 // 按 tab 分块保存：只提交本块字段，其余保持原值
 async function save(patch: Record<string, unknown>) {
   saving.value = true
   try {
-    await api.put('/admin/settings', patch)
+    await settingsApi.save(patch)
     MessagePlugin.success(t('settings.saved'))
   } catch (e: any) {
     MessagePlugin.error(e.message)
@@ -209,32 +206,16 @@ function onPickLogo(ev: Event) {
   reader.readAsDataURL(file)
 }
 
-// 带鉴权头下载（<a download> 带不了 Authorization），blob 落成文件
-async function download(path: string, fallbackName: string, flag: { value: boolean }) {
-  flag.value = true
-  try {
-    const resp = await fetch(path, { headers: { Authorization: `Bearer ${getToken()}` } })
-    if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`)
-    const name = /filename="?([^"]+)"?/.exec(resp.headers.get('Content-Disposition') ?? '')?.[1] ?? fallbackName
-    const url = URL.createObjectURL(await resp.blob())
-    const a = Object.assign(document.createElement('a'), { href: url, download: name })
-    a.click()
-    URL.revokeObjectURL(url)
-  } catch (e: any) {
-    MessagePlugin.error(e.message)
-  } finally {
-    flag.value = false
-  }
-}
-const exportLogs = () => download('/admin/logs/export', 'cph-logs.csv', exporting)
-const exportBackup = () => download('/admin/system/backup', 'cph-backup.zip', backingUp)
+// 带鉴权头下载：API 层负责 blob 落成文件，此处只管错误提示
+const exportLogs = () => logsApi.exportCsv(exporting).catch((e: any) => MessagePlugin.error(e.message))
+const exportBackup = () => systemApi.backup(backingUp).catch((e: any) => MessagePlugin.error(e.message))
 
 function confirmClear() {
   const dlg = DialogPlugin.confirm({
     header: t('settings.clearConfirmTitle'), body: t('settings.clearConfirmBody'), theme: 'danger',
     onConfirm: async () => {
       try {
-        const r = await api.del<{ deleted: number }>('/admin/logs')
+        const r = await logsApi.clear()
         MessagePlugin.success(t('settings.cleared', { n: r.deleted }))
         loadSys()
       } catch (e: any) {
@@ -255,10 +236,7 @@ function onPickBackup(ev: Event) {
       dlg.destroy()
       restoring.value = true
       try {
-        const fd = new FormData()
-        fd.append('file', file)
-        const resp = await fetch('/admin/system/restore', { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body: fd })
-        if (!resp.ok) throw new Error(JSON.parse(await resp.text()).error)
+        await systemApi.restore(file)
         MessagePlugin.success(t('settings.restoreQueued'))
         loadSys()
       } catch (e: any) {

@@ -56,8 +56,9 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { api, setToken } from '../api/client'
-import { branding, brandLogo, brandCustom, ensureBranding } from '../utils/branding'
+import { setToken } from '../../api/client'
+import { authApi } from '../../api/auth'
+import { branding, brandLogo, brandCustom, ensureBranding } from '../../utils/branding'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -76,7 +77,7 @@ const features = computed(() => [
 onMounted(async () => {
   // 未初始化 → 引导页
   try {
-    const status = await api.get<{ initialized: boolean }>('/admin/setup-status')
+    const status = await authApi.setupStatus()
     if (!status.initialized) router.replace('/setup')
   } catch { /* 探测失败不阻塞 */ }
 })
@@ -86,10 +87,7 @@ async function onLogin() {
   loading.value = true
   try {
     // 登录换 JWT（后续请求带 Bearer <jwt>，服务端解析 role 免每请求 bcrypt）
-    const r = await api.post<{ token: string; role: string }>('/admin/login', {
-      username: username.value,
-      password: password.value,
-    })
+    const r = await authApi.login(username.value, password.value)
     setToken(r.token)
     router.push('/')
   } catch (e: any) {
@@ -114,11 +112,8 @@ async function onLogin() {
   justify-content: center;
   padding: 48px 8%;
   color: #fff;
-  /* 深蓝渐变 + 品牌色光斑，明暗主题通用 */
-  background:
-    radial-gradient(ellipse 60% 40% at 15% 20%, rgba(127, 167, 255, 0.25), transparent),
-    radial-gradient(ellipse 50% 45% at 85% 80%, rgba(76, 125, 255, 0.35), transparent),
-    linear-gradient(160deg, #162d75 0%, #0f1f52 55%, #0a1440 100%);
+  /* 深蓝纯色底（不用渐变/光斑） */
+  background: #0f1f52;
 }
 
 .brand-header {
@@ -147,12 +142,9 @@ async function onLogin() {
   opacity: 0.8;
 }
 
-/* 自定义品牌名：浅蓝→紫渐变字（深色底上可读） */
+/* 自定义品牌名：品牌浅蓝高亮字（不用渐变） */
 .brand-header h1.custom {
-  background: linear-gradient(90deg, #b8ccff, #c4b5ff);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: #b8ccff;
 }
 
 .brand-slogan {

@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <div class="page-header">
+    <page-header>
       
       <t-button theme="primary" @click="openCreate">{{ $t('routes.create') }}</t-button>
-    </div>
-    <t-table row-key="ID" :data="routes" :columns="columns">
+    </page-header>
+    <c-table row-key="ID" :data="routes" :columns="columns" :loading="loading">
       <template #strategy="{ row }">
         <t-tag variant="light">{{ dict(strategyDict, row.Strategy) }}</t-tag>
       </template>
@@ -35,9 +35,9 @@
           </t-popconfirm>
         </t-space>
       </template>
-    </t-table>
+    </c-table>
 
-    <t-dialog v-model:visible="dialogVisible" :header="editingID ? $t('routes.editTitle') : $t('routes.create')" width="760px" :confirm-btn="{ loading: saving }" @confirm="save">
+    <c-dialog v-model:visible="dialogVisible" :header="editingID ? $t('routes.editTitle') : $t('routes.create')" width="760px" :confirm-btn="{ loading: saving }" @confirm="save">
       <t-form label-width="90px">
         <t-form-item :label="$t('routes.name')" mark>
           <t-input v-model="form.name" :placeholder="$t('routes.namePh')" />
@@ -99,18 +99,22 @@
           </t-form-item>
         </template>
       </t-form>
-    </t-dialog>
+    </c-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { CDialog } from '../../components/base'
+import { CCard, CTable } from '../../components/base'
+import PageHeader from '../../components/PageHeader.vue'
+import { useAsync } from '../../composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { api } from '../api/client'
-import BindSelect from '../components/BindSelect.vue'
-import { dict, strategyDict } from '../utils/dict'
-import type { GroupInfo, RouteGroupEntry, RouteInfo } from '../api/types'
+import { groupApi, routeApi } from '../../api/entities'
+import BindSelect from '../../components/BindSelect.vue'
+import { dict, strategyDict } from '../../utils/dict'
+import type { GroupInfo, RouteGroupEntry, RouteInfo } from '../../api/types'
 
 const { t } = useI18n()
 
@@ -149,7 +153,7 @@ const groupOptions = computed(() =>
 const groupModelsCache = ref<Record<number, string[]>>({})
 async function loadGroupModels(groupID: number | null | undefined) {
   if (!groupID || groupModelsCache.value[groupID]) return
-  const resp = await api.get<{ models: string[] }>(`/admin/groups/${groupID}/models`).catch(() => ({ models: [] }))
+  const resp = await groupApi.models(groupID).catch(() => ({ models: [] }))
   groupModelsCache.value = { ...groupModelsCache.value, [groupID]: resp.models ?? [] }
 }
 function modelOptions(groupID: number | null | undefined) {
@@ -259,10 +263,10 @@ async function save() {
   }
   try {
     if (editingID.value) {
-      await api.put(`/admin/routes/${editingID.value}`, body)
+      await routeApi.update(editingID.value, body)
       MessagePlugin.success(t('common.saved'))
     } else {
-      await api.post('/admin/routes', body)
+      await routeApi.create(body)
       MessagePlugin.success(t('common.created'))
     }
     dialogVisible.value = false
@@ -274,17 +278,18 @@ async function save() {
   }
 }
 
+const { loading, run } = useAsync()
+
 async function load() {
-  const [r, g] = await Promise.all([
-    api.get<{ routes: RouteInfo[] }>('/admin/routes'),
-    api.get<{ groups: GroupInfo[] }>('/admin/groups'),
-  ])
-  routes.value = r.routes ?? []
-  groups.value = g.groups ?? []
+  await run(async () => {
+    const [r, g] = await Promise.all([routeApi.list(), groupApi.list()])
+    routes.value = r.routes ?? []
+    groups.value = g.groups ?? []
+  })
 }
 
 async function remove(id: number) {
-  await api.del(`/admin/routes/${id}`)
+  await routeApi.remove(id)
   await load()
 }
 

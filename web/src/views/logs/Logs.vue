@@ -29,7 +29,7 @@
       <t-button variant="outline" @click="reset">{{ $t('logs.reset') }}</t-button>
     </div>
 
-    <t-table
+    <c-table
       row-key="ID"
       :data="logs"
       :columns="columns"
@@ -62,12 +62,9 @@
         <log-cells kind="latency" :row="row" />
       </template>
       <template #ua="{ row }">
-        <t-tooltip v-if="row.UserAgent" :content="row.UserAgent" placement="top-left">
-          <span class="ellipsis">{{ row.UserAgent }}</span>
-        </t-tooltip>
-        <span v-else>-</span>
+        <ellipsis-cell :content="row.UserAgent" />
       </template>
-    </t-table>
+    </c-table>
 
     <!-- 分页：页大小 10/30/50/100/200 -->
     <div class="pager">
@@ -84,13 +81,18 @@
 </template>
 
 <script setup lang="ts">
+import { CCard, CTable } from '../../components/base'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { api } from '../api/client'
-import LogCells from '../components/LogCells.vue'
-import { dict, protocolDict } from '../utils/dict'
-import { modelLabel } from '../utils/logfmt'
-import type { RequestLog } from '../api/types'
+import { logsApi } from '../../api/logs'
+import { pluginApi } from '../../api/entities'
+import LogCells from '../../components/LogCells.vue'
+import EllipsisCell from '../../components/EllipsisCell.vue'
+import { pluginLabelOf } from '../../utils/lookup'
+import { usePagination } from '../../composables'
+import { dict, protocolDict } from '../../utils/dict'
+import { modelLabel } from '../../utils/logfmt'
+import type { RequestLog } from '../../api/types'
 
 const { t } = useI18n()
 
@@ -126,9 +128,7 @@ const presets = computed<Record<string, string[]>>(() => {
 const logs = ref<RequestLog[]>([])
 const loading = ref(false)
 const plugins = ref<{ id: number; name: string; label?: string }[]>([])
-const page = ref(1)
-const pageSize = ref(30)
-const total = ref(0)
+const { page, pageSize, total, reset: resetPage } = usePagination(30)
 // 固定表格高度，内部滚动（视口高度减去过滤栏/分页/边距）
 const tableHeight = ref(window.innerHeight - 260)
 
@@ -142,13 +142,7 @@ const filters = reactive({
   range: [] as string[],
 })
 
-// 插件品牌名映射
-function pluginLabel(pluginID: number | null): string {
-  if (!pluginID) return '-'
-  const p = plugins.value.find((x) => x.id === pluginID)
-  return p?.label || p?.name || `#${pluginID}`
-}
-
+const pluginLabel = (pluginID: number | null) => pluginLabelOf(plugins.value, pluginID)
 const columns = computed(() => [
   { colKey: 'key', title: t('logs.key'), width: 120, ellipsis: true },
   { colKey: 'model', title: t('logs.model'), width: 260, ellipsis: true, align: 'center' },
@@ -162,32 +156,18 @@ const columns = computed(() => [
   { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => row.CreatedAt?.replace('T', ' ').slice(0, 19) ?? '-', align: 'center' },
 ])
 
-// buildQuery 组装过滤参数（空值不带）
-function buildQuery(): string {
-  const p = new URLSearchParams()
-  p.set('page', String(page.value))
-  p.set('page_size', String(pageSize.value))
-  if (filters.key.trim()) p.set('key', filters.key.trim())
-  if (filters.model.trim()) p.set('model', filters.model.trim())
-  if (filters.route.trim()) p.set('route', filters.route.trim())
-  if (filters.plugin_id) p.set('plugin_id', String(filters.plugin_id))
-  if (filters.protocol) p.set('protocol', filters.protocol)
-  if (filters.status_class) p.set('status_class', filters.status_class)
-  if (filters.range?.[0]) p.set('from', filters.range[0])
-  // 结束日期为纯日期（长度 10）时补当天末刻，含当天全部记录
-  if (filters.range?.[1]) {
-    const to = filters.range[1]
-    p.set('to', to.length === 10 ? `${to} 23:59:59` : to)
-  }
-  return p.toString()
-}
-
 async function load() {
   loading.value = true
   try {
+    // 结束日期为纯日期（长度 10）时补当天末刻，含当天全部记录
+    const to = filters.range?.[1] ? (filters.range[1].length === 10 ? `${filters.range[1]} 23:59:59` : filters.range[1]) : undefined
     const [resp, p] = await Promise.all([
-      api.get<{ logs: RequestLog[]; total: number }>(`/admin/logs?${buildQuery()}`),
-      api.get<{ plugins: { id: number; name: string; label?: string }[] }>('/admin/plugins'),
+      logsApi.list(page.value, pageSize.value, {
+        key: filters.key.trim(), model: filters.model.trim(), route: filters.route.trim(),
+        plugin_id: filters.plugin_id, protocol: filters.protocol, status_class: filters.status_class,
+        from: filters.range?.[0], to,
+      }),
+      pluginApi.list(),
     ])
     logs.value = resp.logs ?? []
     total.value = resp.total ?? 0
@@ -199,7 +179,7 @@ async function load() {
 
 // search 重置到第一页再查
 function search() {
-  page.value = 1
+  resetPage()
   load()
 }
 
@@ -226,15 +206,6 @@ onMounted(load)
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
-}
-.ellipsis {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  vertical-align: bottom;
-  cursor: default;
 }
 .dim {
   color: var(--td-text-color-placeholder);

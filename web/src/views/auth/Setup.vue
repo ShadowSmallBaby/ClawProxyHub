@@ -24,7 +24,8 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { api, setToken } from '../api/client'
+import { setToken } from '../../api/client'
+import { authApi } from '../../api/auth'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -35,7 +36,7 @@ const loading = ref(false)
 
 onMounted(async () => {
   // 已初始化过则直接去登录
-  const status = await api.get<{ initialized: boolean }>('/admin/setup-status')
+  const status = await authApi.setupStatus()
   if (status.initialized) router.replace('/login')
 })
 
@@ -54,7 +55,7 @@ async function onSetup() {
   }
   loading.value = true
   try {
-    await api.post('/admin/setup', { username: username.value, password: password.value })
+    await authApi.setup(username.value, password.value)
     setToken(`${username.value}:${password.value}`) // 初始化完成即登录
     MessagePlugin.success(t('setup.done'))
     router.replace('/')

@@ -1,13 +1,13 @@
 <template>
   <div class="page">
-    <div class="page-header">
+    <page-header>
       <t-select v-model="filterPlugin" clearable :placeholder="$t('instances.filterPlugin')" style="width: 200px" @change="load">
         <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
       </t-select>
       <t-button theme="primary" :disabled="!multiPlugins.length" @click="openCreate">{{ $t('instances.add') }}</t-button>
-    </div>
+    </page-header>
 
-    <t-table row-key="id" :data="list" :columns="columns" :loading="loading">
+    <c-table row-key="id" :data="list" :columns="columns" :loading="loading">
       <template #base_url="{ row }">
         <span class="mono">{{ row.base_url || '-' }}</span>
       </template>
@@ -17,7 +17,7 @@
           <t-link theme="danger" @click="askRemove(row)">{{ $t('common.delete') }}</t-link>
         </t-space>
       </template>
-    </t-table>
+    </c-table>
 
     <instance-form-dialog v-model:visible="dialogVisible" :plugin="dialogPlugin" :plugins="multiPlugins" :instance="editing" @saved="load" />
     <delete-impact-dialog
@@ -32,18 +32,21 @@
 </template>
 
 <script setup lang="ts">
+import { CCard, CTable } from '../../components/base'
+import PageHeader from '../../components/PageHeader.vue'
+import { useAsync } from '../../composables'
+import { pluginLabelOf } from '../../utils/lookup'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { api } from '../api/client'
-import InstanceFormDialog from '../components/InstanceFormDialog.vue'
-import DeleteImpactDialog from '../components/DeleteImpactDialog.vue'
-import type { InstanceInfo, PluginInfo } from '../api/types'
+import { pluginApi, instanceApi } from '../../api/entities'
+import InstanceFormDialog from '../../components/InstanceFormDialog.vue'
+import DeleteImpactDialog from '../../components/DeleteImpactDialog.vue'
+import type { InstanceInfo, PluginInfo } from '../../api/types'
 
 const { t } = useI18n()
 
 const plugins = ref<PluginInfo[]>([])
 const list = ref<InstanceInfo[]>([])
-const loading = ref(false)
 const filterPlugin = ref<number | undefined>(undefined)
 const createPluginId = ref<number | undefined>(undefined)
 
@@ -59,27 +62,22 @@ const columns = computed(() => [
   { colKey: 'op', title: t('common.colOp'), width: 120, align: 'center' },
 ])
 
-function pluginLabel(id: number): string {
-  const p = plugins.value.find((x) => x.id === id)
-  return p?.label || p?.name || `#${id}`
-}
+const pluginLabel = (id: number) => pluginLabelOf(plugins.value, id)
 
 // 可新建实例的插件：声明了 instances 能力（单例插件只有默认实例，可编辑不可新增）
 const multiPlugins = computed(() => plugins.value.filter((p) => p.multi_instance))
 
+const { loading, run } = useAsync()
+
 async function load() {
-  loading.value = true
-  try {
-    const q = filterPlugin.value ? `?plugin_id=${filterPlugin.value}` : ''
+  await run(async () => {
     const [p, i] = await Promise.all([
-      api.get<{ plugins: PluginInfo[] }>('/admin/plugins'),
-      api.get<{ instances: InstanceInfo[] }>(`/admin/instances${q}`),
+      pluginApi.list(),
+      instanceApi.list(filterPlugin.value),
     ])
     plugins.value = p.plugins ?? []
     list.value = i.instances ?? []
-  } finally {
-    loading.value = false
-  }
+  })
 }
 
 function openCreate() {

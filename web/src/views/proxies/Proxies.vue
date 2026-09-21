@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <div class="page-header">
+    <page-header>
       
       <t-button theme="primary" @click="openCreate">{{ $t('proxies.create') }}</t-button>
-    </div>
-    <t-table row-key="ID" :data="proxies" :columns="columns">
+    </page-header>
+    <c-table row-key="ID" :data="proxies" :columns="columns" :loading="loading">
       <template #op="{ row }">
         <t-space size="small">
           <t-link theme="primary" :loading="testingId === row.ID" @click="test(row)">{{ $t('proxies.test') }}</t-link>
@@ -14,9 +14,9 @@
           </t-popconfirm>
         </t-space>
       </template>
-    </t-table>
+    </c-table>
 
-    <t-dialog v-model:visible="createVisible" :header="editingId ? $t('proxies.edit') : $t('proxies.create')" :confirm-btn="{ loading: creating }" @confirm="submit">
+    <c-dialog v-model:visible="createVisible" :header="editingId ? $t('proxies.edit') : $t('proxies.create')" :confirm-btn="{ loading: creating }" @confirm="submit">
       <t-form label-width="80px">
         <t-form-item :label="$t('proxies.name')">
           <t-input v-model="form.name" :placeholder="$t('common.optional')" />
@@ -42,26 +42,21 @@
         </t-form-item>
         <t-alert theme="info" :message="$t('proxies.hint')" />
       </t-form>
-    </t-dialog>
+    </c-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { CDialog } from '../../components/base'
+import { CCard, CTable } from '../../components/base'
+import PageHeader from '../../components/PageHeader.vue'
+import { useAsync } from '../../composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { api } from '../api/client'
+import { proxyApi, type Proxy } from '../../api/entities'
 
 const { t } = useI18n()
-
-interface Proxy {
-  ID: number
-  Name: string
-  Scheme: string
-  Host: string
-  Port: number
-  Username: string
-}
 
 const proxies = ref<Proxy[]>([])
 const createVisible = ref(false)
@@ -84,9 +79,13 @@ const columns = computed(() => [
   { colKey: 'op', title: t('common.colOp'), width: 180, align: 'center' },
 ])
 
+const { loading, run } = useAsync()
+
 async function load() {
-  const resp = await api.get<{ proxies: Proxy[] }>('/admin/proxies')
-  proxies.value = resp.proxies ?? []
+  await run(async () => {
+    const resp = await proxyApi.list()
+    proxies.value = resp.proxies ?? []
+  })
 }
 
 function openCreate() {
@@ -112,10 +111,10 @@ async function submit() {
   creating.value = true
   try {
     if (editingId.value > 0) {
-      await api.put(`/admin/proxies/${editingId.value}`, { ...form })
+      await proxyApi.update(editingId.value, { Name: form.name, Scheme: form.scheme, Host: form.host, Port: form.port, Username: form.username, password: form.password })
       MessagePlugin.success(t('common.saved'))
     } else {
-      await api.post('/admin/proxies', { ...form })
+      await proxyApi.create({ Name: form.name, Scheme: form.scheme, Host: form.host, Port: form.port, Username: form.username, password: form.password })
       MessagePlugin.success(t('common.created'))
     }
     createVisible.value = false
@@ -131,7 +130,7 @@ async function submit() {
 async function test(row: Proxy) {
   testingId.value = row.ID
   try {
-    const r = await api.post<{ ok: boolean; latency_ms?: number; error?: string }>(`/admin/proxies/${row.ID}/test`)
+    const r = await proxyApi.test(row.ID)
     if (r.ok) {
       MessagePlugin.success(t('proxies.testOk', { ms: r.latency_ms ?? 0 }))
     } else {
@@ -145,7 +144,7 @@ async function test(row: Proxy) {
 }
 
 async function remove(id: number) {
-  await api.del(`/admin/proxies/${id}`)
+  await proxyApi.remove(id)
   await load()
 }
 

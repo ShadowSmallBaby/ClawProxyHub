@@ -1,16 +1,16 @@
 <template>
   <div class="page">
-    <div class="page-header">
+    <page-header>
 
       <t-button theme="primary" @click="openCreate">{{ $t('tasks.create') }}</t-button>
       <t-button v-if="tab === 'runs'" theme="default" variant="outline" :loading="runsLoading" @click="refreshRuns">
         {{ $t('tasks.refreshRuns') }}
       </t-button>
-    </div>
+    </page-header>
 
-    <t-tabs v-model="tab" class="task-tabs">
+    <c-tabs v-model="tab" class="task-tabs">
       <t-tab-panel value="rules" :label="$t('tasks.tabRules')">
-        <t-table row-key="id" :data="rules" :columns="ruleColumns" :max-height="tableHeight">
+        <c-table row-key="id" :data="rules" :columns="ruleColumns" :max-height="tableHeight">
           <template #trigger="{ row }">
             <t-tag variant="light">{{ dict(triggerDict, row.trigger_type) }}</t-tag>
           </template>
@@ -31,10 +31,10 @@
               </t-popconfirm>
             </t-space>
           </template>
-        </t-table>
+        </c-table>
       </t-tab-panel>
       <t-tab-panel value="runs" :label="$t('tasks.tabRuns')">
-        <t-table row-key="id" :data="runs" :columns="runColumns" :max-height="tableHeight">
+        <c-table row-key="id" :data="runs" :columns="runColumns" :max-height="tableHeight">
           <template #status="{ row }">
             <!-- 错误信息并入状态 tooltip -->
             <t-tooltip
@@ -51,9 +51,9 @@
               {{ dict(runStatusDict, row.status) }}
             </t-tag>
           </template>
-        </t-table>
+        </c-table>
       </t-tab-panel>
-    </t-tabs>
+    </c-tabs>
     <t-pagination
       class="task-pagination"
       v-model="page"
@@ -65,7 +65,7 @@
       @page-size-change="onPageChange"
     />
 
-    <t-dialog v-model:visible="createVisible" :header="editingId ? $t('tasks.editTitle') : $t('tasks.createTitle')" width="560px" :confirm-btn="{ loading: creating }" @confirm="submit">
+    <c-dialog v-model:visible="createVisible" :header="editingId ? $t('tasks.editTitle') : $t('tasks.createTitle')" width="560px" :confirm-btn="{ loading: creating }" @confirm="submit">
       <t-form label-width="90px">
         <t-alert v-if="editingAuto" theme="info" :message="$t('tasks.autoLocked')" style="margin-bottom: 12px" />
         <t-form-item :label="$t('tasks.plugin')" mark>
@@ -113,17 +113,22 @@
           </t-select>
         </t-form-item>
       </t-form>
-    </t-dialog>
+    </c-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { CTabs } from '../../components/base'
+import { CDialog } from '../../components/base'
+import { CCard, CTable } from '../../components/base'
+import PageHeader from '../../components/PageHeader.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { api } from '../api/client'
-import { dict, runStatusDict, triggerDict } from '../utils/dict'
-import type { TaskRule, TaskRun } from '../api/types'
+import { accountApi, pluginApi, taskApi } from '../../api/entities'
+import { pluginLabelOf } from '../../utils/lookup'
+import { dict, runStatusDict, triggerDict } from '../../utils/dict'
+import type { TaskRule, TaskRun } from '../../api/types'
 
 const { t } = useI18n()
 
@@ -177,7 +182,7 @@ async function loadAccounts() {
   if (accounts.value.length) return
   acctsLoading.value = true
   try {
-    const resp = await api.get<{ accounts: { id: number; display_name: string }[] }>('/admin/accounts')
+    const resp = await accountApi.list()
     accounts.value = resp.accounts ?? []
   } finally {
     acctsLoading.value = false
@@ -190,9 +195,7 @@ async function loadCapabilities(pluginId?: number) {
   if (!name) return
   capsLoading.value = true
   try {
-    const resp = await api.get<{ capabilities: { id: string; label: string }[] }>(
-      `/admin/plugins/${name}/task-capabilities`,
-    )
+    const resp = await pluginApi.taskCapabilities(name)
     capabilities.value = resp.capabilities ?? []
   } finally {
     capsLoading.value = false
@@ -252,12 +255,7 @@ const ruleColumns = computed(() => [
   { colKey: 'op', title: t('common.colOp'), width: 190, align: 'center' },
 ])
 
-// 插件品牌名映射（新建规则弹窗用）
-function pluginLabel(pluginID: number): string {
-  const p = plugins.value.find((x) => x.id === pluginID)
-  return p?.label || p?.name || `#${pluginID}`
-}
-
+const pluginLabel = (pluginID: number) => pluginLabelOf(plugins.value, pluginID)
 const runColumns = computed(() => [
   { colKey: 'plugin', title: t('tasks.plugin'), width: 170 },
   { colKey: 'instance', title: t('tasks.colInstance'), width: 120, align: 'center', ellipsis: true, cell: (_h: any, { row }: any) => row.instance || '-' },
@@ -301,9 +299,7 @@ function fmtTriggerValue(row: TaskRule): string {
 
 // 规则分页拉取（与执行历史各自独立分页）
 async function loadRules() {
-  const r = await api.get<{ rules: TaskRule[]; total: number }>(
-    `/admin/task-rules?page=${page.value}&page_size=${pageSize.value}`,
-  )
+  const r = await taskApi.rules(page.value, pageSize.value)
   rules.value = r.rules ?? []
   ruleTotal.value = r.total ?? 0
 }
@@ -317,7 +313,7 @@ async function onPageChange() {
 async function load() {
   const [, p] = await Promise.all([
     loadRules(),
-    api.get<{ plugins: { id: number; name: string; label?: string }[] }>('/admin/plugins'),
+    pluginApi.list(),
   ])
   plugins.value = p.plugins ?? []
   await refreshRuns()
@@ -327,9 +323,7 @@ async function load() {
 async function refreshRuns() {
   runsLoading.value = true
   try {
-    const rn = await api.get<{ runs: TaskRun[]; total: number }>(
-      `/admin/task-runs?page=${page.value}&page_size=${pageSize.value}`,
-    )
+    const rn = await taskApi.runs(page.value, pageSize.value)
     runs.value = rn.runs ?? []
     runTotal.value = rn.total ?? 0
   } finally {
@@ -360,10 +354,10 @@ async function submit() {
       target_json: form.target_scope === 'account_ids' ? JSON.stringify([form.target_account]) : '[]',
     }
     if (editingId.value) {
-      await api.put(`/admin/task-rules/${editingId.value}`, payload)
+      await taskApi.updateRule(editingId.value, payload)
       MessagePlugin.success(t('common.updated'))
     } else {
-      await api.post('/admin/task-rules', payload)
+      await taskApi.createRule(payload)
       MessagePlugin.success(t('common.created'))
     }
     createVisible.value = false
@@ -376,18 +370,18 @@ async function submit() {
 }
 
 async function toggle(rule: TaskRule, enabled: boolean) {
-  await api.post(`/admin/task-rules/${rule.id}/toggle`)
+  await taskApi.toggleRule(rule.id)
   rule.enabled = enabled
 }
 
 async function run(rule: TaskRule) {
-  await api.post(`/admin/task-rules/${rule.id}/run`)
+  await taskApi.runRule(rule.id)
   MessagePlugin.success(t('tasks.queued'))
   setTimeout(load, 2000)
 }
 
 async function removeRule(id: number) {
-  await api.del(`/admin/task-rules/${id}`)
+  await taskApi.removeRule(id)
   await load()
 }
 

@@ -1,9 +1,9 @@
 <template>
   <div class="page">
-    <div class="page-header">
+    <page-header>
       <t-button theme="primary" @click="openCreate">{{ $t('oauth.create') }}</t-button>
-    </div>
-    <t-table row-key="id" :data="creds" :columns="columns">
+    </page-header>
+    <c-table row-key="id" :data="creds" :columns="columns" :loading="loading">
       <template #has_token="{ row }">
         <t-tag v-if="row.has_token" theme="success" variant="light" size="small">{{ $t('oauth.tokenSet') }}</t-tag>
         <t-tag v-else theme="warning" variant="light" size="small">{{ $t('oauth.tokenEmpty') }}</t-tag>
@@ -19,9 +19,9 @@
           </t-popconfirm>
         </t-space>
       </template>
-    </t-table>
+    </c-table>
 
-    <t-dialog
+    <c-dialog
       v-model:visible="dialogVisible"
       :header="editingId ? $t('oauth.edit') : $t('oauth.create')"
       :confirm-btn="{ loading: saving }"
@@ -51,15 +51,19 @@
         </t-form-item>
         <t-alert theme="info" :message="$t('oauth.hint')" />
       </t-form>
-    </t-dialog>
+    </c-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { CDialog } from '../../components/base'
+import { CCard, CTable } from '../../components/base'
+import PageHeader from '../../components/PageHeader.vue'
+import { useAsync } from '../../composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { api } from '../api/client'
+import { oauthApi, type OAuthCred } from '../../api/entities'
 
 const { t } = useI18n()
 
@@ -68,16 +72,6 @@ const platformOptions = [
   { value: 'linuxdo', label: 'LinuxDo' },
   { value: 'github', label: 'GitHub' },
 ]
-
-interface OAuthCred {
-  id: number
-  platform: string
-  account_label: string
-  has_token: boolean
-  expires_at: string | null
-  extra_json: string
-  created_at: string
-}
 
 const creds = ref<OAuthCred[]>([])
 const dialogVisible = ref(false)
@@ -103,9 +97,13 @@ function resetForm() {
   form.platform = ''; form.account_label = ''; form.token = ''; form.expires_at = ''; form.extra_json = ''
 }
 
+const { loading, run } = useAsync()
+
 async function load() {
-  const resp = await api.get<{ credentials: OAuthCred[] }>('/admin/oauth-credentials')
-  creds.value = resp.credentials ?? []
+  await run(async () => {
+    const resp = await oauthApi.list()
+    creds.value = resp.credentials ?? []
+  })
 }
 
 function openCreate() {
@@ -137,10 +135,10 @@ async function submit() {
   saving.value = true
   try {
     if (editingId.value > 0) {
-      await api.put(`/admin/oauth-credentials/${editingId.value}`, { ...form })
+      await oauthApi.update(editingId.value, { ...form })
       MessagePlugin.success(t('common.saved'))
     } else {
-      await api.post('/admin/oauth-credentials', { ...form })
+      await oauthApi.create({ ...form })
       MessagePlugin.success(t('common.created'))
     }
     dialogVisible.value = false
@@ -153,7 +151,7 @@ async function submit() {
 }
 
 async function remove(id: number) {
-  await api.del(`/admin/oauth-credentials/${id}`)
+  await oauthApi.remove(id)
   await load()
 }
 

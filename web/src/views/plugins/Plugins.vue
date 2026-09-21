@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <div class="page-header">
+    <page-header>
 
       <t-space>
         <t-button variant="outline" @click="openSources">{{ $t('plugins.sources') }}</t-button>
@@ -15,18 +15,15 @@
           <t-button theme="primary">{{ $t('plugins.upload') }}</t-button>
         </t-upload>
       </t-space>
-    </div>
+    </page-header>
 
     <!-- 已安装 -->
     <t-empty v-if="!plugins.length" :description="$t('plugins.emptyInstalled')" />
     <div class="plugin-grid">
-      <t-card v-for="p in plugins" :key="p.name">
+      <c-card v-for="p in plugins" :key="p.name">
         <template #header>
           <div class="plugin-head">
-            <div class="plugin-icon">
-              <img v-if="p.icon" :src="p.icon" :alt="p.label || p.name" />
-              <span v-else>{{ (p.label || p.name).slice(0, 1) }}</span>
-            </div>
+            <entity-icon :icon="p.icon" :name="p.label || p.name" />
             <div class="plugin-head-meta">
               <div class="plugin-name">{{ p.label || p.name }}</div>
               <div class="plugin-sub">
@@ -56,7 +53,7 @@
             <t-link theme="danger" @click="askUninstall(p)">{{ $t('plugins.uninstall') }}</t-link>
           </t-space>
         </t-space>
-      </t-card>
+      </c-card>
     </div>
 
     <!-- 市场：多源时按源下拉懒加载，默认 official -->
@@ -70,10 +67,7 @@
         <div class="market-card" v-for="e in marketEntries" :key="(e.source ?? '') + '/' + e.author + '/' + e.name">
           <t-tag size="small" variant="light" class="market-version">v{{ e.version }}</t-tag>
           <div class="market-head">
-            <div class="market-icon">
-              <img v-if="e.icon" :src="e.icon" :alt="e.label?.zh ?? e.name" />
-              <span v-else>{{ (e.label?.zh ?? e.name).slice(0, 1) }}</span>
-            </div>
+            <entity-icon :icon="e.icon" :name="e.label?.zh ?? e.name" size="40px" />
             <div class="market-meta">
               <div class="market-name">{{ label(e.label, e.name) }}</div>
               <div class="market-sub">{{ e.author || $t('plugins.unknownAuthor') }}</div>
@@ -94,7 +88,7 @@
     </t-drawer>
 
     <!-- 插件设置：schema 动态渲染 -->
-    <t-dialog
+    <c-dialog
       v-model:visible="settingsVisible"
       :header="$t('plugins.settingsHeader', { name: settingsPlugin?.label || (settingsPlugin?.name ?? '') })"
       :confirm-btn="{ loading: savingSettings }"
@@ -114,14 +108,14 @@
         </t-form-item>
       </t-form>
       <t-alert v-if="settingFields.length" theme="info" :message="$t('plugins.settingsHint')" style="margin-top: 12px" />
-    </t-dialog>
+    </c-dialog>
 
     <!-- 插件实例：多实例插件的实例列表，统一在此增改删 -->
     <t-drawer v-model:visible="instancesVisible" :header="$t('plugins.instancesHeader', { name: instancesPlugin?.label || (instancesPlugin?.name ?? '') })" size="640px" :footer="false">
       <div style="margin-bottom: 12px">
         <t-button theme="primary" size="small" @click="openInstanceForm(null)">{{ $t('instances.add') }}</t-button>
       </div>
-      <t-table row-key="id" :data="pluginInstances" :columns="instanceColumns" size="small">
+      <c-table row-key="id" :data="pluginInstances" :columns="instanceColumns" size="small">
         <template #base_url="{ row }"><span class="mono">{{ row.base_url || '-' }}</span></template>
         <template #op="{ row }">
           <t-space size="small">
@@ -129,7 +123,7 @@
             <t-link theme="danger" @click="askRemoveInstance(row)">{{ $t('common.delete') }}</t-link>
           </t-space>
         </template>
-      </t-table>
+      </c-table>
     </t-drawer>
     <instance-form-dialog v-model:visible="instanceFormVisible" :plugin="instancesPlugin" :instance="instanceEditing" @saved="loadPluginInstances" />
     <delete-impact-dialog
@@ -171,7 +165,7 @@
     </t-drawer>
 
     <!-- 源新建/编辑：英文名全局唯一；保存前探测索引可达并记录条目数 -->
-    <t-dialog v-model:visible="sourceFormVisible" :header="sourceEditing ? $t('plugins.sourceEdit') : $t('plugins.sourceAdd')" :confirm-btn="{ loading: savingSources }" @confirm="saveSourceForm">
+    <c-dialog v-model:visible="sourceFormVisible" :header="sourceEditing ? $t('plugins.sourceEdit') : $t('plugins.sourceAdd')" :confirm-btn="{ loading: savingSources }" @confirm="saveSourceForm">
       <t-form label-width="90px">
         <t-form-item :label="$t('plugins.sourceName')" required-mark>
           <t-input v-model="sourceForm.name" :disabled="sourceEditing?.name === 'official'" placeholder="my-source" />
@@ -180,20 +174,24 @@
           <t-input v-model="sourceForm.url" placeholder="https://.../index.json" />
         </t-form-item>
       </t-form>
-    </t-dialog>
+    </c-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { CCard, CDialog, CTable } from '../../components/base'
+import EntityIcon from '../../components/EntityIcon.vue'
+import PageHeader from '../../components/PageHeader.vue'
+import { useAsync } from '../../composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import type { ResponseType } from 'tdesign-vue-next'
-import { api, getToken } from '../api/client'
-import InstanceFormDialog from '../components/InstanceFormDialog.vue'
-import DeleteImpactDialog from '../components/DeleteImpactDialog.vue'
-import { capabilityDict, dict, label } from '../utils/dict'
-import type { InstanceInfo, PluginInfo, PluginSource } from '../api/types'
+import { pluginApi, pluginSourceApi, instanceApi, type MarketEntry } from '../../api/entities'
+import InstanceFormDialog from '../../components/InstanceFormDialog.vue'
+import DeleteImpactDialog from '../../components/DeleteImpactDialog.vue'
+import { capabilityDict, dict, label } from '../../utils/dict'
+import type { InstanceInfo, PluginInfo, PluginSource } from '../../api/types'
 
 const { t } = useI18n()
 
@@ -201,10 +199,6 @@ const plugins = ref<PluginInfo[]>([])
 
 // ---------- 市场 ----------
 
-interface MarketEntry {
-  name: string; version: string; author?: string; icon?: string; label?: Record<string, string>
-  published_at?: string; source?: string; installed?: boolean; updatable?: boolean
-}
 const marketVisible = ref(false)
 const marketLoading = ref(false)
 const marketEntries = ref<MarketEntry[]>([])
@@ -225,7 +219,7 @@ async function openMarket() {
 async function loadMarket() {
   marketLoading.value = true
   try {
-    const resp = await api.get<{ plugins: MarketEntry[]; source?: string }>(`/admin/plugins/marketplace?source=${encodeURIComponent(marketSourceName.value)}`)
+    const resp = await pluginApi.marketplace(marketSourceName.value)
     marketEntries.value = resp.plugins ?? []
     marketOnline.value = resp.source ?? ''
   } catch (e: any) {
@@ -238,7 +232,7 @@ async function loadMarket() {
 async function installFromMarket(e: MarketEntry) {
   installing.value = e.author + '/' + e.name
   try {
-    await api.post('/admin/plugins/install-market', { name: e.name, author: e.author ?? '', source: e.source ?? '' })
+    await pluginApi.installMarket(e.name, e.author ?? '', e.source ?? '')
     MessagePlugin.success(t('plugins.installedN', { name: e.name }))
     await load()
     if (marketVisible.value) await loadMarket()
@@ -259,7 +253,7 @@ const sourceEditing = ref<PluginSource | null>(null)
 const sourceForm = reactive({ name: '', url: '' })
 
 async function loadSources() {
-  const resp = await api.get<{ sources: PluginSource[] }>('/admin/plugin-sources')
+  const resp = await pluginSourceApi.list()
   sources.value = resp.sources ?? []
 }
 
@@ -279,7 +273,7 @@ function openSourceForm(s: PluginSource | null) {
 async function persistSources(list: PluginSource[]) {
   savingSources.value = true
   try {
-    await api.put('/admin/plugin-sources', { sources: list.map((s) => ({ name: s.name, url: s.url, enabled: s.enabled })) })
+    await pluginSourceApi.save(list.map((s) => ({ name: s.name, url: s.url, enabled: s.enabled })))
     await loadSources()
     MessagePlugin.success(t('plugins.sourcesSaved'))
     return true
@@ -310,7 +304,7 @@ async function saveSourceForm() {
   if (url !== sourceEditing.value?.url) {
     savingSources.value = true
     try {
-      await api.get(`/admin/plugin-sources/probe?url=${encodeURIComponent(url)}`)
+      await pluginSourceApi.probe(url)
     } catch (e: any) {
       MessagePlugin.error(e.message)
       savingSources.value = false
@@ -353,7 +347,7 @@ async function openInstances(p: PluginInfo) {
 
 async function loadPluginInstances() {
   if (!instancesPlugin.value) return
-  const resp = await api.get<{ instances: InstanceInfo[] }>(`/admin/instances?plugin_id=${instancesPlugin.value.id}`)
+  const resp = await instanceApi.list(instancesPlugin.value.id)
   pluginInstances.value = resp.instances ?? []
 }
 
@@ -407,7 +401,7 @@ const savingSettings = ref(false)
 
 async function openSettings(p: PluginInfo) {
   settingsPlugin.value = p
-  const resp = await api.get<{ schema: Record<string, any>; values: Record<string, any> }>(`/admin/plugins/${p.name}/settings`)
+  const resp = await pluginApi.settings(p.name)
   const props = resp.schema?.properties ?? {}
   settingFields.value = Object.entries(props).map(([key, def]: [string, any]) => ({
     key, title: def.title ?? key, description: def.description ?? '',
@@ -421,7 +415,7 @@ async function saveSettings() {
   if (!settingsPlugin.value) return
   savingSettings.value = true
   try {
-    await api.put(`/admin/plugins/${settingsPlugin.value.name}/settings`, { values: settingsValues.value })
+    await pluginApi.saveSettings(settingsPlugin.value.name, settingsValues.value)
     MessagePlugin.success(t('plugins.saved'))
     settingsVisible.value = false
   } catch (e: any) {
@@ -436,7 +430,7 @@ async function resetSettings() {
   if (!settingsPlugin.value) return
   savingSettings.value = true
   try {
-    await api.put(`/admin/plugins/${settingsPlugin.value.name}/settings`, { values: {} })
+    await pluginApi.saveSettings(settingsPlugin.value.name, {})
     MessagePlugin.success(t('plugins.resetDone'))
     settingsValues.value = {}
     settingsVisible.value = false
@@ -449,20 +443,18 @@ async function resetSettings() {
 
 // ---------- 已装插件 ----------
 
+const { run } = useAsync()
+
 async function load() {
-  const resp = await api.get<{ plugins: PluginInfo[] }>('/admin/plugins')
-  plugins.value = resp.plugins ?? []
+  await run(async () => {
+    const resp = await pluginApi.list()
+    plugins.value = resp.plugins ?? []
+  })
 }
 
 // t-upload 自定义上传：multipart 直发安装端点
 async function uploadInstall({ raw }: { raw: File }): Promise<ResponseType> {
-  const form = new FormData()
-  form.append('package', raw)
-  const resp = await fetch('/admin/plugins/install-upload', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${getToken()}` },
-    body: form,
-  })
+  const resp = await pluginApi.uploadInstall(raw)
   if (resp.ok) {
     MessagePlugin.success(t('plugins.installOk'))
     await load()
@@ -477,14 +469,14 @@ function onUploadFail({ file }: any) {
 }
 
 async function restart(name: string) {
-  await api.post(`/admin/plugins/${name}/stop`)
-  await api.post(`/admin/plugins/${name}/start`)
+  await pluginApi.stop(name)
+  await pluginApi.start(name)
   MessagePlugin.success(t('plugins.restarted'))
   await load()
 }
 
 async function stop(name: string) {
-  await api.post(`/admin/plugins/${name}/stop`)
+  await pluginApi.stop(name)
   MessagePlugin.success(t('plugins.stopped'))
   await load()
 }
@@ -494,13 +486,6 @@ onMounted(load)
 
 <style scoped>
 .plugin-head { display: flex; align-items: center; gap: 12px; }
-.plugin-icon {
-  width: 44px; height: 44px; border-radius: 10px;
-  background: var(--td-brand-color-light); color: var(--td-brand-color);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 20px; font-weight: 700; overflow: hidden; flex-shrink: 0;
-}
-.plugin-icon img { width: 100%; height: 100%; object-fit: cover; }
 .plugin-name { font-weight: 600; line-height: 1.3; }
 .plugin-sub { font-size: 12px; color: var(--td-text-color-secondary); display: flex; align-items: center; gap: 6px; }
 .proto-tag { font-family: ui-monospace, monospace; }
@@ -517,13 +502,6 @@ onMounted(load)
   font-variant-numeric: tabular-nums; font-family: ui-monospace, monospace;
 }
 .market-head { display: flex; align-items: center; gap: 10px; }
-.market-icon {
-  width: 40px; height: 40px; border-radius: 10px;
-  background: var(--td-brand-color-light); color: var(--td-brand-color);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 18px; font-weight: 700; overflow: hidden; flex-shrink: 0;
-}
-.market-icon img { width: 100%; height: 100%; object-fit: cover; }
 .market-meta { flex: 1; min-width: 0; }
 .market-name { font-weight: 600; line-height: 1.3; }
 .market-sub { font-size: 12px; color: var(--td-text-color-secondary); }

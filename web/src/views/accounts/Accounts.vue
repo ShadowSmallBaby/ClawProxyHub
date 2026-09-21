@@ -1,45 +1,21 @@
 <template>
   <div class="page">
-    <div class="page-header">
+    <page-header>
       
       <t-button theme="primary" :disabled="!plugins.length" @click="openAdd">{{ $t('accounts.add') }}</t-button>
-    </div>
+    </page-header>
 
-    <t-table row-key="id" :data="accounts" :columns="columns" :loading="loading">
+    <c-table row-key="id" :data="accounts" :columns="columns" :loading="loading">
       <template #display_name="{ row }">
         <span class="acct-name" @click="openDetail(row.id)">{{ row.display_name || `#${row.id}` }}</span>
       </template>
       <template #group="{ row }">
-        <div class="group-tags" @click.stop>
-          <t-tag
-            v-for="gid in row.group_ids ?? []"
-            :key="gid"
-            size="small"
-            variant="light"
-            closable
-            @close="() => toggleGroup(row, gid, false)"
-          >
-            {{ groupName(gid) }}
-          </t-tag>
-          <t-popup trigger="click">
-            <t-tag size="small" theme="default" variant="light" class="group-add">＋</t-tag>
-            <template #content>
-              <div class="group-picker">
-                <div v-if="!groupsOf(row).length" class="group-picker-empty">{{ $t('accounts.noGroups') }}</div>
-                <div
-                  v-for="g in groupsOf(row)"
-                  :key="g.id"
-                  class="group-picker-item"
-                  :class="{ active: (row.group_ids ?? []).includes(g.id) }"
-                  @click="() => toggleGroup(row, g.id, !(row.group_ids ?? []).includes(g.id))"
-                >
-                  {{ g.name }}
-                  <check-icon v-if="(row.group_ids ?? []).includes(g.id)" />
-                </div>
-              </div>
-            </template>
-          </t-popup>
-        </div>
+        <group-picker
+          :model-value="row.group_ids"
+          :groups="groupsOf(row)"
+          :name-of="groupName"
+          @update:model-value="(v: number[]) => toggleGroup(row, v)"
+        />
       </template>
       <template #schedule="{ row }">
         <t-tooltip v-if="pausedInfo(row)" :content="pausedInfo(row)!" placement="top">
@@ -75,7 +51,7 @@
           <t-link theme="danger" @click="askRemove(row)">{{ $t('common.delete') }}</t-link>
         </t-space>
       </template>
-    </t-table>
+    </c-table>
 
     <!-- 账号详情：套餐/积分 + 任务执行情况 -->
     <t-drawer v-model:visible="detailVisible" :header="detailHeader" size="720px">
@@ -103,7 +79,7 @@
               <template v-else>{{ e.value }}</template>
             </t-descriptions-item>
           </t-descriptions>
-          <t-table
+          <c-table
             v-if="sec.items?.length && sec.columns?.length"
             :data="sec.items"
             size="small"
@@ -118,12 +94,12 @@
               </t-tag>
               <template v-else>{{ row.cells?.[col.colKey] || '-' }}</template>
             </template>
-          </t-table>
+          </c-table>
         </div>
 
         <div>
           <div class="section-title">{{ $t('accounts.runsTitle') }}</div>
-          <t-table
+          <c-table
             v-if="detail.runs?.length"
             row-key="ID"
             :data="detail.runs"
@@ -136,14 +112,14 @@
                 {{ dict(runStatusDict, run.status) }}
               </t-tag>
             </template>
-          </t-table>
+          </c-table>
           <t-empty v-else :description="$t('accounts.noRuns')" />
         </div>
       </t-space>
     </t-drawer>
 
     <!-- 添加账号：向导（选择客户端 → 授权 → 配置） -->
-    <t-dialog v-model:visible="addVisible" :header="$t('accounts.add')" :footer="false" width="680px" :close-on-overlay-click="false">
+    <c-dialog v-model:visible="addVisible" :header="$t('accounts.add')" :footer="false" width="680px" :close-on-overlay-click="false">
 
       <!-- 第一步：选择客户端（卡片平铺，每行四个） -->
       <template v-if="wizardStep === 'select'">
@@ -151,10 +127,7 @@
         <t-row v-else :gutter="[12, 12]">
           <t-col v-for="p in plugins" :key="p.id" :span="6">
             <div class="client-card" @click="choosePlugin(p)">
-              <div class="client-icon">
-                <img v-if="p.icon" :src="p.icon" :alt="p.label || p.name" />
-                <span v-else>{{ (p.label || p.name).slice(0, 1) }}</span>
-              </div>
+              <entity-icon :icon="p.icon" :name="p.label || p.name" />
               <div class="client-name">{{ p.label || p.name }}</div>
               <div class="client-caps">
                 <t-tag v-for="c in (p.capabilities ?? []).slice(0, 3)" :key="c" size="small" variant="light">
@@ -186,7 +159,7 @@
           </t-form-item>
         </t-form>
 
-        <t-tabs v-if="methods.length" v-model="methodId">
+        <c-tabs v-if="methods.length" v-model="methodId">
           <t-tab-panel v-for="m in methods" :key="m.id" :value="m.id" :label="label(m.label, m.id)">
             <div class="tab-body">
               <t-form v-if="currentFields?.length" label-width="90px">
@@ -215,7 +188,7 @@
               <t-alert v-else theme="info" :message="$t('accounts.noFieldsHint')" />
             </div>
           </t-tab-panel>
-        </t-tabs>
+        </c-tabs>
 
         <!-- 浏览器授权：链接可复制可打开；auto 模式自动轮询 -->
         <t-alert v-if="nextStep" :theme="nextStep.action === 'open_url' ? 'warning' : 'info'">
@@ -288,10 +261,10 @@
         </div>
         <t-button theme="primary" block :loading="savingConfig" @click="finishWizard">{{ $t('accounts.finish') }}</t-button>
       </t-space>
-    </t-dialog>
+    </c-dialog>
 
     <!-- 编辑账号：改名 / 绑分组 / 绑代理 / 同步模型 -->
-    <t-dialog v-model:visible="editVisible" :header="$t('accounts.editTitle')" :confirm-btn="{ loading: editSaving }" width="640px" @confirm="submitEdit">
+    <c-dialog v-model:visible="editVisible" :header="$t('accounts.editTitle')" :confirm-btn="{ loading: editSaving }" width="640px" @confirm="submitEdit">
       <t-form v-if="editRow" label-width="90px">
         <t-form-item :label="$t('accounts.name')">
           <t-input v-model="editName" :placeholder="$t('accounts.namePh')" clearable />
@@ -315,7 +288,7 @@
           </div>
         </t-form-item>
       </t-form>
-    </t-dialog>
+    </c-dialog>
 
     <!-- 在线测试：选端点/模型/问题 → 响应日志 -->
     <t-drawer v-model:visible="testVisible" :header="$t('accounts.testTitle')" size="560px" :footer="false">
@@ -351,16 +324,21 @@
 </template>
 
 <script setup lang="ts">
+import { CCard, CDialog, CTable, CTabs } from '../../components/base'
+import PageHeader from '../../components/PageHeader.vue'
+import EntityIcon from '../../components/EntityIcon.vue'
+import GroupPicker from './GroupPicker.vue'
+import { pluginLabelOf, instanceNameOf } from '../../utils/lookup'
+import { timeAgo, fmtNum, fmtTime } from '../../utils/format'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { CheckIcon } from 'tdesign-icons-vue-next'
-import { api } from '../api/client'
-import BindSelect from '../components/BindSelect.vue'
-import DeleteImpactDialog from '../components/DeleteImpactDialog.vue'
-import { accountStatusDict, capabilityDict, dict, label, runStatusDict } from '../utils/dict'
-import type { Account, AccountDetail, AuthMethod, GroupInfo, InstanceInfo, LoginResp, ModelInfo, NextStep, PluginInfo } from '../api/types'
+import { accountApi, groupApi, instanceApi, pluginApi, proxyApi } from '../../api/entities'
+import BindSelect from '../../components/BindSelect.vue'
+import DeleteImpactDialog from '../../components/DeleteImpactDialog.vue'
+import { accountStatusDict, capabilityDict, dict, label, runStatusDict } from '../../utils/dict'
+import type { Account, AccountDetail, AuthMethod, GroupInfo, InstanceInfo, LoginResp, ModelInfo, NextStep, PluginInfo } from '../../api/types'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -430,9 +408,7 @@ function instanceOptions(pluginID: number) {
     .filter((i) => i.plugin_id === pluginID)
     .map((i) => ({ value: i.id, label: i.base_url ? `${i.name} · ${i.base_url}` : i.name }))
 }
-function instanceName(id: number): string {
-  return instances.value.find((i) => i.id === id)?.name ?? (id ? `#${id}` : '-')
-}
+const instanceName = (id: number) => instanceNameOf(instances.value, id)
 
 // 授权按钮文案：按登录方式形态给出（发送验证码 / 生成授权链接 / 授权）
 const submitLabel = computed(() => {
@@ -456,29 +432,14 @@ const columns = computed(() => [
   { colKey: 'op', title: t('common.colOp'), width: 200, align: 'center' },
 ])
 
-// 相对时间：如 5分钟前 / 1天前 / 3个月前
-function timeAgo(ts: string): string {
-  const diff = Date.now() - new Date(ts.replace(' ', 'T')).getTime()
-  const min = Math.floor(diff / 60000)
-  if (min < 1) return t('common.justNow')
-  if (min < 60) return t('common.minutesAgo', { n: min })
-  const h = Math.floor(min / 60)
-  if (h < 24) return t('common.hoursAgo', { n: h })
-  const d = Math.floor(h / 24)
-  if (d < 30) return t('common.daysAgo', { n: d })
-  const mo = Math.floor(d / 30)
-  if (mo < 12) return t('common.monthsAgo', { n: mo })
-  return t('common.yearsAgo', { n: Math.floor(mo / 12) })
-}
-
 // 调度开关：active ↔ disabled（expired 需重新授权，不可直接开关）
 async function toggleSchedule(row: Account) {
   if (row.status === 'active') {
-    await api.post(`/admin/accounts/${row.id}/pause`)
+    await accountApi.pause(row.id)
     MessagePlugin.success(t('accounts.pausedSchedule'))
   } else {
     try {
-      await api.post(`/admin/accounts/${row.id}/resume`)
+      await accountApi.resume(row.id)
       MessagePlugin.success(t('accounts.resumedSchedule'))
     } catch (e: any) {
       MessagePlugin.warning(e?.message || String(e))
@@ -487,11 +448,7 @@ async function toggleSchedule(row: Account) {
   await loadAll()
 }
 
-// 插件品牌名映射：关联字段统一显示品牌而非 id
-function pluginLabel(pluginID: number): string {
-  const p = plugins.value.find((x) => x.id === pluginID)
-  return p?.label || p?.name || `#${pluginID}`
-}
+const pluginLabel = (pluginID: number) => pluginLabelOf(plugins.value, pluginID)
 
 // ---------- 暂停展示 ----------
 
@@ -596,18 +553,8 @@ function sectionColumns(cols: { key: string; title: Record<string, string>; kind
   }))
 }
 
-function fmtNum(v: string | undefined | null): string {
-  if (v === undefined || v === null || v === '') return '-'
-  const n = Number(v)
-  return Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) : v
-}
-
-function fmtTime(t: string | null | undefined): string {
-  return t ? t.replace('T', ' ').slice(0, 19) : '-'
-}
-
 async function openDetail(id: number) {
-  detail.value = await api.get<AccountDetail>(`/admin/accounts/${id}/detail`)
+  detail.value = await accountApi.detail(id)
   detailVisible.value = true
 }
 
@@ -644,11 +591,7 @@ async function loadAll() {
   loading.value = true
   try {
     const [p, a, g, px, ins] = await Promise.all([
-      api.get<{ plugins: PluginInfo[] }>('/admin/plugins'),
-      api.get<{ accounts: Account[] }>('/admin/accounts'),
-      api.get<{ groups: GroupInfo[] }>('/admin/groups'),
-      api.get<{ proxies: typeof proxies.value }>('/admin/proxies'),
-      api.get<{ instances: InstanceInfo[] }>('/admin/instances'),
+      pluginApi.list(), accountApi.list(), groupApi.list(), proxyApi.list(), instanceApi.list(),
     ])
     plugins.value = p.plugins ?? []
     accounts.value = a.accounts ?? []
@@ -689,8 +632,8 @@ async function openEdit(row: Account) {
   editProxies.value = []
   editVisible.value = true
   const [px, detail] = await Promise.all([
-    api.get<{ proxy_ids: number[] }>(`/admin/accounts/${row.id}/proxies`).catch(() => ({ proxy_ids: [] })),
-    api.get<AccountDetail>(`/admin/accounts/${row.id}/detail`).catch(() => null),
+    accountApi.proxies(row.id).catch(() => ({ proxy_ids: [] })),
+    accountApi.detail(row.id).catch(() => null),
   ])
   editProxies.value = px.proxy_ids ?? []
   editModels.value = (detail?.models ?? []).map((m) => ({ id: m.id }))
@@ -701,7 +644,7 @@ async function editSyncModels() {
   if (!editRow.value || editSyncing.value) return
   editSyncing.value = true
   try {
-    const resp = await api.get<{ models: ModelInfo[] | null }>(`/admin/accounts/${editRow.value.id}/models?refresh=1`)
+    const resp = await accountApi.models(editRow.value.id, true)
     editModels.value = (resp.models ?? []).map((m) => ({ id: m.id }))
   } catch (e: any) {
     MessagePlugin.warning(t('accounts.syncFailed', { msg: e.message }))
@@ -716,9 +659,9 @@ async function submitEdit() {
   editSaving.value = true
   try {
     const id = editRow.value.id
-    await api.put(`/admin/accounts/${id}`, { display_name: editName.value, group_ids: editGroups.value, instance_id: editInstanceId.value ?? 0 })
-    await api.put(`/admin/accounts/${id}/proxies`, { proxy_ids: editProxies.value })
-    await api.put(`/admin/accounts/${id}/models`, { models: editModels.value })
+    await accountApi.update(id, { display_name: editName.value, group_ids: editGroups.value, instance_id: editInstanceId.value ?? 0 })
+    await accountApi.saveProxies(id, editProxies.value)
+    await accountApi.saveModels(id, editModels.value)
     MessagePlugin.success(t('common.saved'))
     editVisible.value = false
     await loadAll()
@@ -738,7 +681,7 @@ async function openTest(row: Account) {
   testLogs.value = []
   testModel.value = ''
   testVisible.value = true
-  const detail = await api.get<AccountDetail>(`/admin/accounts/${row.id}/detail`).catch(() => null)
+  const detail = await accountApi.detail(row.id).catch(() => null)
   editModels.value = (detail?.models ?? []).map((m) => ({ id: m.id }))
   if (editModels.value.length) testModel.value = editModels.value[0].id
 }
@@ -750,7 +693,7 @@ async function runTest() {
   testText.value = ''
   testLogs.value = []
   try {
-    const resp = await api.post<{ text: string; logs: string[] }>(`/admin/accounts/${testRow.value.id}/test`, {
+    const resp = await accountApi.test(testRow.value.id, {
       endpoint: testEndpoint.value, model: testModel.value, question: testQuestion.value,
     })
     testText.value = resp.text ?? ''
@@ -777,14 +720,14 @@ async function choosePlugin(p: PluginInfo) {
   pluginName.value = p.name
   wizardStep.value = 'auth'
   loadMethods(p.name)
-  const resp = await api.get<{ instances: InstanceInfo[] }>(`/admin/instances?plugin_id=${p.id}`).catch(() => ({ instances: [] }))
+  const resp = await instanceApi.list(p.id).catch(() => ({ instances: [] }))
   const list = resp.instances ?? []
   instances.value = [...instances.value.filter((i) => i.plugin_id !== p.id), ...list]
   wizardInstanceId.value = list[0]?.id
 }
 
 async function loadMethods(name: string) {
-  const resp = await api.get<{ auth_methods: AuthMethod[] }>(`/admin/plugins/${name}/auth-methods`)
+  const resp = await pluginApi.authMethods(name)
   methods.value = resp.auth_methods ?? []
   methodId.value = methods.value[0]?.id ?? ''
   nextStep.value = null
@@ -827,7 +770,7 @@ async function submit() {
     const payload = nextStep.value
       ? { plugin: pluginName.value, method_id: methodId.value, form: stepForm.value, state: nextStep.value.state ?? '', instance_id: wizardInstanceId.value ?? 0 }
       : { plugin: pluginName.value, method_id: methodId.value, form: form.value, state: '', instance_id: wizardInstanceId.value ?? 0 }
-    const resp = await api.post<LoginResp>('/admin/accounts/login', payload)
+    const resp = await accountApi.login(payload)
     if (resp.done) {
       enterDoneStep(resp.account_id ?? 0)
     } else {
@@ -858,7 +801,7 @@ function enterDoneStep(accountID: number) {
   wizardProfileName.value = ''
   wizardStep.value = 'done'
   // 默认展示名称（详情接口取 profile）
-  api.get<AccountDetail>(`/admin/accounts/${accountID}/detail`).then((d) => {
+  accountApi.detail(accountID).then((d) => {
     wizardProfileName.value = d.display_name || (d.profile?.displayName ?? '')
   }).catch(() => {})
   syncModels()
@@ -869,7 +812,7 @@ async function syncModels() {
   if (!newAccountId.value || modelsSyncing.value) return
   modelsSyncing.value = true
   try {
-    const resp = await api.get<{ models: { id: string }[] | null }>(`/admin/accounts/${newAccountId.value}/models?refresh=1`)
+    const resp = await accountApi.models(newAccountId.value, true)
     wizardModels.value = resp.models ?? []
   } catch (e: any) {
     MessagePlugin.warning(t('accounts.syncFailed', { msg: e.message }))
@@ -886,7 +829,7 @@ async function finishWizard() {
       const body: Record<string, unknown> = {}
       if (newAccountName.value) body.display_name = newAccountName.value
       body.group_ids = newAccountGroups.value
-      await api.put(`/admin/accounts/${newAccountId.value}`, body)
+      await accountApi.update(newAccountId.value, body)
     } finally {
       savingConfig.value = false
     }
@@ -902,7 +845,7 @@ function startPolling() {
   pollTimer = setTimeout(async () => {
     if (!autoPolling.value) return
     try {
-      const resp = await api.post<LoginResp>('/admin/accounts/login', {
+      const resp = await accountApi.login({
         plugin: pluginName.value, method_id: methodId.value,
         form: {}, state: nextStep.value?.state ?? '', instance_id: wizardInstanceId.value ?? 0,
       })
@@ -935,13 +878,12 @@ function groupName(id: number): string {
   return groups.value.find((g) => g.id === id)?.name ?? `#${id}`
 }
 
-// 单个分组增减（tag 关闭 / 弹层勾选）
-async function toggleGroup(row: Account, groupID: number, add: boolean) {
+// 分组增减（GroupPicker 回调，乐观更新）
+async function toggleGroup(row: Account, next: number[]) {
   const cur = row.group_ids ?? []
-  const next = add ? [...cur, groupID] : cur.filter((id) => id !== groupID)
-  row.group_ids = next // 乐观更新
+  row.group_ids = next
   try {
-    await api.put(`/admin/accounts/${row.id}`, { group_ids: next })
+    await accountApi.update(row.id, { group_ids: next })
   } catch (e: any) {
     row.group_ids = cur
     MessagePlugin.error(e.message)
@@ -950,7 +892,7 @@ async function toggleGroup(row: Account, groupID: number, add: boolean) {
 
 async function refresh(id: number) {
   try {
-    await api.post(`/admin/accounts/${id}/refresh`)
+    await accountApi.refresh(id)
     MessagePlugin.success(t('common.refreshed'))
     await loadAll()
   } catch (e: any) {
@@ -1068,25 +1010,6 @@ onMounted(loadAll)
   border-color: var(--td-brand-color);
   box-shadow: var(--td-shadow-1);
 }
-.client-icon {
-  width: 44px;
-  height: 44px;
-  margin: 0 auto 8px;
-  border-radius: 50%;
-  background: var(--td-brand-color-light);
-  color: var(--td-brand-color);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  font-weight: 700;
-  overflow: hidden;
-}
-.client-icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
 .client-name {
   font-weight: 600;
   margin-bottom: 6px;
@@ -1111,44 +1034,4 @@ onMounted(loadAll)
   overflow-y: auto;
 }
 
-/* 行内分组 tag：动态增减 */
-.group-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-}
-.group-add {
-  cursor: pointer;
-  min-width: 22px;
-  text-align: center;
-}
-.group-picker {
-  min-width: 160px;
-  max-height: 240px;
-  overflow-y: auto;
-}
-.group-picker-empty {
-  padding: 8px 12px;
-  font-size: 12px;
-  color: var(--td-text-color-placeholder);
-}
-.group-picker-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 12px;
-  font-size: 13px;
-  color: var(--td-text-color-primary);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background-color 0.15s ease;
-}
-.group-picker-item:hover {
-  background: var(--td-bg-color-secondarycontainer);
-}
-.group-picker-item.active {
-  color: var(--td-brand-color);
-}
 </style>

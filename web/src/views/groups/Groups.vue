@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <div class="page-header">
+    <page-header>
       
       <t-button theme="primary" @click="createVisible = true">{{ $t('groups.create') }}</t-button>
-    </div>
-    <t-table row-key="id" :data="groups" :columns="columns">
+    </page-header>
+    <c-table row-key="id" :data="groups" :columns="columns" :loading="loading">
       <template #op="{ row }">
         <t-space size="small">
           <t-link theme="primary" @click="openEdit(row)">{{ $t('common.edit') }}</t-link>
@@ -14,9 +14,9 @@
           </t-popconfirm>
         </t-space>
       </template>
-    </t-table>
+    </c-table>
 
-    <t-dialog v-model:visible="createVisible" :header="$t('groups.create')" :confirm-btn="{ loading: creating }" @confirm="create">
+    <c-dialog v-model:visible="createVisible" :header="$t('groups.create')" :confirm-btn="{ loading: creating }" @confirm="create">
       <t-form label-width="90px">
         <t-form-item :label="$t('groups.name')" mark>
           <t-input v-model="newName" :placeholder="$t('groups.namePh')" />
@@ -32,10 +32,10 @@
         <t-alert v-if="selectedPlugin?.multi_instance && !instanceOptions(newPlugin).length" theme="warning" :message="$t('accounts.noInstance')" />
         <t-alert v-else theme="info" :message="$t('groups.hintCreate')" />
       </t-form>
-    </t-dialog>
+    </c-dialog>
 
     <!-- 编辑：改名；多实例插件且分组为空时可换实例 -->
-    <t-dialog v-model:visible="editVisible" :header="$t('groups.editTitle')" :confirm-btn="{ loading: editing }" @confirm="submitEdit">
+    <c-dialog v-model:visible="editVisible" :header="$t('groups.editTitle')" :confirm-btn="{ loading: editing }" @confirm="submitEdit">
       <t-form v-if="editRow" label-width="90px">
         <t-form-item :label="$t('groups.name')" mark>
           <t-input v-model="editName" />
@@ -45,22 +45,27 @@
         </t-form-item>
         <t-alert v-if="editRow.accounts > 0" theme="info" :message="$t('groups.hintEditLocked')" />
       </t-form>
-    </t-dialog>
+    </c-dialog>
 
-    <t-dialog v-model:visible="bindVisible" :header="$t('groups.bindHeader', { name: bindGroup?.name })" @confirm="bind">
+    <c-dialog v-model:visible="bindVisible" :header="$t('groups.bindHeader', { name: bindGroup?.name })" @confirm="bind">
       <bind-select v-model="bindProxyIds" :options="proxyOptions" :placeholder="$t('groups.bindPh')" />
       <t-alert style="margin-top: 12px" theme="info" :message="$t('groups.hintBind')" />
-    </t-dialog>
+    </c-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { CDialog } from '../../components/base'
+import { CCard, CTable } from '../../components/base'
+import PageHeader from '../../components/PageHeader.vue'
+import { useAsync } from '../../composables'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { api } from '../api/client'
-import BindSelect from '../components/BindSelect.vue'
-import type { GroupInfo, InstanceInfo, PluginInfo } from '../api/types'
+import { groupApi, instanceApi, pluginApi, proxyApi, type Proxy } from '../../api/entities'
+import { instanceOptionsOf, instanceNameOf, proxyOptionsOf } from '../../utils/lookup'
+import BindSelect from '../../components/BindSelect.vue'
+import type { GroupInfo, InstanceInfo, PluginInfo } from '../../api/types'
 
 const { t } = useI18n()
 
@@ -85,18 +90,12 @@ const selectedPlugin = computed(() => plugins.value.find((p) => p.id === newPlug
 function pluginOf(id: number) {
   return plugins.value.find((p) => p.id === id)
 }
-function instanceOptions(pluginID: number | undefined) {
-  return instances.value
-    .filter((i) => i.plugin_id === pluginID)
-    .map((i) => ({ value: i.id, label: i.base_url ? `${i.name} · ${i.base_url}` : i.name }))
-}
-function instanceName(id: number): string {
-  return instances.value.find((i) => i.id === id)?.name ?? (id ? `#${id}` : '-')
-}
+const instanceOptions = (pluginID: number | undefined) => instanceOptionsOf(instances.value, pluginID)
+const instanceName = (id: number) => instanceNameOf(instances.value, id)
 // 切换插件：按插件拉实例（保证默认实例存在），预选第一个；单实例插件即默认实例（不可改）
 async function onPluginChange() {
   if (!newPlugin.value) return
-  const resp = await api.get<{ instances: InstanceInfo[] }>(`/admin/instances?plugin_id=${newPlugin.value}`).catch(() => ({ instances: [] }))
+  const resp = await instanceApi.list(newPlugin.value).catch(() => ({ instances: [] }))
   const list = resp.instances ?? []
   instances.value = [...instances.value.filter((i) => i.plugin_id !== newPlugin.value), ...list]
   newInstance.value = list[0]?.id
@@ -117,7 +116,7 @@ async function submitEdit() {
   }
   editing.value = true
   try {
-    await api.put(`/admin/groups/${editRow.value.id}`, { name: editName.value.trim(), instance_id: editInstance.value ?? 0 })
+    await groupApi.update(editRow.value.id, { name: editName.value.trim(), instance_id: editInstance.value ?? 0 })
     MessagePlugin.success(t('common.updated'))
     editVisible.value = false
     await load()
@@ -128,7 +127,7 @@ async function submitEdit() {
   }
 }
 
-const proxies = ref<{ ID: number; Scheme: string; Host: string; Port: number }[]>([])
+const proxies = ref<Proxy[]>([])
 const bindVisible = ref(false)
 const bindGroup = ref<GroupInfo | null>(null)
 const bindProxyIds = ref<number[]>([])
@@ -142,33 +141,33 @@ const columns = computed(() => [
   { colKey: 'op', title: t('common.colOp'), width: 200, align: 'center' },
 ])
 
-const proxyOptions = computed(() =>
-  proxies.value.map((px) => ({ value: px.ID, label: `${px.Scheme}://${px.Host}:${px.Port}` })),
-)
+const proxyOptions = computed(() => proxyOptionsOf(proxies.value))
 
+const { loading, run } = useAsync()
+
+// 全量基础数据（分组/插件/代理/实例）
 async function load() {
-  const [g, p, px, ins] = await Promise.all([
-    api.get<{ groups: GroupInfo[] }>('/admin/groups'),
-    api.get<{ plugins: PluginInfo[] }>('/admin/plugins'),
-    api.get<{ proxies: typeof proxies.value }>('/admin/proxies'),
-    api.get<{ instances: InstanceInfo[] }>('/admin/instances'),
-  ])
-  groups.value = g.groups ?? []
-  plugins.value = p.plugins ?? []
-  proxies.value = px.proxies ?? []
-  instances.value = ins.instances ?? []
+  await run(async () => {
+    const [g, p, px, ins] = await Promise.all([
+      groupApi.list(), pluginApi.list(), proxyApi.list(), instanceApi.list(),
+    ])
+    groups.value = g.groups ?? []
+    plugins.value = p.plugins ?? []
+    proxies.value = px.proxies ?? []
+    instances.value = ins.instances ?? []
+  })
 }
 
 async function openBind(row: GroupInfo) {
   bindGroup.value = row
-  const resp = await api.get<{ proxy_ids: number[] }>(`/admin/groups/${row.id}/proxies`)
+  const resp = await groupApi.proxies(row.id)
   bindProxyIds.value = resp.proxy_ids ?? []
   bindVisible.value = true
 }
 
 async function bind() {
   if (!bindGroup.value) return
-  await api.put(`/admin/groups/${bindGroup.value.id}/proxies`, { proxy_ids: bindProxyIds.value })
+  await groupApi.saveProxies(bindGroup.value.id, bindProxyIds.value)
   MessagePlugin.success(t('common.updated'))
   bindVisible.value = false
 }
@@ -180,7 +179,7 @@ async function create() {
   }
   creating.value = true
   try {
-    await api.post('/admin/groups', { name: newName.value, plugin_id: newPlugin.value, instance_id: newInstance.value ?? 0 })
+    await groupApi.create({ name: newName.value, plugin_id: newPlugin.value, instance_id: newInstance.value ?? 0 })
     MessagePlugin.success(t('common.created'))
     createVisible.value = false
     newName.value = ''
@@ -193,7 +192,7 @@ async function create() {
 }
 
 async function remove(id: number) {
-  await api.del(`/admin/groups/${id}`)
+  await groupApi.remove(id)
   await load()
 }
 
