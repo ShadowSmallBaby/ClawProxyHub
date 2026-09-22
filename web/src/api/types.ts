@@ -38,6 +38,7 @@ export interface PluginInfo {
   version: string
   author: string
   icon: string // 包内相对路径（空 = 前端兜底首字母）
+  running: boolean // 已停止的插件仍列出（可启动/卸载），能力与授权方式为空
   capabilities: string[]
   auth_methods: AuthMethod[] | null
   instance_schema?: string // 实例级设置 JSON Schema（空 = 实例只有名称 + 地址）

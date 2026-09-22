@@ -34,15 +34,16 @@ import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { api } from '../api/client'
 import type { DeleteImpact } from '../api/types'
+import { notifyDeleteImpact } from '../utils/impact'
 
 const props = defineProps<{
   visible: boolean
   header: string
   message: string // 确认文案（如「确认删除该账号？」）
   impactUrl: string // GET 预览接口
-  deleteUrl: string // DELETE 执行接口
+  deleteUrl?: string // DELETE 执行接口；不传则只做确认，由调用方经 confirm 事件自行执行
 }>()
-const emit = defineEmits<{ (e: 'update:visible', v: boolean): void; (e: 'deleted'): void }>()
+const emit = defineEmits<{ (e: 'update:visible', v: boolean): void; (e: 'deleted'): void; (e: 'confirm'): void }>()
 
 const { t } = useI18n()
 const loading = ref(false)
@@ -78,15 +79,17 @@ const cascadeLines = computed(() => {
 })
 
 async function confirm() {
+  if (!props.deleteUrl) {
+    emit('update:visible', false)
+    emit('confirm')
+    return
+  }
   deleting.value = true
   try {
     const resp = await api.del<{ impact?: DeleteImpact }>(props.deleteUrl)
     emit('update:visible', false)
     emit('deleted')
-    const im = resp.impact
-    if (im && (im.routes.length || im.keys.length)) {
-      MessagePlugin.warning({ content: t('impact.afterDelete', { routes: im.routes.join('、') || '-', keys: im.keys.join('、') || '-' }), duration: 8000, closeBtn: true })
-    }
+    notifyDeleteImpact(resp.impact, t)
   } catch (e: any) {
     MessagePlugin.error(e.message)
   } finally {

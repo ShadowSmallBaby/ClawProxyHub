@@ -121,11 +121,11 @@
     <!-- 添加账号：向导（选择客户端 → 授权 → 配置） -->
     <c-dialog v-model:visible="addVisible" :header="$t('accounts.add')" :footer="false" width="680px" :close-on-overlay-click="false">
 
-      <!-- 第一步：选择客户端（卡片平铺，每行四个） -->
+      <!-- 第一步：选择客户端（卡片平铺，每行四个；登录要走插件进程，只列运行中的） -->
       <template v-if="wizardStep === 'select'">
-        <t-empty v-if="!plugins.length" :description="$t('accounts.noPlugins')" />
+        <t-empty v-if="!runningPlugins.length" :description="$t('accounts.noPlugins')" />
         <t-row v-else :gutter="[12, 12]">
-          <t-col v-for="p in plugins" :key="p.id" :span="6">
+          <t-col v-for="p in runningPlugins" :key="p.id" :span="6">
             <div class="client-card" @click="choosePlugin(p)">
               <entity-icon :icon="p.icon" :name="p.label || p.name" />
               <div class="client-name">{{ p.label || p.name }}</div>
@@ -344,6 +344,8 @@ const { t } = useI18n()
 const router = useRouter()
 
 const plugins = ref<PluginInfo[]>([])
+// 已停止的插件仍在列表里（账号列品牌名要查得到），但新建账号只能选运行中的
+const runningPlugins = computed(() => plugins.value.filter((p) => p.running))
 const accounts = ref<Account[]>([])
 const groups = ref<GroupInfo[]>([])
 const instances = ref<InstanceInfo[]>([])

@@ -17,7 +17,7 @@
       </t-space>
     </page-header>
 
-    <!-- 已安装 -->
+    <!-- 已安装（磁盘为准，含已停止的：内容不变，只多一个状态标签） -->
     <t-empty v-if="!plugins.length" :description="$t('plugins.emptyInstalled')" />
     <div class="plugin-grid">
       <c-card v-for="p in plugins" :key="p.name">
@@ -29,12 +29,13 @@
               <div class="plugin-sub">
                 v{{ p.version }} · {{ p.author }}
                 <t-tag size="small" variant="outline" class="proto-tag" :title="$t('plugins.protocol')">P{{ p.protocol_version ?? 1 }}</t-tag>
+                <t-tag v-if="!p.running" size="small" theme="warning" variant="light">{{ $t('plugins.stoppedTag') }}</t-tag>
               </div>
             </div>
           </div>
         </template>
         <t-space direction="vertical" style="width: 100%">
-          <t-space size="small">
+          <t-space v-if="p.capabilities?.length" size="small">
             <t-tag v-for="c in p.capabilities" :key="c" size="small" variant="light">{{ dict(capabilityDict, c) }}</t-tag>
           </t-space>
           <div v-if="p.auth_methods?.length" class="methods">
@@ -48,8 +49,8 @@
           <t-space size="small" style="margin-top: 4px">
             <t-link theme="primary" @click="openSettings(p)">{{ $t('plugins.settings') }}</t-link>
             <t-link v-if="p.multi_instance" theme="primary" @click="openInstances(p)">{{ $t('menu.instances') }}</t-link>
-            <t-link theme="primary" @click="restart(p.name)">{{ $t('plugins.restart') }}</t-link>
-            <t-link theme="warning" @click="stop(p.name)">{{ $t('plugins.stop') }}</t-link>
+            <t-link theme="primary" @click="restart(p)">{{ $t('plugins.restart') }}</t-link>
+            <t-link theme="warning" :disabled="!p.running" @click="stop(p.name)">{{ $t('plugins.stop') }}</t-link>
             <t-link theme="danger" @click="askUninstall(p)">{{ $t('plugins.uninstall') }}</t-link>
           </t-space>
         </t-space>
@@ -75,10 +76,10 @@
           </div>
           <div class="market-foot">
             <span class="market-date">{{ e.published_at || '' }}</span>
-            <t-button v-if="!e.installed" size="small" theme="primary" :loading="installing === e.author + '/' + e.name" @click="installFromMarket(e)">
+            <t-button v-if="!e.installed" size="small" theme="primary" :loading="installing === marketKey(e)" @click="installFromMarket(e)">
               {{ $t('plugins.install') }}
             </t-button>
-            <t-button v-else-if="e.updatable" size="small" theme="warning" variant="outline" :loading="installing === e.author + '/' + e.name" @click="installFromMarket(e)">
+            <t-button v-else-if="e.updatable" size="small" theme="warning" variant="outline" :loading="installing === marketKey(e)" @click="installFromMarket(e)">
               {{ $t('plugins.upgrade') }}
             </t-button>
             <t-tag v-else size="small" theme="success" variant="light">{{ $t('plugins.installed') }}</t-tag>
@@ -86,6 +87,17 @@
         </div>
       </t-loading>
     </t-drawer>
+
+    <!-- 操作进度：安装 / 升级 / 重启 / 卸载；含下载的操作可中途取消 -->
+    <op-progress-dialog
+      v-model:visible="op.visible"
+      :header="op.header"
+      :steps="op.steps"
+      :logs="op.logs"
+      :running="op.running"
+      :cancelable="!!op.cancel"
+      @cancel="op.cancel?.()"
+    />
 
     <!-- 插件设置：schema 动态渲染 -->
     <c-dialog
@@ -131,8 +143,9 @@
       :header="removeTarget?.header ?? ''"
       :message="removeTarget?.message ?? ''"
       :impact-url="removeTarget?.impactUrl ?? ''"
-      :delete-url="removeTarget?.deleteUrl ?? ''"
+      :delete-url="removeTarget?.deleteUrl"
       @deleted="removeTarget?.after()"
+      @confirm="removeTarget?.after()"
     />
 
     <!-- 插件源：卡片式（首卡 = 添加） -->
@@ -190,7 +203,9 @@ import type { ResponseType } from 'tdesign-vue-next'
 import { pluginApi, pluginSourceApi, instanceApi, type MarketEntry } from '../../api/entities'
 import InstanceFormDialog from '../../components/InstanceFormDialog.vue'
 import DeleteImpactDialog from '../../components/DeleteImpactDialog.vue'
+import OpProgressDialog, { type OpLog, type OpStep } from '../../components/OpProgressDialog.vue'
 import { capabilityDict, dict, label } from '../../utils/dict'
+import { notifyDeleteImpact } from '../../utils/impact'
 import type { InstanceInfo, PluginInfo, PluginSource } from '../../api/types'
 
 const { t } = useI18n()
@@ -204,7 +219,72 @@ const marketLoading = ref(false)
 const marketEntries = ref<MarketEntry[]>([])
 const marketOnline = ref('')
 const marketSourceName = ref('official')
-const installing = ref('')
+const installing = ref('') // 正在安装的条目键（同一时间只装一个）
+
+// 同插件判定键 author/name（与后端 pluginKey 一致）
+const marketKey = (e: MarketEntry) => (e.author ?? '') + '/' + e.name
+
+// ---------- 操作进度弹窗（安装 / 升级 / 重启 / 卸载共用） ----------
+
+// cancel 非空 = 可取消（含下载的安装/升级）；置空 = 不可取消（重启/卸载）
+const op = reactive({ visible: false, header: '', steps: [] as OpStep[], logs: [] as OpLog[], running: false, cancel: null as null | (() => void) })
+
+// 进入某步：前面的全部完成，本步进行中
+function opEnter(key: string) {
+  let reached = false
+  for (const s of op.steps) {
+    if (s.key === key) { s.status = 'active'; reached = true }
+    else if (!reached) s.status = 'done'
+  }
+}
+
+// 追加一行带时间戳的日志（HH:MM:SS）
+function opLog(text: string, level: 'info' | 'error' = 'info') {
+  op.logs.push({ time: new Date().toLocaleTimeString('zh-CN', { hour12: false }), text, level })
+}
+
+// 原地更新最后一行日志（下载百分比高频刷新，避免日志刷屏）
+function opLogUpdate(text: string) {
+  const last = op.logs[op.logs.length - 1]
+  if (last) { last.text = text; last.time = new Date().toLocaleTimeString('zh-CN', { hour12: false }) }
+}
+
+// 跑一个多步操作：成功全部打勾后自动关闭，失败停在当前步展示错误；结束后刷新列表。
+// onCancel 非空则弹窗可取消（点击时调用它中断，如 abort 下载）；取消抛 AbortError 走静默关闭。
+async function runOp(header: string, keys: string[], exec: (enter: typeof opEnter, log: typeof opLog, logUpdate: typeof opLogUpdate) => Promise<void>, doneMsg: string, onCancel?: () => void) {
+  op.header = header
+  op.steps = keys.map((k) => ({ key: k, label: t('plugins.step' + k[0].toUpperCase() + k.slice(1)), status: 'pending' }))
+  op.logs = []
+  op.visible = true
+  op.running = true
+  op.cancel = onCancel ?? null
+  try {
+    await exec(opEnter, opLog, opLogUpdate)
+    op.steps.forEach((s) => { s.status = 'done' })
+    opLog(t('plugins.opDone'))
+    MessagePlugin.success(doneMsg)
+    setTimeout(() => { op.visible = false }, 800)
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      opLog(t('common.canceled'))
+      op.running = false
+      op.cancel = null
+      MessagePlugin.info(t('common.canceled'))
+      setTimeout(() => { op.visible = false }, 800)
+      await load()
+      return
+    }
+    const cur = op.steps.find((s) => s.status === 'active') ?? op.steps[op.steps.length - 1]
+    if (cur) cur.status = 'error'
+    opLog(t('plugins.opFailed', { msg: e.message }), 'error')
+  } finally {
+    op.running = false
+    op.cancel = null
+  }
+  await load()
+}
+
+const mb = (n: number) => (n / 1048576).toFixed(1)
 
 async function openMarket() {
   await loadSources()
@@ -229,15 +309,42 @@ async function loadMarket() {
   }
 }
 
+// 安装：下载 → 安装 → 运行；升级多一步「停止」旧进程（阶段由后端进度流给出）。
+// 下载可能无整体超时，弹窗提供「取消」→ abort 请求中断下载。
 async function installFromMarket(e: MarketEntry) {
-  installing.value = e.author + '/' + e.name
+  installing.value = marketKey(e)
+  const name = label(e.label, e.name)
+  const upgrade = !!e.updatable
+  const header = `${t(upgrade ? 'plugins.upgrade' : 'plugins.install')} · ${name}`
+  const keys = upgrade ? ['downloading', 'stopping', 'installing', 'starting'] : ['downloading', 'installing', 'starting']
+  const controller = new AbortController()
   try {
-    await pluginApi.installMarket(e.name, e.author ?? '', e.source ?? '')
-    MessagePlugin.success(t('plugins.installedN', { name: e.name }))
-    await load()
+    await runOp(header, keys, async (enter, log, logUpdate) => {
+      enter('downloading')
+      let dlStarted = false
+      await pluginApi.installMarket(e.name, e.author ?? '', e.source ?? '', (p) => {
+        if (p.phase === 'downloading') {
+          const recv = mb(p.received ?? 0)
+          const info = p.total && p.total > 0
+            ? `${recv} / ${mb(p.total)} MB (${Math.floor(((p.received ?? 0) / p.total) * 100)}%)`
+            : `${recv} MB`
+          if (!dlStarted) {
+            dlStarted = true
+            if (p.total && p.total > 0) log(t('plugins.logGotSize', { size: mb(p.total) }))
+            log(t('plugins.logDownloading', { info }))
+          } else {
+            logUpdate(t('plugins.logDownloading', { info }))
+          }
+        } else if (p.phase === 'stopping') {
+          enter('stopping'); log(t('plugins.logStopping'))
+        } else if (p.phase === 'installing') {
+          enter('installing'); log(t('plugins.logUnpacking'))
+        } else if (p.phase === 'starting') {
+          enter('starting'); log(t('plugins.logRunning'))
+        }
+      }, controller.signal)
+    }, t('plugins.installedN', { name: e.name }), () => controller.abort())
     if (marketVisible.value) await loadMarket()
-  } catch (err: any) {
-    MessagePlugin.error(err.message)
   } finally {
     installing.value = ''
   }
@@ -358,7 +465,8 @@ function openInstanceForm(row: InstanceInfo | null) {
 
 // ---------- 删除确认（插件卸载 / 实例删除共用一个影响面弹窗） ----------
 
-interface RemoveTarget { header: string; message: string; impactUrl: string; deleteUrl: string; after: () => void }
+// deleteUrl 缺省 = 弹窗只做确认，确认后由 after 自行执行（插件卸载走进度弹窗）
+interface RemoveTarget { header: string; message: string; impactUrl: string; deleteUrl?: string; after: () => void }
 const removeVisible = ref(false)
 const removeTarget = ref<RemoveTarget | null>(null)
 
@@ -373,16 +481,21 @@ function askRemoveInstance(row: InstanceInfo) {
   removeVisible.value = true
 }
 
+// 卸载：确认影响面 → 停止 → 删除（文件 + 级联记录）
 function askUninstall(p: PluginInfo) {
   const name = p.label || p.name
   removeTarget.value = {
     header: t('plugins.uninstall') + ' · ' + name,
     message: t('plugins.confirmUninstall', { name }),
     impactUrl: `/admin/plugins/${p.name}/impact`,
-    deleteUrl: `/admin/plugins/${p.name}`,
     after: async () => {
-      MessagePlugin.success(t('plugins.uninstalledN', { name: p.name }))
-      await load()
+      await runOp(`${t('plugins.uninstall')} · ${name}`, ['stopping', 'removing'], async (enter, log) => {
+        enter('stopping'); log(t('plugins.logStopping'))
+        await pluginApi.stop(p.name)
+        enter('removing'); log(t('plugins.logRemoving'))
+        const resp = await pluginApi.uninstall(p.name)
+        notifyDeleteImpact(resp.impact, t)
+      }, t('plugins.uninstalledN', { name: p.name }))
       if (marketVisible.value) await loadMarket()
     },
   }
@@ -468,16 +581,23 @@ function onUploadFail({ file }: any) {
   MessagePlugin.error(t('plugins.uploadFailed', { name: file?.name ?? '' }))
 }
 
-async function restart(name: string) {
-  await pluginApi.stop(name)
-  await pluginApi.start(name)
-  MessagePlugin.success(t('plugins.restarted'))
-  await load()
+// 重启：停止 → 运行（已停止的插件等同启动）；停止不弹窗，卡片直接挂「已停止」标签
+function restart(p: PluginInfo) {
+  return runOp(`${t('plugins.restart')} · ${p.label || p.name}`, ['stopping', 'starting'], async (enter, log) => {
+    enter('stopping'); log(t('plugins.logStopping'))
+    await pluginApi.stop(p.name)
+    enter('starting'); log(t('plugins.logRunning'))
+    await pluginApi.start(p.name)
+  }, t('plugins.restarted'))
 }
 
 async function stop(name: string) {
-  await pluginApi.stop(name)
-  MessagePlugin.success(t('plugins.stopped'))
+  try {
+    await pluginApi.stop(name)
+    MessagePlugin.success(t('plugins.stopped'))
+  } catch (e: any) {
+    MessagePlugin.error(e.message)
+  }
   await load()
 }
 
