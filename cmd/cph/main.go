@@ -9,8 +9,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"google.golang.org/protobuf/encoding/protojson"
-
 	accountpkg "github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/admin"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/config"
@@ -35,32 +33,6 @@ func seedAPIKey(db *gorm.DB, raw string, dataDir string) error {
 		return nil
 	}
 	return db.Create(&model.Key{KeyCipher: string(accountpkg.EncryptCredential(dataDir, []byte(raw))), Name: "seed"}).Error
-}
-
-// syncPluginRecords 启动插件后同步 plugins 表（安装流程落地前的兜底）。
-func syncPluginRecords(db *gorm.DB, plugins *plugin.Manager) {
-	for _, name := range plugins.Names() {
-		inst, ok := plugins.Get(name)
-		if !ok {
-			continue
-		}
-		m := inst.Manifest
-		manifestJSON, _ := protojson.Marshal(m)
-		var rec model.Plugin
-		err := db.Where("name = ?", m.Name).First(&rec).Error
-		if err != nil {
-			db.Create(&model.Plugin{
-				Name: m.Name, Version: m.Version, Author: m.Author,
-				ProtocolVersion: m.ProtocolVersion, ManifestJSON: string(manifestJSON),
-				Enabled: true,
-			})
-		} else {
-			db.Model(&rec).Updates(map[string]interface{}{
-				"version": m.Version, "author": m.Author,
-				"protocol_version": m.ProtocolVersion, "manifest_json": string(manifestJSON),
-			})
-		}
-	}
 }
 
 func main() {
@@ -100,7 +72,8 @@ func run() error {
 	}
 
 	plugins := plugin.NewManager(cfg.PluginDir, db)
-	if bins, err := plugins.Scan(); err == nil {
+	// 开机自启：持久化停止的插件（enabled=0）跳过，其余全拉起
+	if bins, err := plugins.AutoStarts(); err == nil {
 		for _, bin := range bins {
 			if _, err := plugins.Start(ctx, bin); err != nil {
 				fmt.Printf("[plugin] start failed: %v\n", err)
@@ -108,7 +81,6 @@ func run() error {
 		}
 	}
 	plugins.RefreshCatalog(ctx)
-	syncPluginRecords(db, plugins)
 	defer plugins.StopAll()
 
 	bus := event.New()

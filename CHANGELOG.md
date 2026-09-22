@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.1.3
+
+后端功能版。插件启停持久化、客户端指纹注入、市场安装进度流，账号刷新健壮性修复，前端配套。
+
+- Added 插件启停持久化：`Stop(name, persists)` 停用写 `enabled=0`，重启核心保持停止；`Resume` 清除持久化状态；`AutoStarts` 开机自启排除 `enabled=0` 插件（替代原 `Scan` + `syncPluginRecords` 兜底）
+- Added `internal/fingerprint` 客户端指纹模块：`ClaudeHeaders`（Claude Code）/ `CodexHeaders`（Codex，`codex_meta` 用 uuid 生成会话标识）；`injectFingerprint` 按入口协议给 `ChatRequest.extra` 注入指纹头
+- Added 市场安装进度流：`installZip` 走 NDJSON 进度流（下载分块上报 `received`/`total`，安装阶段回传 `phase`），`downloadToTemp` 带 context + 进度回调；前端 `requestStream` 读流，`OpProgressDialog` 展示 downloading/stopping/installing/starting
+- Added 多语言品牌 label：`labelOf`/`brandName` 支持 `Manifest.Label` 回退
+- Added 删除影响提醒：卸载返回 `DeleteImpact`，前端 `impact.ts` 弹窗列出需复核的路由/密钥引用
+- Fixed 账号刷新健壮性：插件返回 `Unimplemented` 时给友好提示（API 密钥类账号无需刷新），不透出 gRPC 原始错误；`display_name` 仅在为空时写入插件值，避免刷新覆盖用户手动改名
+
 ## v1.1.2
 
 SDK 增量版。新增 OpenAI Responses API 上游方言包，插件可直接反代 Responses 形态的上游（gpt / o 系官方端点、New API responses 转发等）。

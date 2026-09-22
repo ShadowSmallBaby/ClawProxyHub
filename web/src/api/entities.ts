@@ -1,7 +1,7 @@
 // 实体资源 API（插件 / 实例 / 账号 / 分组 / 代理 / 路由 / 密钥 / OAuth 凭据 / 任务）。
-import { api, getToken } from './client'
+import { api, getToken, requestStream } from './client'
 import type {
-  Account, AccountDetail, AuthMethod, GroupInfo, InstanceInfo, KeyInfo,
+  Account, AccountDetail, AuthMethod, DeleteImpact, GroupInfo, InstanceInfo, KeyInfo,
   LoginResp, ModelInfo, NextStep, PluginInfo, PluginSource, RequestLog,
   RouteInfo, TaskRule, TaskRun,
 } from './types'
@@ -13,6 +13,8 @@ export interface MarketEntry {
   published_at?: string; source?: string; installed?: boolean; updatable?: boolean
 }
 export interface SettingField { key: string; title: string; description: string; type: string; default: unknown; options: unknown[] }
+// 市场安装进度事件：downloading（带字节数，total 未知为 -1）→ [stopping，仅升级] → installing → starting
+export interface InstallProgress { phase: 'downloading' | 'stopping' | 'installing' | 'starting'; received?: number; total?: number }
 
 export const pluginApi = {
   list: () => api.get<{ plugins: PluginInfo[] }>('/admin/plugins'),
@@ -22,12 +24,15 @@ export const pluginApi = {
   saveSettings: (name: string, values: Record<string, unknown>) => api.put(`/admin/plugins/${name}/settings`, { values }),
   stop: (name: string) => api.post(`/admin/plugins/${name}/stop`),
   start: (name: string) => api.post(`/admin/plugins/${name}/start`),
-  uninstall: (name: string) => api.del(`/admin/plugins/${name}`),
+  uninstall: (name: string) => api.del<{ impact?: DeleteImpact }>(`/admin/plugins/${name}`),
   impact: (name: string) => api.get(`/admin/plugins/${name}/impact`),
   marketplace: (source: string) =>
     api.get<{ plugins: MarketEntry[]; source?: string }>(`/admin/plugins/marketplace?source=${encodeURIComponent(source)}`),
-  installMarket: (name: string, author: string, source: string) =>
-    api.post('/admin/plugins/install-market', { name, author, source }),
+  // 市场安装：NDJSON 进度流，每个阶段事件回调一次；出错抛 Error；signal 可中途取消下载
+  installMarket: (name: string, author: string, source: string, onProgress: (p: InstallProgress) => void, signal?: AbortSignal) =>
+    requestStream('POST', '/admin/plugins/install-market', { name, author, source }, (ev) => {
+      if (ev.phase) onProgress(ev as InstallProgress)
+    }, signal),
   // t-upload 自定义上传：multipart 直发安装端点
   uploadInstall: async (raw: File) => {
     const form = new FormData()

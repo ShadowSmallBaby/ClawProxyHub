@@ -18,20 +18,50 @@ import (
 
 // PackageManifest 包内 manifest.json。
 type PackageManifest struct {
-	Name            string `json:"name"`
-	Version         string `json:"version"`
-	Author          string `json:"author"`
-	ProtocolVersion int32  `json:"protocol_version"`
-	MinCoreVersion  string `json:"min_core_version"`
+	Name            string            `json:"name"`
+	Version         string            `json:"version"`
+	Author          string            `json:"author"`
+	Label           map[string]string `json:"label"` // 品牌名（多语言）
+	ProtocolVersion int32             `json:"protocol_version"`
+	MinCoreVersion  string            `json:"min_core_version"`
 	// Icon 插件图标：包内相对路径（如 "icon.png"，建议正方形 PNG 128–256px）。
 	// 安装时解出到插件目录，前端经 /assets/plugins/<name>/icon 读取。
 	Icon string `json:"icon"`
 }
 
+// Installed 磁盘上已安装的全部插件（含未运行的），按落盘 manifest.json 读取；管理页据此列出可启动项。
+func (m *Manager) Installed() []PackageManifest {
+	var out []PackageManifest
+	for _, dir := range m.pluginDirs() {
+		data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+		if err != nil {
+			continue
+		}
+		var mf PackageManifest
+		if json.Unmarshal(data, &mf) == nil && mf.Name != "" {
+			out = append(out, mf)
+		}
+	}
+	return out
+}
+
+// Install 阶段（InstallZip 的进度回调值）。
+const (
+	PhaseStopping   = "stopping"   // 升级：停旧进程
+	PhaseInstalling = "installing" // 解压落盘
+	PhaseStarting   = "starting"   // 启动子进程 + 握手
+)
+
 // InstallZip 安装一个 .cphplugin 包：校验 → 解压到插件目录 → 启动。
 // namespace 为来源命名空间（官方源/手动上传为空 → <dir>/<name>；其他源 → <dir>/<namespace>/<name>）。
 // 返回插件名。同名同命名空间时覆盖安装（升级）；同名插件已装在其他命名空间时拒绝。
-func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string) (string, error) {
+// onPhase 非 nil 时在各阶段开始前回调（前端进度展示）。
+func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string, onPhase func(phase string)) (string, error) {
+	report := func(phase string) {
+		if onPhase != nil {
+			onPhase(phase)
+		}
+	}
 	if namespace != "" && !validPluginName(namespace) {
 		return "", fmt.Errorf("invalid source namespace")
 	}
@@ -82,10 +112,12 @@ func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string) (st
 		return "", fmt.Errorf("同名插件 %q 已从其他来源安装（%s），请先卸载", manifest.Name, filepath.Base(filepath.Dir(existing)))
 	}
 
-	// 3. 升级场景：先停旧进程
+	// 3. 升级场景：先停旧进程（仅停本次进程，升级后照常拉起）
 	if _, running := m.Get(manifest.Name); running {
-		m.Stop(manifest.Name)
+		report(PhaseStopping)
+		m.Stop(manifest.Name, false)
 	}
+	report(PhaseInstalling)
 
 	// 4. 解压到目标目录（清掉旧目录）
 	if err := os.RemoveAll(target); err != nil {
@@ -116,19 +148,20 @@ func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string) (st
 	}
 
 	// 5. 启动
+	report(PhaseStarting)
 	if _, err := m.Start(ctx, binPath); err != nil {
 		return manifest.Name, fmt.Errorf("installed but failed to start: %w", err)
 	}
 	return manifest.Name, nil
 }
 
-// Uninstall 停止并删除一个插件的全部本地文件（根目录或命名空间目录）。
+// Uninstall 停止并删除一个插件的全部本地文件（根目录或命名空间目录；仅停进程，插件记录随级联删除清库）。
 func (m *Manager) Uninstall(name string) error {
 	if !validPluginName(name) {
 		return fmt.Errorf("invalid plugin name")
 	}
 	if _, running := m.Get(name); running {
-		m.Stop(name)
+		m.Stop(name, false)
 	}
 	dir, ok := m.pluginDir(name)
 	if !ok {
