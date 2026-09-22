@@ -23,6 +23,8 @@ const (
 	CapabilityInstances string = "instances"
 	// ExtraClientUserAgent ChatRequest.extra 键：对话请求应使用的 User-Agent（核心按 路由 UA > 全局 UA > 客户端 UA 解析后注入；插件按需透传上游）。
 	ExtraClientUserAgent string = "client_user_agent"
+	// ExtraFingerprintHeaders ChatRequest.extra 键：按入口协议生成的客户端指纹头（JSON map，messages=Claude Code / openai 系=Codex）；插件按需采用。
+	ExtraFingerprintHeaders string = "fingerprint_headers"
 	// SettingBrowserUserAgent 宿主 GetSettings 合并视图的保留键：全局浏览器 UA（空 / 缺失 = 插件用内置值）。
 	SettingBrowserUserAgent string = "_browser_user_agent"
 	MagicCookieKey       string = "CPH_PLUGIN"

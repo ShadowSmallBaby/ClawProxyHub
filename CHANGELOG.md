@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.2
+
+SDK 增量版。新增 OpenAI Responses API 上游方言包，插件可直接反代 Responses 形态的上游（gpt / o 系官方端点、New API responses 转发等）。
+
+- Added `sdk/responsesup`：与 `anthropicup` / `openaiup` 并列的第三个上游适配包，公共 API 对齐（`ChatBody` / `NewParser`）——system 归入 `instructions`、工具往返展开为 `function_call` / `function_call_output`、图片走 `input_image`；解析 `output_text` / reasoning 增量、`function_call` 首块与参数增量（done 只给全量时兜底补发）、`completed` / `incomplete`（`max_output_tokens` → `length`）/ `failed`；usage 按信封语义（input 剥离缓存读，带 cached / reasoning）
+- Added SDK 常量 `ExtraFingerprintHeaders`：`ChatRequest.extra` 键，核心按入口协议生成的客户端指纹头（JSON map），插件按需采用
+
 ## v1.1.1
 
 前端架构重构版。API 层分域、视图按域归一、布局与通用逻辑组件化、构建 vendor 拆分；界面遵循克制的明暗双主题。
