@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"gorm.io/gorm"
 
@@ -158,6 +160,10 @@ func (s *Service) Refresh(ctx context.Context, accountID int64) (*model.Account,
 	cred := BuildCred(s.db, s.dataDir, &acct, 0)
 	result, err := inst.Client().Refresh(ctx, cred)
 	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			// 插件未实现 Refresh（静态密钥类插件），不透出 gRPC 原始错误
+			return nil, fmt.Errorf("该插件不支持凭据刷新（API 密钥类账号无需刷新）")
+		}
 		return nil, fmt.Errorf("plugin refresh: %w", err)
 	}
 	if result.Error != nil && result.Error.Code != 0 {
@@ -174,7 +180,8 @@ func (s *Service) Refresh(ctx context.Context, accountID int64) (*model.Account,
 	}
 	if result.Profile != nil {
 		updates["profile_json"] = profileJSON(result.Profile)
-		if result.Profile.DisplayName != "" {
+		// display_name 仅在为空时写入插件值：用户手动改名后不被刷新覆盖（要跟随插件更新可先清空名字再刷新）
+		if acct.DisplayName == "" && result.Profile.DisplayName != "" {
 			updates["display_name"] = result.Profile.DisplayName
 		}
 		// 积分明细快照：插件解析了才更新，为空保留旧值（避免无明细的插件抹掉已有数据）
