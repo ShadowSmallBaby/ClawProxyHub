@@ -191,7 +191,8 @@ func (s *Server) routeSettingsStats(r authed) {
 	r.h("GET /admin/version", s.coreVersion)
 }
 
-// listPlugins GET /admin/plugins — 已启动插件概览（含授权方式）。
+// listPlugins GET /admin/plugins — 已安装插件概览（磁盘为准，含已停止的）。
+// 运行中的以握手 manifest 为准；已停止的用 plugins 表的 manifest 快照（每次启动同步），卡片内容不因停止而变。
 func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request) {
 	type pluginView struct {
 		ID          int64             `json:"id"`
@@ -200,6 +201,7 @@ func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request) {
 		Version     string            `json:"version"`
 		Author      string            `json:"author"`
 		Icon        string            `json:"icon"` // 包内相对路径（空 = 前端兜底）
+		Running     bool              `json:"running"`
 		Capability  []string          `json:"capabilities"`
 		AuthMethods []*authMethodView `json:"auth_methods"`
 		// 实例级设置 JSON Schema（空 = 实例只有 name + base_url）
@@ -208,28 +210,34 @@ func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request) {
 		ProtocolVersion int32 `json:"protocol_version"`
 		MultiInstance   bool  `json:"multi_instance"`
 	}
-	var out []pluginView
-	for _, name := range s.plugins.Names() {
-		inst, ok := s.plugins.Get(name)
-		if !ok {
-			continue
-		}
-		m := inst.Manifest
-		v := pluginView{Name: m.Name, Label: brandName(m), Version: m.Version, Author: m.Author,
-			Capability: m.Capabilities}
-		v.InstanceSchema = m.InstanceSchema
-		v.ProtocolVersion = inst.Protocol
-		v.MultiInstance = inst.MultiInstance()
-		// icon：以落盘文件为准（前端 <img> 直接引用，免鉴权静态端点）
-		if _, ok := s.plugins.IconFile(m.Name); ok {
-			v.Icon = "/assets/plugins/" + m.Name + "/icon"
-		}
-		var rec model.Plugin // DB id（建分组/规则时引用）
-		if err := s.db.Where("name = ?", m.Name).First(&rec).Error; err == nil {
+	out := []pluginView{}
+	for _, mf := range s.plugins.Installed() {
+		v := pluginView{Name: mf.Name, Label: labelOf(mf.Label, mf.Name), Version: mf.Version, Author: mf.Author,
+			ProtocolVersion: mf.ProtocolVersion}
+		var rec model.Plugin // DB id（建分组/规则时引用）+ 停止时的 manifest 快照
+		if err := s.db.Where("name = ?", mf.Name).First(&rec).Error; err == nil {
 			v.ID = rec.ID
 		}
-		for _, am := range m.AuthMethods {
-			v.AuthMethods = append(v.AuthMethods, viewAuthMethod(am))
+		m, protocol := (*pb.Manifest)(nil), rec.ProtocolVersion
+		if inst, ok := s.plugins.Get(mf.Name); ok {
+			v.Running = true
+			m, protocol = inst.Manifest, inst.Protocol
+		} else if snap := (&pb.Manifest{}); protojson.Unmarshal([]byte(rec.ManifestJSON), snap) == nil && snap.Name != "" {
+			m = snap
+		}
+		if m != nil {
+			v.Label, v.Version, v.Author = brandName(m), m.Version, m.Author
+			v.Capability = m.Capabilities
+			v.InstanceSchema = m.InstanceSchema
+			v.ProtocolVersion = protocol
+			v.MultiInstance = plugin.ManifestMultiInstance(m, protocol)
+			for _, am := range m.AuthMethods {
+				v.AuthMethods = append(v.AuthMethods, viewAuthMethod(am))
+			}
+		}
+		// icon：以落盘文件为准（前端 <img> 直接引用，免鉴权静态端点）
+		if _, ok := s.plugins.IconFile(mf.Name); ok {
+			v.Icon = "/assets/plugins/" + mf.Name + "/icon"
 		}
 		out = append(out, v)
 	}
@@ -435,11 +443,14 @@ func viewNextStep(n *pb.LoginNextStep) *nextStepView {
 // ---------- 工具 ----------
 
 // brandName 插件品牌名：manifest.label.zh 优先，缺省用插件 id。
-func brandName(m *pb.Manifest) string {
-	if v, ok := m.Label["zh"]; ok && v != "" {
+func brandName(m *pb.Manifest) string { return labelOf(m.Label, m.Name) }
+
+// labelOf 多语言品牌名取 zh，缺省回退插件名。
+func labelOf(label map[string]string, name string) string {
+	if v, ok := label["zh"]; ok && v != "" {
 		return v
 	}
-	return m.Name
+	return name
 }
 
 // pluginBrandByID 品牌名 by 插件 id（优先运行实例，回退 DB manifest 快照解析）。
