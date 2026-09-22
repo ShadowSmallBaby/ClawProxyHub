@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS plugins (
     protocol_version INTEGER NOT NULL,
     manifest_json    TEXT    NOT NULL,            -- 完整 manifest 快照
     settings_json    TEXT    NOT NULL DEFAULT '{}', -- 插件设置（settings_schema 校验后的值）
-    enabled          INTEGER NOT NULL DEFAULT 1,  -- 运行时启停，改完即刻生效
+    enabled          INTEGER NOT NULL DEFAULT 1,  -- 持久化启停：停止写 0，重启核心保持停止；启动/重启插件写回 1
     installed_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

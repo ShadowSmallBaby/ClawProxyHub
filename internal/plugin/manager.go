@@ -6,14 +6,19 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/encoding/protojson"
 	"gorm.io/gorm"
 
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/fingerprint"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/version"
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
@@ -30,6 +35,7 @@ type Manager struct {
 	mu      sync.RWMutex
 	plugins map[string]*Instance // key: plugin name
 	dir     string
+	db      *gorm.DB // plugins 表记录同步（nil = 不落库，测试用）
 	host    *HostService
 	catalog map[string]string // model id → plugin name
 }
@@ -44,11 +50,14 @@ type Instance struct {
 }
 
 // MultiInstance 插件是否支持多实例：契约 ≥2 且声明 instances 能力；否则只有默认实例。
-func (i *Instance) MultiInstance() bool {
-	if i.Protocol < 2 || i.Manifest == nil {
+func (i *Instance) MultiInstance() bool { return ManifestMultiInstance(i.Manifest, i.Protocol) }
+
+// ManifestMultiInstance 按 manifest + 契约版本判定多实例能力（停止的插件用 DB 快照判定时复用）。
+func ManifestMultiInstance(m *pb.Manifest, protocol int32) bool {
+	if protocol < 2 || m == nil {
 		return false
 	}
-	for _, c := range i.Manifest.Capabilities {
+	for _, c := range m.Capabilities {
 		if c == sdk.CapabilityInstances {
 			return true
 		}
@@ -84,6 +93,7 @@ func NewManager(dir string, db *gorm.DB) *Manager {
 	return &Manager{
 		plugins: make(map[string]*Instance),
 		dir:     dir,
+		db:      db,
 		host:    NewHostService(db),
 		catalog: map[string]string{},
 	}
@@ -124,44 +134,51 @@ func (m *Manager) Models() map[string]string {
 	return out
 }
 
-// Scan 扫描插件目录，返回可启动的二进制路径列表。
-// 插件目录布局：<dir>/<name>/ 或 <dir>/<source>/<name>/（非官方源命名空间），
-// 每个插件目录含 plugin-<os>-<arch>[.exe] + manifest.json（+ 图标）。
+// Scan 扫描插件目录，返回可启动的二进制路径列表（目录不存在视为空）。
 func (m *Manager) Scan() ([]string, error) {
-	entries, err := os.ReadDir(m.dir)
-	if err != nil {
+	if _, err := os.Stat(m.dir); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("read plugin dir: %w", err)
 	}
 	var found []string
+	for _, dir := range m.pluginDirs() {
+		if bin, err := pluginBinary(dir); err == nil {
+			found = append(found, bin)
+		}
+	}
+	return found, nil
+}
+
+// pluginDirs 全部插件目录（含 manifest.json 的目录），按目录名排序。
+// 布局：<dir>/<name>/ 或 <dir>/<source>/<name>/（非官方源命名空间，只下探一层）。
+func (m *Manager) pluginDirs() []string {
+	entries, err := os.ReadDir(m.dir)
+	if err != nil {
+		return nil
+	}
+	var dirs []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		sub := filepath.Join(m.dir, e.Name())
 		if isPluginDir(sub) {
-			if bin, err := pluginBinary(sub); err == nil {
-				found = append(found, bin)
-			}
+			dirs = append(dirs, sub)
 			continue
 		}
-		// 命名空间目录：下探一层
 		inner, err := os.ReadDir(sub)
 		if err != nil {
 			continue
 		}
 		for _, ie := range inner {
-			if !ie.IsDir() {
-				continue
-			}
-			if bin, err := pluginBinary(filepath.Join(sub, ie.Name())); err == nil {
-				found = append(found, bin)
+			if p := filepath.Join(sub, ie.Name()); ie.IsDir() && isPluginDir(p) {
+				dirs = append(dirs, p)
 			}
 		}
 	}
-	return found, nil
+	return dirs
 }
 
 // pluginBinary 定位插件目录下匹配当前平台的二进制。
@@ -239,7 +256,30 @@ func (m *Manager) Start(ctx context.Context, binPath string) (*Instance, error) 
 	m.mu.Lock()
 	m.plugins[inst.Name] = inst
 	m.mu.Unlock()
+	m.syncRecord(inst)
 	return inst, nil
+}
+
+// syncRecord 每次启动成功后同步 plugins 表（版本 / 契约 / manifest 快照）；
+// 快照供插件停止时管理页照常渲染能力与授权方式。
+func (m *Manager) syncRecord(inst *Instance) {
+	if m.db == nil {
+		return
+	}
+	mf := inst.Manifest
+	manifestJSON, _ := protojson.Marshal(mf)
+	var rec model.Plugin
+	if err := m.db.Where("name = ?", mf.Name).First(&rec).Error; err != nil {
+		m.db.Create(&model.Plugin{
+			Name: mf.Name, Version: mf.Version, Author: mf.Author,
+			ProtocolVersion: inst.Protocol, ManifestJSON: string(manifestJSON), Enabled: true,
+		})
+		return
+	}
+	m.db.Model(&rec).Updates(map[string]interface{}{
+		"version": mf.Version, "author": mf.Author,
+		"protocol_version": inst.Protocol, "manifest_json": string(manifestJSON),
+	})
 }
 
 // Get 按名称取运行中的插件实例；进程已崩溃时自动重启。
@@ -284,6 +324,33 @@ func (m *Manager) Names() []string {
 	return names
 }
 
+// AutoStarts 开机自动启动的二进制列表：Scan 结果排除持久化停止的插件（enabled=0）。
+// DB 不可用 / 插件无记录（新装的）照常拉起。
+func (m *Manager) AutoStarts() ([]string, error) {
+	bins, err := m.Scan()
+	if err != nil {
+		return nil, err
+	}
+	if m.db == nil {
+		return bins, nil
+	}
+	var names []string // Pluck 只能填充 slice，不能是 map
+	if err := m.db.Model(&model.Plugin{}).Where("enabled = ?", false).Pluck("name", &names).Error; err != nil || len(names) == 0 {
+		return bins, nil
+	}
+	disabled := make(map[string]bool, len(names))
+	for _, n := range names {
+		disabled[n] = true
+	}
+	out := bins[:0:0]
+	for _, bin := range bins {
+		if !disabled[filepath.Base(filepath.Dir(bin))] {
+			out = append(out, bin)
+		}
+	}
+	return out, nil
+}
+
 // Endpoints 插件声明的对外端点方言（空 = 全支持）。
 func (m *Manager) Endpoints(name string) []string {
 	m.mu.RLock()
@@ -313,6 +380,7 @@ func (m *Manager) Chat(req *pb.ChatRequest, pluginName string, cred *pb.Credenti
 	}
 
 	req.Credential = cred
+	injectFingerprint(req)
 
 	stream, err := inst.rpc.Chat(context.Background(), req)
 	if err != nil {
@@ -340,16 +408,53 @@ func (m *Manager) Chat(req *pb.ChatRequest, pluginName string, cred *pb.Credenti
 	return events, nil
 }
 
-// Stop 停止一个插件（供卸载/升级/停用）。
-func (m *Manager) Stop(name string) {
+// injectFingerprint 按入口协议生成客户端指纹头放入 extra（messages=Claude Code / openai 系=Codex）。
+// 只生成下发，是否采用由插件决定。
+func injectFingerprint(req *pb.ChatRequest) {
+	var h http.Header
+	switch req.Source {
+	case "messages":
+		h = fingerprint.ClaudeHeaders("")
+	case "chat_completions", "responses":
+		h = fingerprint.CodexHeaders("")
+	default:
+		return
+	}
+	m := make(map[string]string, len(h))
+	for k, v := range h {
+		m[strings.ToLower(k)] = v[0]
+	}
+	if req.Extra == nil {
+		req.Extra = m
+		return
+	}
+	for k, v := range m {
+		req.Extra[k] = v
+	}
+}
+
+// Stop 停止一个插件。persists 为 true 时写持久化状态（enabled=0，重启核心保持停止；
+// 用户手动停用）；false 仅停本次进程（升级/卸载前临时停，重启照常拉起）。
+func (m *Manager) Stop(name string, persists bool) {
 	m.mu.Lock()
 	inst, ok := m.plugins[name]
 	if ok {
 		delete(m.plugins, name)
 	}
 	m.mu.Unlock()
-	if ok {
-		inst.client.Kill()
+	if !ok {
+		return
+	}
+	inst.client.Kill()
+	if persists && m.db != nil {
+		m.db.Model(&model.Plugin{}).Where("name = ?", name).Update("enabled", false)
+	}
+}
+
+// Resume 清除持久化停止状态（enabled=1，下次重启核心照常拉起）。
+func (m *Manager) Resume(name string) {
+	if m.db != nil {
+		m.db.Model(&model.Plugin{}).Where("name = ?", name).Update("enabled", true)
 	}
 }
 
@@ -361,7 +466,7 @@ func (m *Manager) ResolveModel(model string) (string, bool) {
 	return name, ok
 }
 
-// StopAll 停止全部插件（进程退出前调用）。
+// StopAll 停止全部插件（进程退出前调用；仅停进程，不写持久化状态）。
 func (m *Manager) StopAll() {
 	m.mu.Lock()
 	names := make([]string, 0, len(m.plugins))
@@ -370,6 +475,6 @@ func (m *Manager) StopAll() {
 	}
 	m.mu.Unlock()
 	for _, n := range names {
-		m.Stop(n)
+		m.Stop(n, false)
 	}
 }
