@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/golang-migrate/migrate/v4 v4.20.1
+	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/mattn/go-sqlite3 v1.14.52
 	golang.org/x/crypto v0.57.0
