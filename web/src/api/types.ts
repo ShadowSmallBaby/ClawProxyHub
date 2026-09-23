@@ -25,6 +25,9 @@ export interface NextStep {
   wait?: boolean
 }
 
+// isQrDataUrl 二维码 data URL（插件侧内联，前端渲染图片而非打开浏览器）。
+export const isQrDataUrl = (url?: string) => !!url && url.startsWith('data:image/')
+
 export interface LoginResp {
   done: boolean
   account_id?: number
@@ -249,9 +252,22 @@ export interface RequestLog {
   ClientIP: string
   UserAgent: string
   ErrorBrief: string
+  Stream: boolean // 同步/流式
   CreatedAt: string
   key_name?: string // 密钥名称（列表接口附带）
   instance_name?: string // 账号所属实例（列表接口附带；空 = 账号已删/无账号）
+}
+
+// 运行日志（系统级：账号刷新/登录失败、插件日志、核心内部事件）
+export interface RunLog {
+  ID: number
+  Level: string // error / warn / debug / info
+  Module: string // 功能模块（account / plugin / task …）
+  Action: string // 操作（refresh / login / 插件名 …）
+  Message: string // 精简消息
+  Detail: string // 调试明细（上游响应体 / err 全文）
+  AccountID: number | null
+  CreatedAt: string
 }
 
 export interface Stats {

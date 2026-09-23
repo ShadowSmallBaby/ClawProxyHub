@@ -1,6 +1,6 @@
 // 日志 API（请求日志列表 / 导出 / 清空）。导出走 blob 下载（需鉴权头）。
 import { api, getToken } from './client'
-import type { RequestLog } from './types'
+import type { RequestLog, RunLog } from './types'
 
 export interface LogFilters {
   key?: string
@@ -44,4 +44,28 @@ export const logsApi = {
     }
   },
   clear: () => api.del<{ deleted: number }>('/admin/logs'),
+}
+
+// 运行日志 API（系统级：账号刷新/登录失败、插件日志、核心内部事件）
+export interface RunLogFilters {
+  level?: string
+  module?: string
+  keyword?: string
+  from?: string
+  to?: string
+}
+
+export const runLogsApi = {
+  list: (page: number, pageSize: number, f: RunLogFilters) => {
+    const p = new URLSearchParams()
+    p.set('page', String(page))
+    p.set('page_size', String(pageSize))
+    if (f.level) p.set('level', f.level)
+    if (f.module) p.set('module', f.module)
+    if (f.keyword) p.set('keyword', f.keyword)
+    if (f.from) p.set('from', f.from)
+    if (f.to) p.set('to', f.to)
+    return api.get<{ logs: RunLog[]; total: number }>(`/admin/run-logs?${p.toString()}`)
+  },
+  clear: () => api.del<{ deleted: number }>('/admin/run-logs'),
 }

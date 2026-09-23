@@ -124,19 +124,19 @@
       <!-- 第一步：选择客户端（卡片平铺，每行四个；登录要走插件进程，只列运行中的） -->
       <template v-if="wizardStep === 'select'">
         <t-empty v-if="!runningPlugins.length" :description="$t('accounts.noPlugins')" />
-        <t-row v-else :gutter="[12, 12]">
-          <t-col v-for="p in runningPlugins" :key="p.id" :span="6">
-            <div class="client-card" @click="choosePlugin(p)">
+        <div v-else class="client-grid">
+          <div v-for="p in runningPlugins" :key="p.id" class="client-card" @click="choosePlugin(p)">
+            <div class="client-head">
               <entity-icon :icon="p.icon" :name="p.label || p.name" />
               <div class="client-name">{{ p.label || p.name }}</div>
-              <div class="client-caps">
-                <t-tag v-for="c in (p.capabilities ?? []).slice(0, 3)" :key="c" size="small" variant="light">
-                  {{ dict(capabilityDict, c) }}
-                </t-tag>
-              </div>
             </div>
-          </t-col>
-        </t-row>
+            <div class="client-caps">
+              <t-tag v-for="c in (p.capabilities ?? []).slice(0, 3)" :key="c" size="small" variant="light">
+                {{ dict(capabilityDict, c) }}
+              </t-tag>
+            </div>
+          </div>
+        </div>
       </template>
 
       <!-- 第二步：授权（tab = 插件声明的登录方式，表单按 schema 动态渲染） -->
@@ -190,14 +190,17 @@
           </t-tab-panel>
         </c-tabs>
 
-        <!-- 浏览器授权：链接可复制可打开；auto 模式自动轮询 -->
+        <!-- 浏览器授权：链接可复制可打开；二维码 data URL 直接内联渲染；auto 模式自动轮询 -->
         <t-alert v-if="nextStep" :theme="nextStep.action === 'open_url' ? 'warning' : 'info'">
           <template #message>
             <div>{{ label(nextStep.prompt, '') }}</div>
             <div v-if="nextStep.wait" class="mode-hint">
               {{ showCallbackInput ? $t('accounts.callbackManual') : $t('accounts.callbackAuto') }}
             </div>
-            <div v-if="nextStep.url" class="login-url">
+            <div v-if="isQrDataUrl(nextStep.url)" class="qr-wrap">
+              <img :src="nextStep.url" alt="QR" class="qr-img" />
+            </div>
+            <div v-else-if="nextStep.url" class="login-url">
               <span class="login-url-text">{{ nextStep.url }}</span>
               <t-space size="small">
                 <t-link theme="primary" @click="copyText(nextStep.url!)">{{ $t('accounts.copy') }}</t-link>
@@ -309,6 +312,17 @@
         <div v-if="testLogs.length" class="test-logs">
           <div v-for="(l, i) in testLogs" :key="i" class="test-log-line">{{ l }}</div>
         </div>
+        <template v-if="testRequest || testEvents.length">
+          <t-collapse>
+            <t-collapse-panel v-if="testRequest" :header="$t('accounts.testRequest')">
+              <pre class="test-raw">{{ testRequest }}</pre>
+            </t-collapse-panel>
+            <t-collapse-panel v-if="testEvents.length" :header="$t('accounts.testEvents')">
+              <pre class="test-raw">{{ testEvents.join('\n') }}</pre>
+            </t-collapse-panel>
+          </t-collapse>
+          <t-button variant="outline" block @click="exportTest">{{ $t('accounts.testExport') }}</t-button>
+        </template>
       </t-space>
     </t-drawer>
 
@@ -339,6 +353,7 @@ import BindSelect from '../../components/BindSelect.vue'
 import DeleteImpactDialog from '../../components/DeleteImpactDialog.vue'
 import { accountStatusDict, capabilityDict, dict, label, runStatusDict } from '../../utils/dict'
 import type { Account, AccountDetail, AuthMethod, GroupInfo, InstanceInfo, LoginResp, ModelInfo, NextStep, PluginInfo } from '../../api/types'
+import { isQrDataUrl } from '../../api/types'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -371,6 +386,8 @@ const testModel = ref('')
 const testQuestion = ref('')
 const testText = ref('')
 const testLogs = ref<string[]>([])
+const testRequest = ref('')
+const testEvents = ref<string[]>([])
 const testing = ref(false)
 
 const addVisible = ref(false)
@@ -681,6 +698,8 @@ async function openTest(row: Account) {
   testQuestion.value = ''
   testText.value = ''
   testLogs.value = []
+  testRequest.value = ''
+  testEvents.value = []
   testModel.value = ''
   testVisible.value = true
   const detail = await accountApi.detail(row.id).catch(() => null)
@@ -694,17 +713,35 @@ async function runTest() {
   testing.value = true
   testText.value = ''
   testLogs.value = []
+  testRequest.value = ''
+  testEvents.value = []
   try {
     const resp = await accountApi.test(testRow.value.id, {
       endpoint: testEndpoint.value, model: testModel.value, question: testQuestion.value,
     })
     testText.value = resp.text ?? ''
     testLogs.value = resp.logs ?? []
+    testRequest.value = resp.request ?? ''
+    testEvents.value = resp.events ?? []
   } catch (e: any) {
     testLogs.value = ['✗ ' + (e.message || 'error')]
   } finally {
     testing.value = false
   }
+}
+
+// exportTest 导出本次测试的 请求/事件/回答 为 JSON blob 下载
+function exportTest() {
+  const data = JSON.stringify(
+    { request: JSON.parse(testRequest.value || 'null'), events: testEvents.value, text: testText.value, logs: testLogs.value },
+    null, 2,
+  )
+  const url = URL.createObjectURL(new Blob([data], { type: 'application/json' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `test-${testRow.value?.id ?? 0}-${Date.now()}.json`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 function openAdd() {
@@ -778,10 +815,10 @@ async function submit() {
     } else {
       nextStep.value = resp.next ?? null
       stepForm.value = {}
-      // 浏览器授权：自动打开页面；能自动回调才轮询，否则等用户粘贴提交
+      // 浏览器授权：自动打开页面（二维码 data URL 只渲染不打开）；能自动回调才轮询
       const step = nextStep.value
       if (step?.wait) {
-        if (step.url) openURL(step.url)
+        if (step.url && !isQrDataUrl(step.url)) openURL(step.url)
         if (autoPolling.value) startPolling()
       }
     }
@@ -944,6 +981,17 @@ onMounted(loadAll)
   font-size: 12px;
   opacity: 0.85;
 }
+.qr-wrap {
+  margin-top: 8px;
+  text-align: center;
+}
+.qr-img {
+  width: 200px;
+  height: 200px;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+}
 .section-title {
   font-weight: 600;
   margin-bottom: 8px;
@@ -992,6 +1040,19 @@ onMounted(loadAll)
   word-break: break-all;
   line-height: 1.7;
 }
+.test-raw {
+  margin: 0;
+  padding: 8px 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  background: var(--td-bg-color-container-hover);
+  border-radius: 6px;
+  max-height: 280px;
+  overflow: auto;
+}
 .wizard-back {
   display: flex;
   align-items: center;
@@ -1000,11 +1061,18 @@ onMounted(loadAll)
 .wizard-client {
   font-weight: 600;
 }
+.client-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
 .client-card {
   border: 1px solid var(--td-component-border);
   border-radius: var(--td-radius-medium);
-  padding: 16px 12px;
-  text-align: center;
+  padding: 14px 16px;
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -1012,11 +1080,22 @@ onMounted(loadAll)
   border-color: var(--td-brand-color);
   box-shadow: var(--td-shadow-1);
 }
+.client-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
 .client-name {
   font-weight: 600;
-  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .client-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
   min-height: 22px;
 }
 .drop-zone {

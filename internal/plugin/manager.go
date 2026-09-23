@@ -19,6 +19,8 @@ import (
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/fingerprint"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/runlog"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/setting"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/version"
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
@@ -37,6 +39,7 @@ type Manager struct {
 	dir     string
 	db      *gorm.DB // plugins 表记录同步（nil = 不落库，测试用）
 	host    *HostService
+	runLog  *runlog.Logger
 	catalog map[string]string // model id → plugin name
 }
 
@@ -90,13 +93,25 @@ var handshakeConfig = sdk.HandshakeConfig()
 
 // NewManager 创建插件管理器。
 func NewManager(dir string, db *gorm.DB) *Manager {
-	return &Manager{
+	m := &Manager{
 		plugins: make(map[string]*Instance),
 		dir:     dir,
 		db:      db,
 		host:    NewHostService(db),
 		catalog: map[string]string{},
 	}
+	if db != nil {
+		m.runLog = runlog.New(db, func() string { return setting.New(db).RunLevel() })
+	}
+	return m
+}
+
+// runLogger 运行日志写入器（db 为 nil 时安全返回空实现）。
+func (m *Manager) runLogger() *runlog.Logger {
+	if m.runLog == nil {
+		return runlog.New(nil, nil)
+	}
+	return m.runLog
 }
 
 // RefreshCatalog 从各插件拉取模型目录（无需凭据的部分）。
@@ -306,10 +321,13 @@ func (m *Manager) Get(name string) (*Instance, bool) {
 		return nil, false
 	}
 	fmt.Printf("[plugin] %s crashed, restarting\n", name)
-	if inst2, err := m.Start(context.Background(), bin); err == nil {
+	m.runLogger().Warn("plugin", "restart", "插件崩溃自动重启: "+name, "", nil)
+	inst2, err := m.Start(context.Background(), bin)
+	if err == nil {
 		return inst2, true
 	}
 	fmt.Printf("[plugin] restart %s failed: %v\n", name, err)
+	m.runLogger().Error("plugin", "restart", "插件重启失败: "+name, err.Error(), nil)
 	return nil, false
 }
 

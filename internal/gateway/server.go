@@ -576,7 +576,7 @@ func (c *requestLogCtx) write(db *gorm.DB) {
 		InputTokens: int32(c.input), OutputTokens: int32(c.output),
 		CachedTokens: int32(c.cached), CacheCreationTokens: int32(c.cacheCreation), LatencyMs: latencyMs,
 		FirstTokenMs: c.firstTokenMs, ClientIP: c.clientIP, UserAgent: c.userAgent,
-		ErrorBrief: c.errBrief,
+		ErrorBrief: c.errBrief, Stream: c.stream,
 	}
 	if c.key != nil {
 		rl.KeyID = &c.key.ID

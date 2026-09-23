@@ -11,11 +11,12 @@ import (
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 )
 
-// routeLogs 日志维护端点。
+// routeLogs 日志维护端点（调用日志 + 运行日志）。
 func (s *Server) routeLogs(r authed) {
 	r.h("GET /admin/logs", s.listLogs)
 	r.h("GET /admin/logs/export", s.exportLogs)
 	r.h("DELETE /admin/logs", s.clearLogs)
+	s.routeRunLogs(r)
 }
 
 // clearLogs DELETE /admin/logs — 清空全部调用日志（不带筛选），返回删除条数。

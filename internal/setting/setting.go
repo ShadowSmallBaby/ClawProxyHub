@@ -28,6 +28,15 @@ const KeyGitHubProxy = "network.github_proxy"
 // KeyLogRetentionDays 调用日志保留天数（0 = 永久，不清理）。
 const KeyLogRetentionDays = "logs.retention_days"
 
+// KeyRunLevel 运行日志记录级别（error/warn/debug/info，递增包含；默认 error）。
+const KeyRunLevel = "logs.run_level"
+
+// KeyTaskDailyJitter daily 任务触发的最大随机抖动分钟数（错开多账号同刻打上游；0 = 关闭偏移）。
+const KeyTaskDailyJitter = "task.daily_jitter_minutes"
+
+// DefaultTaskDailyJitter daily 抖动默认窗口（分钟）。
+const DefaultTaskDailyJitter = 30
+
 // 站点品牌（登录页 / 侧栏展示；空 = 内置默认）。
 const (
 	KeySiteName = "site.name" // 站点品牌名
@@ -124,6 +133,24 @@ func (s *Store) LogRetentionDays() int {
 		return 0
 	}
 	return n
+}
+
+// RunLevel 运行日志记录级别；非法值回退 error。
+func (s *Store) RunLevel() string {
+	switch v := s.Get(KeyRunLevel, "error"); v {
+	case "warn", "debug", "info":
+		return v
+	}
+	return "error"
+}
+
+// DailyJitter daily 任务触发的最大随机抖动窗口；空/非法回退默认，0 = 关闭偏移。
+func (s *Store) DailyJitter() time.Duration {
+	n, err := strconv.Atoi(s.Get(KeyTaskDailyJitter, strconv.Itoa(DefaultTaskDailyJitter)))
+	if err != nil || n < 0 {
+		n = DefaultTaskDailyJitter
+	}
+	return time.Duration(n) * time.Minute
 }
 
 // SiteName 站点品牌名（空回退默认）。

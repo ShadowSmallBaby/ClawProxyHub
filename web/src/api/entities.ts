@@ -86,7 +86,7 @@ export const accountApi = {
   resume: (id: number) => api.post(`/admin/accounts/${id}/resume`),
   refresh: (id: number) => api.post(`/admin/accounts/${id}/refresh`),
   test: (id: number, body: { endpoint: string; model: string; question: string }) =>
-    api.post<{ text: string; logs: string[] }>(`/admin/accounts/${id}/test`, body),
+    api.post<{ text: string; logs: string[]; request?: string; events?: string[] }>(`/admin/accounts/${id}/test`, body),
 }
 
 // ---------- 分组 ----------

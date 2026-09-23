@@ -10,7 +10,7 @@
 
     <c-tabs v-model="tab" class="task-tabs">
       <t-tab-panel value="rules" :label="$t('tasks.tabRules')">
-        <c-table row-key="id" :data="rules" :columns="ruleColumns" :max-height="tableHeight">
+        <c-table row-key="id" :data="rules" :columns="ruleColumns" height="100%">
           <template #trigger="{ row }">
             <t-tag variant="light">{{ dict(triggerDict, row.trigger_type) }}</t-tag>
           </template>
@@ -34,7 +34,7 @@
         </c-table>
       </t-tab-panel>
       <t-tab-panel value="runs" :label="$t('tasks.tabRuns')">
-        <c-table row-key="id" :data="runs" :columns="runColumns" :max-height="tableHeight">
+        <c-table row-key="id" :data="runs" :columns="runColumns" height="100%">
           <template #status="{ row }">
             <!-- 错误信息并入状态 tooltip -->
             <t-tooltip
@@ -157,8 +157,6 @@ const pageSize = computed({
   get: () => (tab.value === 'runs' ? runPageSize.value : rulePageSize.value),
   set: (v: number) => (tab.value === 'runs' ? (runPageSize.value = v) : (rulePageSize.value = v)),
 })
-// 数字高度才有效（百分比在 tab 面板嵌套 DOM 里算不出），视口减去页头/tab/分页/边距
-const tableHeight = ref(window.innerHeight - 400)
 const createVisible = ref(false)
 const creating = ref(false)
 const editingId = ref<number | null>(null) // null = 新建
@@ -389,10 +387,32 @@ onMounted(load)
 </script>
 
 <style scoped>
+.page {
+  /* 撑满内容区：页头/分页固定，表格吃掉中间剩余高度并自适应窗口 */
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+.page-header,
+.task-pagination {
+  flex-shrink: 0;
+}
 .task-tabs {
-  /* tab 区域固定高度，超出由表格内部滚动 */
-  height: 780px;
-  max-height: 780px;
+  /* 占满剩余空间；min-height:0 允许收缩以触发表格内部滚动 */
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+:deep(.t-tabs__content) {
+  flex: 1;
+  min-height: 0;
+}
+:deep(.t-tab-panel),
+:deep(.task-tabs .t-table) {
+  /* 把 height:100% 的高度链一路传到表格滚动容器 */
+  height: 100%;
 }
 .task-pagination {
   margin-top: 12px;

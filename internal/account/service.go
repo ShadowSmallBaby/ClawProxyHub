@@ -15,6 +15,8 @@ import (
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/event"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/plugin"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/runlog"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/setting"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
@@ -38,6 +40,11 @@ type Service struct {
 
 func New(db *gorm.DB, dataDir string, mgr *plugin.Manager) *Service {
 	return &Service{db: db, dataDir: dataDir, mgr: mgr}
+}
+
+// runLogger 运行日志写入器（级别设置实时读库）。
+func (s *Service) runLogger() *runlog.Logger {
+	return runlog.New(s.db, func() string { return setting.New(s.db).RunLevel() })
 }
 
 // DataDir 数据目录（解密密钥等用途）。
@@ -72,9 +79,11 @@ func (s *Service) SubmitLogin(ctx context.Context, pluginName, methodID string, 
 		MethodId: methodID, Form: form, State: state, InstanceId: target.ID,
 	})
 	if err != nil {
+		s.runLogger().Error("account", "login", "登录失败: "+pluginName, err.Error(), nil)
 		return nil, fmt.Errorf("plugin login: %w", err)
 	}
 	if result.Error != nil && result.Error.Code != 0 {
+		s.runLogger().Error("account", "login", "登录失败: "+pluginName, result.Error.Message, nil)
 		return nil, ErrUnauthorized(result.Error.Message)
 	}
 	if result.Next != nil {
@@ -164,6 +173,7 @@ func (s *Service) Refresh(ctx context.Context, accountID int64) (*model.Account,
 			// 插件未实现 Refresh（静态密钥类插件），不透出 gRPC 原始错误
 			return nil, fmt.Errorf("该插件不支持凭据刷新（API 密钥类账号无需刷新）")
 		}
+		s.runLogger().Error("account", "refresh", "刷新失败: "+pluginName, err.Error(), &acct.ID)
 		return nil, fmt.Errorf("plugin refresh: %w", err)
 	}
 	if result.Error != nil && result.Error.Code != 0 {
@@ -171,6 +181,7 @@ func (s *Service) Refresh(ctx context.Context, accountID int64) (*model.Account,
 		if result.Error.Code == 401 {
 			s.db.Model(&acct).Update("status", "expired")
 		}
+		s.runLogger().Error("account", "refresh", "刷新失败: "+pluginName, result.Error.Message, &acct.ID)
 		return nil, ErrUnauthorized(result.Error.Message)
 	}
 

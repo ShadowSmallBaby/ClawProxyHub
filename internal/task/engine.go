@@ -14,6 +14,8 @@ import (
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/event"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/runlog"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/setting"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
@@ -65,6 +67,8 @@ func (e *Engine) tick(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Printf("[task] tick panicked: %v\n", r)
+			runlog.New(e.db, func() string { return setting.New(e.db).RunLevel() }).
+				Error("task", "tick", "任务扫描异常", fmt.Sprintf("%v", r), nil)
 		}
 	}()
 	e.doTick(ctx)
@@ -217,9 +221,6 @@ func (e *Engine) selectAccounts(rule *model.TaskRule) ([]*model.Account, error) 
 	}
 }
 
-// dailyJitter daily 触发的最大随机抖动窗口（设定时刻之后 0~此值随机延迟）。
-const dailyJitter = 30 * time.Minute
-
 // computeNext 计算下次触发时刻。
 func (e *Engine) computeNext(rule *model.TaskRule, from time.Time) *time.Time {
 	var next time.Time
@@ -239,8 +240,10 @@ func (e *Engine) computeNext(rule *model.TaskRule, from time.Time) *time.Time {
 		if !next.After(from) {
 			next = next.Add(24 * time.Hour)
 		}
-		// 随机抖动：在设定时刻之后延迟 0~dailyJitter，错开多账号同刻打上游（每天各自随机）
-		next = next.Add(time.Duration(rand.Int63n(int64(dailyJitter))))
+		// 随机抖动：设定时刻之后延迟 0~jitter，错开多账号同刻打上游（每天各自随机）；管理端可配，0 = 关闭
+		if jitter := setting.New(e.db).DailyJitter(); jitter > 0 {
+			next = next.Add(time.Duration(rand.Int63n(int64(jitter))))
+		}
 	case "cron":
 		next = nextCron(rule.TriggerValue, from)
 		if next.IsZero() {

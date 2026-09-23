@@ -218,6 +218,7 @@ type RequestLog struct {
 	ClientIP            string    `gorm:"column:client_ip;size:64;default:''"`
 	UserAgent           string    `gorm:"column:user_agent;size:256;default:''"`
 	ErrorBrief          string    `gorm:"column:error_brief;size:512;default:''"`
+	Stream              bool      `gorm:"column:stream;default:false"` // 同步/流式
 	CreatedAt           time.Time `gorm:"index"`
 }
 
@@ -235,6 +236,21 @@ type Notification struct {
 }
 
 func (Notification) TableName() string { return "notifications" }
+
+// RunLog 运行日志（系统级：账号刷新/登录失败、插件日志、核心内部事件；
+// level 递增包含：设置页定义记录下限，默认 error）。
+type RunLog struct {
+	ID        int64     `gorm:"primaryKey;autoIncrement"`
+	Level     string    `gorm:"size:16;default:error"` // error / warn / debug / info
+	Module    string    `gorm:"size:64;default:''"`    // 功能模块（account / plugin / task …）
+	Action    string    `gorm:"size:128;default:''"`   // 操作（refresh / login / 插件名 …）
+	Message   string    `gorm:"size:512;default:''"`   // 精简消息（友好提示）
+	Detail    string    `gorm:"default:''"`            // 调试明细（上游响应体 / err 全文）
+	AccountID *int64    `gorm:"column:account_id"`
+	CreatedAt time.Time `gorm:"index"`
+}
+
+func (RunLog) TableName() string { return "run_logs" }
 
 // Setting 系统设置 KV。
 type Setting struct {

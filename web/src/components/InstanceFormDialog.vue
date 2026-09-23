@@ -16,10 +16,10 @@
         </t-select>
         <t-input v-else :value="current?.label || current?.name || ''" disabled />
       </t-form-item>
-      <t-form-item :label="$t('instances.colName')" required-mark>
+      <t-form-item v-if="!isDefaultInstance" :label="$t('instances.colName')" required-mark>
         <t-input v-model="form.name" :placeholder="$t('instances.namePh')" />
       </t-form-item>
-      <t-form-item :label="$t('instances.colBaseUrl')" required-mark>
+      <t-form-item v-if="!isDefaultInstance" :label="$t('instances.colBaseUrl')" required-mark>
         <t-input-adornment class="url-adornment">
           <template #prepend>
             <t-select v-model="form.scheme" auto-width :options="[{ value: 'https://', label: 'https://' }, { value: 'http://', label: 'http://' }]" />
@@ -64,6 +64,9 @@ const form = reactive<{ name: string; scheme: string; host: string; settings: Re
 // 当前生效插件：固定传入优先，否则按弹窗内选择
 const current = computed(() => props.plugin ?? props.plugins?.find((p) => p.id === pluginId.value) ?? null)
 
+// 默认实例（编辑单实例插件）：名称与站点地址系统固定，弹窗内不展示、不校验，仅保存动态设置
+const isDefaultInstance = computed(() => !!props.instance && !!current.value && !current.value.multi_instance)
+
 // 打开时回填（base_url 拆成协议 + host）；有默认值的下拉字段缺省时落默认值
 watch(() => props.visible, (v) => {
   if (!v) return
@@ -74,7 +77,7 @@ watch(() => props.visible, (v) => {
   form.host = m?.[2] ?? ''
   form.settings = { ...(props.instance?.settings ?? {}) }
   for (const f of schemaFields.value) {
-    if (f.options.length && f.default !== '' && form.settings[f.key] === undefined) form.settings[f.key] = f.default
+    if (f.default !== '' && form.settings[f.key] === undefined) form.settings[f.key] = f.default
   }
 })
 
@@ -121,18 +124,26 @@ async function submit() {
     MessagePlugin.warning(t('instances.pickPlugin'))
     return
   }
-  if (!form.name.trim()) {
-    MessagePlugin.warning(t('instances.nameRequired'))
-    return
-  }
-  normalizeHost()
-  if (!form.host) {
-    MessagePlugin.warning(t('instances.baseUrlRequired'))
-    return
+  // 默认实例：名称/地址系统固定，跳过校验并沿用原值，只保存动态设置
+  if (!isDefaultInstance.value) {
+    if (!form.name.trim()) {
+      MessagePlugin.warning(t('instances.nameRequired'))
+      return
+    }
+    normalizeHost()
+    if (!form.host) {
+      MessagePlugin.warning(t('instances.baseUrlRequired'))
+      return
+    }
   }
   saving.value = true
   try {
-    const body = { plugin_id: current.value.id, name: form.name, base_url: baseURL.value, settings: form.settings }
+    const body = {
+      plugin_id: current.value.id,
+      name: isDefaultInstance.value ? (props.instance?.name ?? form.name) : form.name,
+      base_url: isDefaultInstance.value ? (props.instance?.base_url ?? '') : baseURL.value,
+      settings: form.settings,
+    }
     if (props.instance) await api.put(`/admin/instances/${props.instance.id}`, body)
     else await api.post('/admin/instances', body)
     MessagePlugin.success(t('common.saved'))

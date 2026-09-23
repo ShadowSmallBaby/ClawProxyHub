@@ -8,6 +8,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/runlog"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/setting"
 )
 
@@ -37,5 +38,7 @@ func sweepLogs(db *gorm.DB, settings *setting.Store) {
 	res := db.Exec("DELETE FROM request_logs WHERE created_at < datetime('now', ?)", fmt.Sprintf("-%d days", days))
 	if res.Error == nil && res.RowsAffected > 0 {
 		fmt.Printf("[janitor] purged %d request logs older than %d days\n", res.RowsAffected, days)
+		runlog.New(db, func() string { return settings.RunLevel() }).
+			Info("janitor", "purge", fmt.Sprintf("清理过期调用日志 %d 条（%d 天前）", res.RowsAffected, days), "", nil)
 	}
 }
