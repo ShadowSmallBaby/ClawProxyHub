@@ -520,7 +520,12 @@ async function openSettings(p: PluginInfo) {
     key, title: def.title ?? key, description: def.description ?? '',
     type: def.type ?? 'string', default: def.default ?? '', options: def.enum ?? [],
   }))
-  settingsValues.value = { ...(resp.values ?? {}) }
+  const values = { ...(resp.values ?? {}) }
+  // 未保存的字段用 schema 默认值预填（与实例设置弹窗一致，打开即回显默认值）
+  for (const f of settingFields.value) {
+    if (values[f.key] === undefined && f.default !== '') values[f.key] = f.default
+  }
+  settingsValues.value = values
   settingsVisible.value = true
 }
 

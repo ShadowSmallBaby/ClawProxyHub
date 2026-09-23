@@ -13,7 +13,7 @@
       </template>
       <template #op="{ row }">
         <t-space size="small">
-          <t-link theme="primary" @click="openEdit(row)">{{ $t('common.edit') }}</t-link>
+          <t-link v-if="editable(row)" theme="primary" @click="openEdit(row)">{{ $t('common.edit') }}</t-link>
           <t-link theme="danger" @click="askRemove(row)">{{ $t('common.delete') }}</t-link>
         </t-space>
       </template>
@@ -84,6 +84,13 @@ function openCreate() {
   dialogPlugin.value = null // 弹窗内选插件
   editing.value = null
   dialogVisible.value = true
+}
+
+// 默认实例（单实例插件）名称/地址系统固定；无附加设置字段则无可编辑项，隐藏编辑入口
+function editable(row: InstanceInfo): boolean {
+  const p = plugins.value.find((x) => x.id === row.plugin_id)
+  if (!p) return true
+  return !!p.multi_instance || !!p.instance_schema
 }
 
 function openEdit(row: InstanceInfo) {
