@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.1.5
+
+可观测性版本。运行日志体系（系统级事件统一落库、级别可配、明细可导出）、任务偏移可配置、账号测试诊断增强，并修复默认实例编辑、i18n 键缺失等问题。
+
+- Added 运行日志（`internal/runlog`，迁移 000010）：账号刷新/登录失败、插件日志、插件崩溃重启、任务扫描异常、日志清理统一落 `run_logs`（`level/module/action/message/detail/account_id`）；日志页新增「运行日志」标签，点击行展开明细抽屉并导出 JSON；`GET/DELETE /admin/run-logs`（分页 + 级别/模块/关键字/时间区间）
+- Added 运行日志级别可配（`logs.run_level`）：`error/warn/debug/info` 递增包含，默认 `error`，管理端改动实时生效；插件侧经宿主 `Log` 落库，`LogEntry.Fields` 约定 `action`（固定词表，未命中按 `other`）+ `detail`
+- Added `sdk/http.go` 出站助手 `HTTPPost` / `HTTPStream`（SSE 逐块回调）：`debug` 级统一记录请求与响应，敏感头打码（`api-key`/`authorization`/`cookie`/`x-api-key`/`set-cookie`，保留前后 4 字符）；body 全量明文入库，`debug` 级仅建议本机排查开启
+- Added `Host.LogFields(level, message, fields)`：SDK 支持结构化日志字段，原 `Log` 签名保持兼容
+- Added 任务偏移可配（`task.daily_jitter_minutes`，默认 30，上限 45，`0` = 关闭）：daily 触发抖动窗口由硬编码 30 分钟改为管理端设置
+- Added 调用日志流式标记（迁移 000011，`request_logs.stream` 列）：列表区分同步/流式
+- Added 账号测试诊断增强：测试接口回传信封请求（清凭据）与事件明细（上限 200 条），前端折叠面板展示并一键导出 JSON；扫码登录二维码 `data:image/` 内联渲染，不再误调浏览器打开
+- Fixed 运行日志表格点击无响应：TDesign `row-click` 为单参数回调，原两参数签名解构失败
+- Fixed 系统默认实例保护：单实例插件的默认实例弹窗内隐藏名称/站点地址并沿用原值，无附加设置字段时直接隐藏编辑入口
+- Fixed 插件与实例设置弹窗统一「打开即预填 schema 默认值」（原先仅下拉类字段预填）
+- Fixed `zh.ts` 误删 `logs.tokenDetail` 键（`LogCells` 仍在引用，中文界面显示原始键名）
+- Fixed 任务页/日志页表格固定像素高度改 flex 高度链，随窗口自适应
+- Fixed 插件重启失败日志取错变量：`Manager.Get` 变量遮蔽导致真实错误被丢弃（恒打 `<nil>`）
+- Changed `sdk/http.go` 清理：移除重复实现与 8 个手写 stdlib 轮子（约 -110 行），headers 序列化改 `encoding/json`（map 键稳定升序，日志字段可对照）
+- Changed `setting.RunLevel` 去重复读取；`runlog.Logger` 字段更名并对非法级别配置回退
+
 ## v1.1.3
 
 后端功能版。插件启停持久化、客户端指纹注入、市场安装进度流，账号刷新健壮性修复，前端配套。
