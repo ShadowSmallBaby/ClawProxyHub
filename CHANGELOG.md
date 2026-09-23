@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.1.6
+
+插件生态版。新增 commandcode 插件、ima 重构为七文件分层，修复前端重构遗留，离线市场快照同步。
+
+- Added commandcode 插件 v0.1.0：Command Code（api.commandcode.ai）反代，信封 ↔ CC 私有协议双向转换
+- Changed ima 插件 v0.1.1 重构为七文件分层（main/auth/model/upstream/envelope/chat）；function_call 过滤器修复 malformed 块反复输出
+- Fixed 前端重构遗留：InstanceFormDialog 迁移 entities API、头部挂上版本牌（VersionChip）、Accounts 复用 `utils/common.copyText`
+- Changed 离线市场快照同步 7 条（含 ima 0.1.1、commandcode 0.1.0，CI 发布 sha256）；plugins submodule → 5c81488
+
 ## v1.1.5
 
 可观测性版本。运行日志体系（系统级事件统一落库、级别可配、明细可导出）、任务偏移可配置、账号测试诊断增强，并修复默认实例编辑、i18n 键缺失等问题。
