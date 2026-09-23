@@ -344,6 +344,7 @@ import EntityIcon from '../../components/EntityIcon.vue'
 import GroupPicker from './GroupPicker.vue'
 import { pluginLabelOf, instanceNameOf } from '../../utils/lookup'
 import { timeAgo, fmtNum, fmtTime } from '../../utils/format'
+import { copyText } from '../../utils/common'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -790,11 +791,6 @@ function onDrop(e: DragEvent, field: string) {
     MessagePlugin.success(t('accounts.loadedN', { name: file.name }))
   }
   reader.readAsText(file)
-}
-
-function copyText(text: string) {
-  navigator.clipboard.writeText(text)
-  MessagePlugin.success(t('common.copied'))
 }
 
 function openURL(url: string) {

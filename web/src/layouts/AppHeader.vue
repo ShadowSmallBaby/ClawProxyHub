@@ -6,6 +6,7 @@
       <div class="header-desc">{{ $t(currentPage.desc) }}</div>
     </div>
     <div class="header-right">
+      <version-chip />
       <github-icon-btn />
       <notif-bell />
       <lang-switch />
@@ -16,7 +17,7 @@
 </template>
 
 <script setup lang="ts">
-import { GithubIconBtn, NotifBell, LangSwitch, ThemeSwitch, UserMenu } from './header'
+import { GithubIconBtn, NotifBell, LangSwitch, ThemeSwitch, UserMenu, VersionChip } from './header'
 import type { MenuItem } from './types'
 
 defineProps<{

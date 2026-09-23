@@ -45,7 +45,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { api } from '../api/client'
+import { instanceApi } from '../api/entities'
 import type { InstanceInfo, PluginInfo } from '../api/types'
 
 const props = defineProps<{
@@ -144,8 +144,8 @@ async function submit() {
       base_url: isDefaultInstance.value ? (props.instance?.base_url ?? '') : baseURL.value,
       settings: form.settings,
     }
-    if (props.instance) await api.put(`/admin/instances/${props.instance.id}`, body)
-    else await api.post('/admin/instances', body)
+    if (props.instance) await instanceApi.update(props.instance.id, body)
+    else await instanceApi.create(body)
     MessagePlugin.success(t('common.saved'))
     emit('update:visible', false)
     emit('saved')
