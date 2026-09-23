@@ -7,6 +7,8 @@ export interface AdminSettings {
   browser_user_agent?: string
   github_proxy?: string
   log_retention_days?: number
+  run_level?: string
+  task_daily_jitter?: number
   site_name?: string
   site_abbr?: string
   site_logo?: string

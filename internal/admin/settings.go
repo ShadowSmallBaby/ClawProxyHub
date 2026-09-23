@@ -39,6 +39,8 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 			"browser_user_agent":  s.settings.BrowserUserAgent(),
 			"github_proxy":        s.settings.GitHubProxy(),
 			"log_retention_days":  s.settings.LogRetentionDays(),
+			"run_level":           s.settings.RunLevel(),
+			"task_daily_jitter":   int(s.settings.DailyJitter().Minutes()),
 			"site_name":           s.settings.Get(setting.KeySiteName, ""), // 原值：空 = 默认，前端用 placeholder 提示
 			"site_abbr":           s.settings.Get(setting.KeySiteAbbr, ""),
 			"site_logo":           s.settings.SiteLogo(),
@@ -55,6 +57,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		BrowserUserAgent  *string `json:"browser_user_agent"`
 		GitHubProxy       *string `json:"github_proxy"`
 		LogRetentionDays  *int    `json:"log_retention_days"`
+		RunLevel          *string `json:"run_level"`
+		TaskDailyJitter   *int    `json:"task_daily_jitter"`
 		SiteName          *string `json:"site_name"`
 		SiteAbbr          *string `json:"site_abbr"`
 		SiteLogo          *string `json:"site_logo"`
@@ -95,6 +99,23 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.settings.Set(setting.KeyLogRetentionDays, strconv.Itoa(*body.LogRetentionDays))
+	}
+	if body.RunLevel != nil {
+		switch *body.RunLevel {
+		case "error", "warn", "debug", "info":
+			s.settings.Set(setting.KeyRunLevel, *body.RunLevel)
+		default:
+			http.Error(w, `{"error":"运行日志级别需为 error/warn/debug/info"}`, http.StatusBadRequest)
+			return
+		}
+	}
+	// 任务偏移：daily 触发的最大随机抖动分钟数，0 = 关闭偏移
+	if body.TaskDailyJitter != nil {
+		if *body.TaskDailyJitter < 0 || *body.TaskDailyJitter > 45 {
+			http.Error(w, `{"error":"任务偏移分钟数需在 0（关闭）–45 之间"}`, http.StatusBadRequest)
+			return
+		}
+		s.settings.Set(setting.KeyTaskDailyJitter, strconv.Itoa(*body.TaskDailyJitter))
 	}
 	// 站点品牌：空串 = 恢复默认（存空，读取时回退）
 	if body.SiteName != nil {

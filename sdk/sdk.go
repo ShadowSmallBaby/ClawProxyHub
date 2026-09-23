@@ -27,8 +27,8 @@ const (
 	ExtraFingerprintHeaders string = "fingerprint_headers"
 	// SettingBrowserUserAgent 宿主 GetSettings 合并视图的保留键：全局浏览器 UA（空 / 缺失 = 插件用内置值）。
 	SettingBrowserUserAgent string = "_browser_user_agent"
-	MagicCookieKey       string = "CPH_PLUGIN"
-	MagicCookieVal       string = "claw-proxy-hub-plugin"
+	MagicCookieKey          string = "CPH_PLUGIN"
+	MagicCookieVal          string = "claw-proxy-hub-plugin"
 	// HostBrokerID 宿主 ClawHost 服务在 broker 上的固定通道号。
 	HostBrokerID uint32 = 1000
 )
@@ -65,10 +65,15 @@ func (h *Host) conn() pb.ClawHostClient {
 	return c
 }
 
-// Log 写统一日志管道。
+// Log 写统一日志管道（message 为精简消息；fields 可带 action/detail 等排查字段）。
 func (h *Host) Log(level, message string) {
+	h.LogFields(level, message, nil)
+}
+
+// LogFields 写统一日志管道（带结构化字段：action / detail）。
+func (h *Host) LogFields(level, message string, fields map[string]string) {
 	if c := h.conn(); c != nil {
-		c.Log(context.Background(), &pb.LogEntry{Level: level, Message: message})
+		c.Log(context.Background(), &pb.LogEntry{Level: level, Message: message, Fields: fields})
 	}
 }
 

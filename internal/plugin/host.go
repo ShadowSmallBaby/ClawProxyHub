@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/runlog"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/setting"
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
@@ -32,8 +33,31 @@ func NewHostService(db *gorm.DB) *HostService {
 	return &HostService{db: db, stores: map[string]map[string][]byte{}}
 }
 
+// runLogger 运行日志写入器（级别设置实时读库）。
+func (h *HostService) runLogger() *runlog.Logger {
+	return runlog.New(h.db, func() string { return setting.New(h.db).RunLevel() })
+}
+
+// runActions 固定 action 词表（语义化；插件自定义的 action 未命中按 "other"）。
+var runActions = map[string]bool{
+	"chat": true, "login": true, "refresh": true, "profile": true,
+	"models": true, "http": true, "task": true, "store": true,
+}
+
 func (h *HostService) Log(ctx context.Context, e *pb.LogEntry) (*pb.Empty, error) {
 	log.Printf("[plugin] %s: %s", e.Level, e.Message)
+	// Fields 约定键：action（语义化操作，未命中词表按 other）+ detail（排查明细）
+	action, detail := "other", ""
+	if e.Fields != nil {
+		if a := e.Fields["action"]; a != "" {
+			if !runActions[a] {
+				a = "other"
+			}
+			action = a
+		}
+		detail = e.Fields["detail"]
+	}
+	h.runLogger().Log(e.Level, "plugin", action, e.Message, detail, nil)
 	return &pb.Empty{}, nil
 }
 

@@ -43,6 +43,14 @@
                 <t-option v-for="d in [7, 14, 30, 60, 90, 180, 365]" :key="d" :value="d" :label="$t('settings.retentionDays', { n: d })" />
               </t-select>
             </t-form-item>
+            <t-form-item :label="$t('settings.runLevel')" :help="$t('settings.runLevelHelp')">
+              <t-select v-model="logForm.run_level" style="width: 200px" @change="save({ run_level: logForm.run_level })">
+                <t-option value="error" :label="$t('settings.runLevelError')" />
+                <t-option value="warn" :label="$t('settings.runLevelWarn')" />
+                <t-option value="debug" :label="$t('settings.runLevelDebug')" />
+                <t-option value="info" :label="$t('settings.runLevelInfo')" />
+              </t-select>
+            </t-form-item>
             <t-form-item :label="$t('settings.logExport')" :help="$t('settings.logExportHelp')">
               <t-button variant="outline" :loading="exporting" @click="exportLogs">
                 <template #icon><download-icon /></template>{{ $t('settings.exportBtn') }}
@@ -52,6 +60,16 @@
               <t-button theme="danger" variant="outline" @click="confirmClear">
                 <template #icon><delete-icon /></template>{{ $t('settings.clearBtn') }}
               </t-button>
+            </t-form-item>
+          </t-form>
+        </div>
+      </t-tab-panel>
+
+      <t-tab-panel value="task" :label="$t('settings.task')">
+        <div class="panel">
+          <t-form label-width="140px">
+            <t-form-item :label="$t('settings.taskJitter')" :help="$t('settings.taskJitterHelp')">
+              <t-input-number v-model="taskForm.task_daily_jitter" :min="0" :max="45" :suffix="$t('settings.taskJitterUnit')" theme="column" style="width: 200px" @change="save({ task_daily_jitter: taskForm.task_daily_jitter })" />
             </t-form-item>
           </t-form>
         </div>
@@ -137,7 +155,8 @@ const { t } = useI18n()
 const tab = ref('gateway')
 const gwForm = reactive({ first_event_timeout: 90, user_agent: '', browser_user_agent: '' })
 const netForm = reactive({ github_proxy: '' })
-const logForm = reactive({ log_retention_days: 0 })
+const logForm = reactive({ log_retention_days: 0, run_level: 'error' })
+const taskForm = reactive({ task_daily_jitter: 30 })
 const siteForm = reactive({ site_name: '', site_abbr: '', site_logo: '' })
 const saving = ref(false)
 const exporting = ref(false)
@@ -165,6 +184,8 @@ async function load() {
   gwForm.browser_user_agent = r.settings?.browser_user_agent ?? ''
   netForm.github_proxy = r.settings?.github_proxy ?? ''
   logForm.log_retention_days = r.settings?.log_retention_days ?? 0
+  logForm.run_level = r.settings?.run_level ?? 'error'
+  taskForm.task_daily_jitter = r.settings?.task_daily_jitter ?? 30
   siteForm.site_name = r.settings?.site_name ?? ''
   siteForm.site_abbr = r.settings?.site_abbr ?? ''
   siteForm.site_logo = r.settings?.site_logo ?? ''
