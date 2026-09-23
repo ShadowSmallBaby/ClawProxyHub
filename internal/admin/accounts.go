@@ -177,6 +177,11 @@ func (s *Server) testAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	cred := account.BuildCred(s.db, s.accounts.DataDir(), &acct, 0)
 
+	// 信封请求（诊断展示用）：清掉凭据再序列化
+	req.Credential = nil
+	reqJSON, _ := protojson.Marshal(req)
+	req.Credential = cred
+
 	events, err := s.plugins.Chat(req, pluginName, cred)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadGateway)
@@ -184,7 +189,14 @@ func (s *Server) testAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	var text string
 	var logs []string
+	var evLines []string
 	for ev := range events {
+		// 事件明细（诊断用，上限 200 防爆）
+		if len(evLines) < 200 {
+			if raw, err := protojson.Marshal(ev); err == nil {
+				evLines = append(evLines, string(raw))
+			}
+		}
 		switch e := ev.Event.(type) {
 		case *pb.StreamEvent_MessageStart:
 			logs = append(logs, "→ model: "+e.MessageStart.Model)
@@ -204,7 +216,7 @@ func (s *Server) testAccount(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"text": text, "logs": logs,
+		"text": text, "logs": logs, "request": string(reqJSON), "events": evLines,
 	})
 }
 

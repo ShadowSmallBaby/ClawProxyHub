@@ -25,6 +25,9 @@ export interface NextStep {
   wait?: boolean
 }
 
+// isQrDataUrl 二维码 data URL（插件侧内联，前端渲染图片而非打开浏览器）。
+export const isQrDataUrl = (url?: string) => !!url && url.startsWith('data:image/')
+
 export interface LoginResp {
   done: boolean
   account_id?: number
