@@ -193,7 +193,8 @@ export interface RouteInfo {
   Name: string
   Strategy: string
   GroupsJSON: string
-  TimeoutSeconds: number
+  FirstEventTimeoutSeconds: number
+  FirstTokenTimeoutSeconds: number
   UserAgent: string
   FailoverEnabled: boolean
   FailoverOn4xx: boolean

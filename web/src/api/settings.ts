@@ -2,13 +2,18 @@
 import { api, getToken } from './client'
 
 export interface AdminSettings {
-  first_event_timeout: number
+  first_token_timeout: number
+  first_event_timeout?: number
+  max_retries?: number
   user_agent?: string
   browser_user_agent?: string
   github_proxy?: string
   log_retention_days?: number
   run_level?: string
   task_daily_jitter?: number
+  context_truncate_enabled?: boolean
+  context_truncate_ratio?: number
+  context_bytes_per_token?: number
   site_name?: string
   site_abbr?: string
   site_logo?: string

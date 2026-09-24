@@ -19,7 +19,8 @@
         </div>
       </template>
       <template #timeout="{ row }">
-        {{ row.TimeoutSeconds > 0 ? row.TimeoutSeconds + 's' : $t('routes.global') }}
+        {{ (row.FirstEventTimeoutSeconds > 0 ? row.FirstEventTimeoutSeconds + 's' : $t('routes.global')) }} /
+        {{ (row.FirstTokenTimeoutSeconds > 0 ? row.FirstTokenTimeoutSeconds + 's' : $t('routes.global')) }}
       </template>
       <template #failover="{ row }">
         <t-tag v-if="!row.FailoverEnabled" theme="default" variant="light">{{ $t('routes.off') }}</t-tag>
@@ -73,8 +74,12 @@
             </div>
           </div>
         </t-form-item>
-        <t-form-item :label="$t('routes.timeout')">
-          <t-input-number v-model="form.timeout_seconds" :min="0" :max="3600" theme="column" style="width: 140px" />
+        <t-form-item :label="$t('routes.firstEventTimeout')">
+          <t-input-number v-model="form.first_event_timeout_seconds" :min="0" :max="3600" theme="column" style="width: 140px" />
+          <span class="hint">{{ $t('routes.timeoutHint') }}</span>
+        </t-form-item>
+        <t-form-item :label="$t('routes.firstTokenTimeout')">
+          <t-input-number v-model="form.first_token_timeout_seconds" :min="0" :max="3600" theme="column" style="width: 140px" />
           <span class="hint">{{ $t('routes.timeoutHint') }}</span>
         </t-form-item>
         <t-form-item :label="$t('routes.userAgent')" :help="$t('routes.userAgentHint')">
@@ -127,7 +132,8 @@ const form = reactive({
   name: '',
   strategy: 'round_robin',
   groups: [{ group_id: undefined, weight: 100, model: '' }] as RouteGroupEntry[],
-  timeout_seconds: 0,
+  first_event_timeout_seconds: 0,
+  first_token_timeout_seconds: 0,
   user_agent: '',
   failover_enabled: false,
   failover_codes: [] as string[],
@@ -201,7 +207,7 @@ function openCreate() {
   Object.assign(form, {
     name: '', strategy: 'round_robin',
     groups: [{ group_id: undefined, weight: 100, model: '' }],
-    timeout_seconds: 0, user_agent: '', failover_enabled: false, failover_codes: [], failover_group_id: null, failover_model: '',
+    first_event_timeout_seconds: 0, first_token_timeout_seconds: 0, user_agent: '', failover_enabled: false, failover_codes: [], failover_group_id: null, failover_model: '',
   })
   dialogVisible.value = true
 }
@@ -213,7 +219,8 @@ function openEdit(row: RouteInfo) {
     name: row.Name,
     strategy: row.Strategy,
     groups: parsed.length ? parsed : [{ group_id: undefined, weight: 100, model: '' }],
-    timeout_seconds: row.TimeoutSeconds,
+    first_event_timeout_seconds: row.FirstEventTimeoutSeconds,
+    first_token_timeout_seconds: row.FirstTokenTimeoutSeconds,
     user_agent: row.UserAgent ?? '',
     failover_enabled: row.FailoverEnabled,
     failover_codes: [row.FailoverOn4xx && '4xx', row.FailoverOn5xx && '5xx'].filter(Boolean) as string[],
@@ -253,7 +260,8 @@ async function save() {
     name: form.name,
     strategy: form.strategy,
     groups: form.groups,
-    timeout_seconds: form.timeout_seconds,
+    first_event_timeout_seconds: form.first_event_timeout_seconds,
+    first_token_timeout_seconds: form.first_token_timeout_seconds,
     user_agent: form.user_agent.trim(),
     failover_enabled: form.failover_enabled,
     failover_on_4xx: form.failover_codes.includes('4xx'),

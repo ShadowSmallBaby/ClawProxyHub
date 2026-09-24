@@ -13,8 +13,14 @@ import (
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 )
 
-// KeyFirstEventTimeout 网关首事件超时（秒）。
+// KeyFirstTokenTimeout 网关首字超时（秒）：首事件 → 首个内容 token 的上限（容纳推理思考）。
+const KeyFirstTokenTimeout = "gateway.first_token_timeout"
+
+// KeyFirstEventTimeout 网关首帧超时（秒）：等待上游第一个事件的上限（探测上游/代理挂死）。
 const KeyFirstEventTimeout = "gateway.first_event_timeout"
+
+// KeyMaxRetries 单次请求的总上游尝试次数上限（含首发；恢复/降级共用此硬上限）。
+const KeyMaxRetries = "gateway.max_retries"
 
 // KeyGatewayUserAgent 网关全局 UA（对话请求；空 = 透传客户端 UA；路由级可覆盖）。
 const KeyGatewayUserAgent = "gateway.user_agent"
@@ -66,7 +72,24 @@ type PluginSource struct {
 	Enabled bool   `json:"enabled"`
 }
 
-const defaultFirstEventTimeout = 90
+const defaultFirstTokenTimeout = 120
+const defaultFirstEventTimeout = 60
+const defaultMaxRetries = 3
+
+// KeyContextTruncateEnabled 输入超窗自动截断总开关（默认开）。
+const KeyContextTruncateEnabled = "gateway.context_truncate_enabled"
+
+// KeyContextTruncateRatio 触发截断的窗口占用阈值比例（估算 token / context_window 超过即截）。
+const KeyContextTruncateRatio = "gateway.context_truncate_ratio"
+
+// KeyContextBytesPerToken token 粗估系数：字节数 / 该值 ≈ token 数。
+const KeyContextBytesPerToken = "gateway.context_bytes_per_token"
+
+const (
+	defaultContextTruncateEnabled = true
+	defaultContextTruncateRatio   = 0.9
+	defaultContextBytesPerToken   = 3.5
+)
 
 // Store 设置存储。
 type Store struct {
@@ -106,13 +129,58 @@ func (s *Store) Set(key, value string) {
 	s.mu.Unlock()
 }
 
-// FirstEventTimeout 网关首事件超时；非法值回退默认。
+// FirstTokenTimeout 网关首字超时；非法值回退默认。
+func (s *Store) FirstTokenTimeout() time.Duration {
+	n, err := strconv.Atoi(s.Get(KeyFirstTokenTimeout, strconv.Itoa(defaultFirstTokenTimeout)))
+	if err != nil || n <= 0 {
+		n = defaultFirstTokenTimeout
+	}
+	return time.Duration(n) * time.Second
+}
+
+// FirstEventTimeout 网关首帧超时；非法值回退默认。
 func (s *Store) FirstEventTimeout() time.Duration {
 	n, err := strconv.Atoi(s.Get(KeyFirstEventTimeout, strconv.Itoa(defaultFirstEventTimeout)))
 	if err != nil || n <= 0 {
 		n = defaultFirstEventTimeout
 	}
 	return time.Duration(n) * time.Second
+}
+
+// MaxRetries 单次请求总上游尝试次数上限；非法值回退默认，下限 1。
+func (s *Store) MaxRetries() int {
+	n, err := strconv.Atoi(s.Get(KeyMaxRetries, strconv.Itoa(defaultMaxRetries)))
+	if err != nil || n < 1 {
+		n = defaultMaxRetries
+	}
+	return n
+}
+
+// ContextTruncateEnabled 输入超窗自动截断开关；缺省开。
+func (s *Store) ContextTruncateEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(s.Get(KeyContextTruncateEnabled, ""))) {
+	case "false", "0", "off", "no":
+		return false
+	}
+	return defaultContextTruncateEnabled
+}
+
+// ContextTruncateRatio 截断触发比例；非法或越界回退默认，限定 (0,1]。
+func (s *Store) ContextTruncateRatio() float64 {
+	f, err := strconv.ParseFloat(strings.TrimSpace(s.Get(KeyContextTruncateRatio, "")), 64)
+	if err != nil || f <= 0 || f > 1 {
+		return defaultContextTruncateRatio
+	}
+	return f
+}
+
+// ContextBytesPerToken token 粗估系数；非法或过小回退默认。
+func (s *Store) ContextBytesPerToken() float64 {
+	f, err := strconv.ParseFloat(strings.TrimSpace(s.Get(KeyContextBytesPerToken, "")), 64)
+	if err != nil || f < 1 {
+		return defaultContextBytesPerToken
+	}
+	return f
 }
 
 // GitHubProxy GitHub 代理前缀（以 / 结尾与否均可；空 = 直连）。

@@ -40,6 +40,8 @@ type AccountExpirer interface {
 	Refresh(ctx context.Context, accountID int64) (*model.Account, error)
 	// MarkAutoPause 自动暂停选号（429 限时恢复 / 402 等手动恢复）。
 	MarkAutoPause(accountID int64, reason string, resumeAt *time.Time)
+	// ModelContextWindow 账号模型目录快照里 modelID 的上下文窗口；未知返回 0。
+	ModelContextWindow(accountID int64, modelID string) int32
 }
 
 // PluginRegistry 由 plugin.Manager 适配：解析模型并代理 Chat 调用。
@@ -56,8 +58,13 @@ type PluginRegistry interface {
 
 // SettingsReader 全局设置读取（setting.Store 注入，nil 时走默认值）。
 type SettingsReader interface {
+	FirstTokenTimeout() time.Duration
 	FirstEventTimeout() time.Duration
+	MaxRetries() int
 	GatewayUserAgent() string
+	ContextTruncateEnabled() bool
+	ContextTruncateRatio() float64
+	ContextBytesPerToken() float64
 }
 
 // New 创建网关。
@@ -175,11 +182,11 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (*model.Key, 
 		return nil, false
 	}
 	var k model.Key
-	if err := s.db.Where("key_cipher = ?", keyCipher(key, s.dataDir)).First(&k).Error; err != nil {
-		// 新建密钥每次加密 nonce 不同，等值查询可能未命中 → 解密比对（同插件）兜底由上层缓存处理；
-		// 这里退回全量扫描解密（密钥数量级小，可接受）
+	// 确定性查找：sha256(raw) 命中 key_lookup 即为该 key（O(1)，免解密）。
+	if err := s.db.Where("key_lookup = ? AND enabled = ?", accountpkg.KeyLookupHash(key), true).First(&k).Error; err != nil {
+		// 未命中：key_lookup 为空的存量新格式密钥 → 回退全量解密扫描（数量级小）
 		var keys []model.Key
-		s.db.Where("enabled = ?", true).Find(&keys)
+		s.db.Where("enabled = ? AND (key_lookup IS NULL OR key_lookup = '')", true).Find(&keys)
 		matched := false
 		for _, cand := range keys {
 			if keyMatches(cand.KeyCipher, key, s.dataDir) {
@@ -205,10 +212,6 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (*model.Key, 
 	}
 	return &k, true
 }
-
-// keyCipher 生成待等值查询的密文。AES-GCM 每次 nonce 不同无法等值命中，
-// 但密钥列表小，miss 后走 keyMatches 全量解密兜底；此处返回 raw 仅为让等值查询快速失败。
-func keyCipher(raw string, _ string) string { return raw }
 
 // keyMatches 校验请求密钥与存储密文是否匹配：双通道（加密格式解密比对 / 存量 sha256 hex）。
 func keyMatches(cipher string, raw string, dataDir string) bool {
@@ -311,6 +314,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 		req.Extra[sdk.ExtraClientUserAgent] = ua
 	}
 
+	// 输入超窗保护：按选中账号的模型窗口估算并裁剪旧消息（未知窗口 / 关闭时不动）。
+	if account != nil && s.accounts != nil && s.settings != nil && s.settings.ContextTruncateEnabled() {
+		if win := s.accounts.ModelContextWindow(account.ID, req.Model); win > 0 {
+			if rounds := truncateForWindow(req, win, s.settings.ContextTruncateRatio(), s.settings.ContextBytesPerToken()); rounds > 0 {
+				log.Printf("[gateway] context truncate: model=%q window=%d rounds=%d msgs=%d", req.Model, win, rounds, len(req.Messages))
+			}
+		}
+	}
+
 	var cred *pb.CredentialBlob
 	if account != nil {
 		cred = s.buildCred(account, groupID)
@@ -331,7 +343,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 		route = resolved.Route
 	}
 	failoverUsed := false
-	timeout := s.firstEventTimeout(route)
+	// 恢复预算按故障类型分别计数（凭据刷新 / 限速换号），互不挤占；降级换组后重置。
+	authTries, rateTries := 0, 0
+	feTimeout := s.firstEventTimeout(route) // 等第一个事件
+	ftTimeout := s.firstTokenTimeout(route) // 首内容前控制帧窗口
 
 	// switchAccount 重新解析路由换一个可用账号（不刷新凭据，暂停/过期账号已被选号条件排除）。
 	switchAccount := func() bool {
@@ -392,19 +407,29 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 		cred = s.buildCred(account, groupID)
 		log.account = account
 		log.model = req.Model
+		authTries, rateTries = 0, 0 // 降级到新组：给新账号一份新鲜的恢复预算
 		return true
 	}
 
 	// recoverFrom 单次失败后的恢复决策。
 	// retry=true 已切换可重试；transient 非 nil 表示暂时性失败（保留账号，不降级）。
-	recoverFrom := func(status, attempt int, brief string) (retry bool, transient error) {
+	recoverFrom := func(status int, brief string) (retry bool, transient error) {
 		switch {
-		case status == 401 && attempt < 2 && account != nil && s.accounts != nil:
-			recovered, transient := recoverCredential()
-			if recovered || transient != nil {
-				return recovered, transient
+		case status == 401 && authTries < 2 && account != nil && s.accounts != nil:
+			authTries++
+			recovered, tErr := recoverCredential()
+			if recovered {
+				return true, nil
 			}
-		case (status == 429 || status == 402) && account != nil && s.accounts != nil && attempt < 2:
+			if tErr != nil {
+				// 刷新遇瞬时错误（网络/上游 5xx）：先试路由降级，降不成再上报瞬时错误
+				if switchFailover(status) {
+					return true, nil
+				}
+				return false, tErr
+			}
+		case (status == 429 || status == 402) && rateTries < 2 && account != nil && s.accounts != nil:
+			rateTries++
 			// 429 限速：暂停 10 分钟后自动恢复；402 无积分：暂停且需手动恢复
 			var resumeAt *time.Time
 			if status == 429 {
@@ -441,11 +466,39 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 		}
 	}
 
-	for attempt := 0; ; attempt++ {
+	// collectPrefix 缓冲「首内容前」的控制帧，返回 (前缀, 失败码, 摘要, 通道是否已关闭)。
+	// 遇 TaskFailed 立即返回失败码（此时未向客户端写字节，可换号/降级）；
+	// 遇首个内容帧或通道关闭返回前缀；仅收到控制帧后挂死按 504。
+	collectPrefix := func(first *pb.StreamEvent, events chan *pb.StreamEvent) (prefix []*pb.StreamEvent, code int32, brief string, closed bool) {
+		ev := first
+		for {
+			if ev == nil {
+				return prefix, 0, "", true
+			}
+			if c := failedCode(ev); c != 0 {
+				return prefix, c, failedBrief(ev), false
+			}
+			prefix = append(prefix, ev)
+			if !isPreContent(ev) {
+				return prefix, 0, "", false
+			}
+			select {
+			case next, ok := <-events:
+				if !ok {
+					return prefix, 0, "", true
+				}
+				ev = next
+			case <-time.After(ftTimeout):
+				return prefix, 504, "", false
+			}
+		}
+	}
+
+	for guard := 0; guard < s.maxRetries(); guard++ {
 		events, err := s.plugins.Chat(req, pluginName, cred)
 		if err != nil {
 			// 通道级失败（插件崩溃等）按 5xx 类参与降级判定
-			if retry, _ := recoverFrom(502, attempt, err.Error()); retry {
+			if retry, _ := recoverFrom(502, err.Error()); retry {
 				continue
 			}
 			failWith(http.StatusBadGateway, "upstream_error", err.Error())
@@ -460,35 +513,34 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 				if !ok {
 					first = nil
 				}
-			case <-time.After(timeout):
-				if retry, _ := recoverFrom(504, attempt, ""); retry {
+			case <-time.After(feTimeout):
+				if retry, _ := recoverFrom(504, ""); retry {
 					continue
 				}
 				failWith(http.StatusGatewayTimeout, "upstream_error",
-					fmt.Sprintf("upstream produced no events within %s (check proxy / upstream reachability)", timeout))
+					fmt.Sprintf("upstream produced no events within %s (check proxy / upstream reachability)", feTimeout))
 				return
 			}
 		}
 		log.firstTokenMs = int32(time.Since(start).Milliseconds())
-		if first != nil {
-			if code := failedCode(first); code != 0 {
-				brief := failedBrief(first)
-				retry, transient := recoverFrom(int(code), attempt, brief)
-				if retry {
-					continue
-				}
-				finishUnrecovered(code, brief, transient)
-				return
+
+		// 恢复窗口延到首个内容 token——首内容前的控制帧先缓冲，期间失败仍可恢复
+		prefix, code, brief, _ := collectPrefix(first, events)
+		if code != 0 {
+			retry, transient := recoverFrom(int(code), brief)
+			if retry {
+				continue
 			}
-		}
-		// channel 无法塞回首事件，经参数带入输出层
-		if req.Stream {
-			s.streamOut(w, events, first, log, newEncoder(protocol, req.Model), nil)
+			finishUnrecovered(code, brief, transient)
 			return
 		}
-		if code, brief := s.nonStreamOut(w, events, first, log, newAggregate(protocol, req.Model)); code != 0 {
+		if req.Stream {
+			s.streamOut(w, events, prefix, log, newEncoder(protocol, req.Model))
+			return
+		}
+		if code, brief := s.nonStreamOut(w, events, prefix, log, newAggregate(protocol, req.Model)); code != 0 {
 			// 聚合中途失败且响应未写：尝试恢复后重试
-			retry, transient := recoverFrom(int(code), attempt, brief)
+			retry, transient := recoverFrom(int(code), brief)
 			if retry {
 				continue
 			}
@@ -497,6 +549,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 		}
 		return
 	}
+	failWith(http.StatusBadGateway, "api_error", "recovery attempts exhausted")
+}
+
+// isPreContent 报告事件是否为「首内容前的控制帧」：可缓冲、期间失败仍可恢复。
+func isPreContent(ev *pb.StreamEvent) bool {
+	_, ok := ev.Event.(*pb.StreamEvent_MessageStart)
+	return ok
 }
 
 // failedCode TaskFailed 事件携带的上游状态码（非失败事件返回 0）。
@@ -527,17 +586,40 @@ func failoverMatch(route *model.Route, status int) bool {
 	}
 }
 
-// firstEventTimeout 首事件超时：路由级 > 全局设置 > 90s 默认。
+// firstTokenTimeout 首字超时：路由级 > 全局设置 > 120s 默认。首内容前控制帧窗口用它（方案A）。
+func (s *Server) firstTokenTimeout(route *model.Route) time.Duration {
+	if route != nil && route.FirstTokenTimeoutSeconds > 0 {
+		return time.Duration(route.FirstTokenTimeoutSeconds) * time.Second
+	}
+	if s.settings != nil {
+		if d := s.settings.FirstTokenTimeout(); d > 0 {
+			return d
+		}
+	}
+	return 120 * time.Second
+}
+
+// firstEventTimeout 首帧超时：路由级 > 全局设置 > 60s 默认。等第一个事件用它（探测上游挂死）。
 func (s *Server) firstEventTimeout(route *model.Route) time.Duration {
-	if route != nil && route.TimeoutSeconds > 0 {
-		return time.Duration(route.TimeoutSeconds) * time.Second
+	if route != nil && route.FirstEventTimeoutSeconds > 0 {
+		return time.Duration(route.FirstEventTimeoutSeconds) * time.Second
 	}
 	if s.settings != nil {
 		if d := s.settings.FirstEventTimeout(); d > 0 {
 			return d
 		}
 	}
-	return 90 * time.Second
+	return 60 * time.Second
+}
+
+// maxRetries 单次请求总上游尝试上限：全局设置 > 3 默认，下限 1。
+func (s *Server) maxRetries() int {
+	if s.settings != nil {
+		if n := s.settings.MaxRetries(); n >= 1 {
+			return n
+		}
+	}
+	return 3
 }
 
 // buildCred 账号 → 凭据信封（groupID 为路由命中的分组，出站代理优先用它）。

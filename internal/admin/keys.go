@@ -101,7 +101,8 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		name = s.settings.SiteAbbr()
 	}
 	raw := "cph-" + randHex(24)
-	k := model.Key{KeyCipher: string(account.EncryptCredential(s.accounts.DataDir(), []byte(raw))), Name: name, Enabled: true}
+	k := model.Key{KeyCipher: string(account.EncryptCredential(s.accounts.DataDir(), []byte(raw))),
+		KeyLookup: account.KeyLookupHash(raw), Name: name, Enabled: true}
 	if err := s.db.Create(&k).Error; err != nil {
 		http.Error(w, `{"error":"create failed"}`, http.StatusInternalServerError)
 		return
@@ -297,16 +298,17 @@ func (s *Server) listRoutes(w http.ResponseWriter, r *http.Request) {
 
 // routeBody 创建/编辑路由共用的请求体。
 type routeBody struct {
-	Name            string                  `json:"name"`
-	Strategy        string                  `json:"strategy"`
-	Groups          []model.RouteGroupEntry `json:"groups"`
-	TimeoutSeconds  int32                   `json:"timeout_seconds"`
-	UserAgent       string                  `json:"user_agent"`
-	FailoverEnabled bool                    `json:"failover_enabled"`
-	FailoverOn4xx   bool                    `json:"failover_on_4xx"`
-	FailoverOn5xx   bool                    `json:"failover_on_5xx"`
-	FailoverGroupID *int64                  `json:"failover_group_id"`
-	FailoverModel   string                  `json:"failover_model"`
+	Name                     string                  `json:"name"`
+	Strategy                 string                  `json:"strategy"`
+	Groups                   []model.RouteGroupEntry `json:"groups"`
+	FirstEventTimeoutSeconds int32                   `json:"first_event_timeout_seconds"`
+	FirstTokenTimeoutSeconds int32                   `json:"first_token_timeout_seconds"`
+	UserAgent                string                  `json:"user_agent"`
+	FailoverEnabled          bool                    `json:"failover_enabled"`
+	FailoverOn4xx            bool                    `json:"failover_on_4xx"`
+	FailoverOn5xx            bool                    `json:"failover_on_5xx"`
+	FailoverGroupID          *int64                  `json:"failover_group_id"`
+	FailoverModel            string                  `json:"failover_model"`
 }
 
 // validate 分组权重须 0–100 且合计恰好 100（如 100 / 50+50 / 100+0+0 / 30+20+50）；
@@ -331,8 +333,11 @@ func (b *routeBody) validate() string {
 	if b.Strategy == "" {
 		b.Strategy = "round_robin"
 	}
-	if b.TimeoutSeconds < 0 || b.TimeoutSeconds > 3600 {
-		return "timeout_seconds 需在 0–3600 秒之间（0 = 跟随全局）"
+	if b.FirstEventTimeoutSeconds < 0 || b.FirstEventTimeoutSeconds > 3600 {
+		return "first_event_timeout_seconds 需在 0–3600 秒之间（0 = 跟随全局）"
+	}
+	if b.FirstTokenTimeoutSeconds < 0 || b.FirstTokenTimeoutSeconds > 3600 {
+		return "first_token_timeout_seconds 需在 0–3600 秒之间（0 = 跟随全局）"
 	}
 	b.UserAgent = strings.TrimSpace(b.UserAgent)
 	if len(b.UserAgent) > 512 {
@@ -362,7 +367,8 @@ func (s *Server) createRoute(w http.ResponseWriter, r *http.Request) {
 	groupsJSON, _ := json.Marshal(body.Groups)
 	rt := model.Route{
 		Name: body.Name, Strategy: body.Strategy, GroupsJSON: string(groupsJSON),
-		TimeoutSeconds: body.TimeoutSeconds, UserAgent: body.UserAgent, FailoverEnabled: body.FailoverEnabled,
+		FirstEventTimeoutSeconds: body.FirstEventTimeoutSeconds, FirstTokenTimeoutSeconds: body.FirstTokenTimeoutSeconds,
+		UserAgent: body.UserAgent, FailoverEnabled: body.FailoverEnabled,
 		FailoverOn4xx: body.FailoverOn4xx, FailoverOn5xx: body.FailoverOn5xx,
 		FailoverGroupID: body.FailoverGroupID, FailoverModel: body.FailoverModel,
 	}
@@ -392,7 +398,8 @@ func (s *Server) updateRoute(w http.ResponseWriter, r *http.Request) {
 	rt.Name = body.Name
 	rt.Strategy = body.Strategy
 	rt.GroupsJSON = string(groupsJSON)
-	rt.TimeoutSeconds = body.TimeoutSeconds
+	rt.FirstEventTimeoutSeconds = body.FirstEventTimeoutSeconds
+	rt.FirstTokenTimeoutSeconds = body.FirstTokenTimeoutSeconds
 	rt.UserAgent = body.UserAgent
 	rt.FailoverEnabled = body.FailoverEnabled
 	rt.FailoverOn4xx = body.FailoverOn4xx

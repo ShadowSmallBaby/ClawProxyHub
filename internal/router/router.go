@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -30,7 +31,7 @@ type stickyEntry struct {
 type Router struct {
 	db     *gorm.DB
 	mu     sync.Mutex
-	rr     map[int64]int64        // routeID → 轮询计数
+	rr     map[int64]int64        // groupID → 轮询计数
 	sticky map[string]stickyEntry // 指纹 → 分组+账号
 }
 
@@ -81,7 +82,7 @@ func (r *Router) Resolve(key *model.Key, req *pb.ChatRequest) (*Resolved, error)
 	case "least_used":
 		acct = r.byLeastUsed(entry.GroupID)
 	default: // round_robin / sticky（未命中退化为轮询）
-		acct = r.byRoundRobin(route.ID, entry.GroupID)
+		acct = r.byRoundRobin(entry.GroupID)
 	}
 
 	if acct != nil && route.Strategy == "sticky" {
@@ -107,7 +108,7 @@ func (r *Router) PickFailover(route *model.Route) *Resolved {
 	case "least_used":
 		acct = r.byLeastUsed(gid)
 	default:
-		acct = r.byRoundRobin(route.ID, gid)
+		acct = r.byRoundRobin(gid)
 	}
 	if acct == nil {
 		return nil
@@ -133,11 +134,15 @@ func (r *Router) groupPlugin(groupID int64) string {
 var ErrRouteForbidden = fmt.Errorf("route exists but key is not authorized for it")
 
 // findRoute 按对外名查路由并校验 key 授权范围。
-// (nil, nil) = 不是路由名；(nil, ErrRouteForbidden) = 路由存在但无权。
+// (nil, nil) = 不是路由名；(nil, ErrRouteForbidden) = 路由存在但无权；
+// (nil, err) = DB 故障（上抛让网关回 502，不静默 fallback 掩盖故障）。
 func (r *Router) findRoute(key *model.Key, name string) (*model.Route, error) {
 	var route model.Route
 	if err := r.db.Where("name = ?", name).First(&route).Error; err != nil {
-		return nil, nil // 不是路由名，走真实模型名 fallback
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil // 不是路由名，走真实模型名 fallback
+		}
+		return nil, err // 真实 DB 错误：上抛，勿当作非路由名
 	}
 	// key 绑定了授权范围则必须在范围内
 	var count int64
@@ -174,25 +179,28 @@ func (r *Router) activeWhere(db *gorm.DB) *gorm.DB {
 }
 
 // accountsInGroup 分组内全部可用账号（经 account_groups 多对多）。
+// 固定按 accounts.id 排序：轮询正确性依赖顺序稳定，否则 idx%len 会跳号。
 func (r *Router) accountsInGroup(groupID int64) []model.Account {
 	var accts []model.Account
 	if err := r.activeWhere(r.db).
 		Joins("JOIN account_groups ag ON ag.account_id = accounts.id").
-		Where("ag.group_id = ?", groupID).Find(&accts).Error; err != nil {
+		Where("ag.group_id = ?", groupID).
+		Order("accounts.id").Find(&accts).Error; err != nil {
 		return nil
 	}
 	return accts
 }
 
-// byRoundRobin 分组内轮询。
-func (r *Router) byRoundRobin(routeID, groupID int64) *model.Account {
+// byRoundRobin 分组内轮询。计数按 groupID：账号取自分组，
+// 按路由计数会让同路由多分组共用一个计数器而错乱。
+func (r *Router) byRoundRobin(groupID int64) *model.Account {
 	accts := r.accountsInGroup(groupID)
 	if len(accts) == 0 {
 		return nil
 	}
 	r.mu.Lock()
-	r.rr[routeID]++
-	idx := r.rr[routeID]
+	r.rr[groupID]++
+	idx := r.rr[groupID]
 	r.mu.Unlock()
 	return &accts[idx%int64(len(accts))]
 }
@@ -207,6 +215,7 @@ func (r *Router) byRandom(groupID int64) *model.Account {
 }
 
 // byLeastUsed 分组内最少使用优先（空闲账号优先吃新会话）。
+// 选中即预占（立即 markUsed）：缩小并发下多请求齐选同一空闲账号的惊群窗口。
 func (r *Router) byLeastUsed(groupID int64) *model.Account {
 	var acct model.Account
 	err := r.activeWhere(r.db).
@@ -216,6 +225,7 @@ func (r *Router) byLeastUsed(groupID int64) *model.Account {
 	if err != nil {
 		return nil
 	}
+	r.markUsed(acct.ID)
 	return &acct
 }
 

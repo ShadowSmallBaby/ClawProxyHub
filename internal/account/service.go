@@ -288,6 +288,16 @@ func (s *Service) StoredModels(accountID int64) []*pb.ModelInfo {
 	return out
 }
 
+// ModelContextWindow 查账号模型目录快照里 modelID 的上下文窗口；未知返回 0。
+func (s *Service) ModelContextWindow(accountID int64, modelID string) int32 {
+	for _, m := range s.StoredModels(accountID) {
+		if m.GetId() == modelID {
+			return m.GetContextWindow()
+		}
+	}
+	return 0
+}
+
 // marshalModels ModelInfo 数组 → JSON（protojson 保真，逐条编码）。
 func marshalModels(models []*pb.ModelInfo) string {
 	raws := make([]json.RawMessage, 0, len(models))
