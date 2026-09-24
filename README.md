@@ -17,11 +17,12 @@ Claw 类客户端（LobsterAI / WorkBuddy 等）的统一管理反代网关：�
 │  任务：interval / daily / once 调度（签到等维护任务）        │
 │  存储：SQLite（golang-migrate 启动自动迁移）                 │
 │  市场：多源索引 → 下载 .cphplugin → 校验 → 安装              │
+│  运行时：Go 插件二进制 / Lua 插件（内置 LuaHost 沙箱）        │
 └────────────┬─────────────────────────────────────────────────┘
-             │ hashicorp/go-plugin（子进程 gRPC，契约协商 v1/v2）
+             │ hashicorp/go-plugin（子进程 gRPC，契约 protocol v2）
    ┌─────────┴─────────┐
    ▼                   ▼
- lobsterai 插件     workbuddy 插件   （← ClawProxyHubPlugins 仓库构建发布）
+ lobsterai 插件     autoclaw 插件    （← ClawProxyHubPlugins 仓库构建发布，Go/Lua 双运行时）
 ```
 
 ## 快速开始
@@ -83,17 +84,18 @@ func main() { sdk.Serve(&myPlugin{}) }
 ```
 
 - 契约：`sdk/proto/cph.proto`（Handshake / Login 多步登录 / Refresh / ListModels / Chat 统一信封 / RunTask）
-- 通用上游适配：`sdk/openaiup`（OpenAI 方言）、`sdk/anthropicup`（Anthropic 方言）
+- 通用上游适配：`sdk/openaiup`（OpenAI 方言）、`sdk/anthropicup`（Anthropic 方言）、`sdk/responsesup`（Responses 方言）；SSE 分帧助手 `sdk/sse`
 - 宿主回调（日志 / 存储 / 代理查询）：实现 `sdk.HostAware` 接收 `*sdk.Host`
-- 参考实现：`examples/stub`（演示插件）与 [ClawProxyHubPlugins](https://github.com/ShadowSmallBaby/ClawProxyHubPlugins) 中的正式插件
-- 包格式 `.cphplugin`：zip，含 `manifest.json`（name / version / author / protocol_version / icon）+ `plugin-<os>-<arch>[.exe]`；打包器与发布流程见插件仓库
+- 参考实现：`examples/stub`（演示插件）与 [ClawProxyHubPlugins](https://github.com/ShadowSmallBaby/ClawProxyHubPlugins) 中的正式插件；不想写 Go 可用核心内置 LuaHost 写 **Lua 插件**（零编译，见插件仓库 AGENTS.md §11）
+- 包格式 `.cphplugin`（zip 容器）：含 `manifest.json`（name / version / author / protocol_version / icon）+ `plugin-<os>-<arch>[.exe]`（Lua 插件为平台无关的 `main.lua`）；打包器与发布流程见插件仓库
 
 ## 项目结构
 
 ```
 cmd/cph          核心入口
 internal/        网关 / 路由 / 账号 / 任务 / 插件管理 / 管理 API（database/migrations 为 SQL 迁移）
-sdk/             插件开发工具包（契约生成代码 + 上游适配器）
+sdk/             插件开发工具包（契约生成代码 + 上游适配器 + SSE/传输层）
+hosts/luahost    Lua 插件运行时（独立 module，核心内置加载）
 examples/stub    演示插件（开发参照）
 web/             仪表盘（Vue3 + TDesign，go:embed 嵌入）
 ```
