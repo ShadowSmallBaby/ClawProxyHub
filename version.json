@@ -1,5 +1,5 @@
 {
-  "version": "1.1.5",
+  "version": "1.1.6",
   "release_url": "https://github.com/ShadowSmallBaby/ClawProxyHub/releases",
   "changelog": {
     "title": {
@@ -8,28 +8,16 @@
     },
     "items": [
       {
-        "zh": "运行日志：账号刷新/登录失败、插件日志、核心内部事件统一落库，日志页新增「运行日志」标签，点击行看明细并可导出 JSON",
-        "en": "Run logs: account refresh/login failures, plugin logs and core events are persisted; a new Run Logs tab shows details per row with JSON export"
+        "zh": "新增 commandcode 插件：Command Code 反代",
+        "en": "New commandcode plugin: Command Code reverse proxy"
       },
       {
-        "zh": "运行日志级别可配：error / warn / debug / info 递增包含，默认 error；debug 级可查看上游请求与响应明细",
-        "en": "Configurable run-log level: error / warn / debug / info (cumulative), default error; debug captures upstream request and response details"
+        "zh": "新增 ima 插件: IMA 反代",
+        "en": "New ima plugin: IMA reverse proxy"
       },
       {
-        "zh": "任务偏移可配：daily 任务触发抖动窗口由固定 30 分钟改为可配（0–45 分钟，0 = 关闭偏移）",
-        "en": "Configurable task jitter: the daily trigger window is now adjustable (0–45 minutes, 0 = disabled) instead of a fixed 30 minutes"
-      },
-      {
-        "zh": "调用日志区分同步/流式，列表新增类型列",
-        "en": "Request logs now distinguish streaming from synchronous calls with a new type column"
-      },
-      {
-        "zh": "账号测试诊断增强：回传信封请求与事件明细，可一键导出 JSON；扫码登录的二维码直接内联展示",
-        "en": "Richer account test diagnostics: envelope request and event stream are returned with one-click JSON export; QR logins render inline"
-      },
-      {
-        "zh": "系统默认实例不再显示名称/站点地址输入；插件与实例设置弹窗打开即预填默认值",
-        "en": "System default instances no longer expose name/base URL fields; plugin and instance setting dialogs prefill schema defaults on open"
+        "zh": "修复前端重构遗留问题",
+        "en": "Fix leftover web refactors"
       }
     ]
   }
