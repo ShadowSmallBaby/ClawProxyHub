@@ -13,6 +13,9 @@ internal/plugin/luahost.bin
 .idea/
 .vscode/
 
+# 内部计划文档（不入库）
+docs/
+
 # 日志
 *.log
 
