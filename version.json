@@ -1,5 +1,5 @@
 {
-  "version": "1.2.0",
+  "version": "1.2.1",
   "release_url": "https://github.com/ShadowSmallBaby/ClawProxyHub/releases",
   "changelog": {
     "title": {
@@ -8,20 +8,16 @@
     },
     "items": [
       {
-        "zh": "新增 Lua 插件运行时 LuaHost：社区只写 Lua 脚本，零 Go、零编译接入",
-        "en": "New Lua plugin runtime (LuaHost): write plugins in Lua — no Go, no compile"
+        "zh": "插件全量重构：出站传输统一走 SDK 层（统一打码日志），新增 14 个插件",
+        "en": "Plugins fully migrated to the SDK transport layer; 14 new plugins added"
       },
       {
-        "zh": "系统设置新增「插件」板块；插件卡片展示 Go/Lua 运行时徽章；LuaHost 支持手动更新",
-        "en": "New Plugins settings section; Go/Lua runtime badge on plugin cards; manual LuaHost update"
+        "zh": "新增首个 Lua 插件 autoclaw（runtime=lua 示范）",
+        "en": "First Lua plugin autoclaw (runtime=lua reference)"
       },
       {
-        "zh": "网关 O(1) 鉴权 + 凭据恢复链 + 首帧/首字双超时 + 输入超窗自动截断",
-        "en": "Gateway O(1) auth + credential recovery + first-event/first-token timeouts + context truncation"
-      },
-      {
-        "zh": "插件状态（KV store）按插件隔离并持久化到数据库",
-        "en": "Plugin KV store isolated per-plugin and persisted to the database"
+        "zh": "市场快照同步 10 条：mirasim / todofor / zcode 上架",
+        "en": "Marketplace snapshot synced to 10 entries: mirasim / todofor / zcode"
       }
     ]
   }
