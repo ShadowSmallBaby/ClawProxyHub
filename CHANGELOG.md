@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2.1
+
+插件生态版。插件全量重构至 SDK 统一传输层，新增 14 个插件与首个 Lua 插件，离线市场快照同步。
+
+- Changed 插件全量重构：出站传输统一走 `sdk.*`（ScanSSE/UpstreamClient/ProxyURL）与 `host.StreamSSE/StreamRaw`，`shared` 退为薄封装（标 Deprecated）；已发布 7 个插件版本 bump
+- Added 新增 14 个插件：chatjimmy/codebuff/doubao/gorkcli/improvado/joycode/mimo/notion/postman/puter/qoder/todofor/mirasim/zcode（均 v0.1.0）
+- Added 首个 Lua 插件 autoclaw（`plugins-lua/`，runtime=lua 示范）
+- Changed 构建流程支持 `plugins-lua/`（CI 双目录扫描）；插件文档补 Go/Lua 双运行时规范
+- Changed 离线市场快照同步 10 条（mirasim/todofor/zcode 0.1.0 上架，CI 发布 sha256）；plugins submodule → 5a44d00
+
 ## v1.2.0
 
 Lua 插件运行时版。新增脚本插件宿主 LuaHost（社区零编译写 Lua 插件），并强化网关鉴权/恢复/超时体系、统一 SDK 传输层。

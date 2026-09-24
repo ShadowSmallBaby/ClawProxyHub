@@ -16,9 +16,10 @@ src/
     client.ts        仅核心请求器 + token 管理（JWT Bearer、401 跳登录）
     auth.ts          登录 / 当前用户 / 密码 / 通知 / 版本
     stats.ts         统计 / 趋势 / 积分
-    logs.ts          请求日志（列表 / CSV 导出 / 清空）
+    logs.ts          请求日志（列表 / CSV 导出 / 清空）+ 运行日志（/admin/run-logs，展开明细抽屉 / 导出）
     entities.ts      插件 / 插件源 / 实例 / 账号 / 分组 / 代理 / 路由 / 密钥 / OAuth / 任务
-    settings.ts      系统设置 / 备份恢复 / 系统信息
+                     （插件条目带 runtime 字段：空=Go 插件、"lua"=脚本插件，插件页渲染 Go/Lua 徽章）
+    settings.ts      系统设置（网关/网络/日志/品牌 + 「插件」板块：Lua 启用/隔离/更新）/ 备份恢复 / 系统信息
     types.ts         与后端 admin API 对齐的类型
   views/             按功能域归一，每域一个文件夹（git mv 保留历史）
     auth/            Login / Setup
