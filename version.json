@@ -1,5 +1,5 @@
 {
-  "version": "1.1.6",
+  "version": "1.2.0",
   "release_url": "https://github.com/ShadowSmallBaby/ClawProxyHub/releases",
   "changelog": {
     "title": {
@@ -8,16 +8,20 @@
     },
     "items": [
       {
-        "zh": "新增 commandcode 插件：Command Code 反代",
-        "en": "New commandcode plugin: Command Code reverse proxy"
+        "zh": "新增 Lua 插件运行时 LuaHost：社区只写 Lua 脚本，零 Go、零编译接入",
+        "en": "New Lua plugin runtime (LuaHost): write plugins in Lua — no Go, no compile"
       },
       {
-        "zh": "新增 ima 插件: IMA 反代",
-        "en": "New ima plugin: IMA reverse proxy"
+        "zh": "系统设置新增「插件」板块；插件卡片展示 Go/Lua 运行时徽章；LuaHost 支持手动更新",
+        "en": "New Plugins settings section; Go/Lua runtime badge on plugin cards; manual LuaHost update"
       },
       {
-        "zh": "修复前端重构遗留问题",
-        "en": "Fix leftover web refactors"
+        "zh": "网关 O(1) 鉴权 + 凭据恢复链 + 首帧/首字双超时 + 输入超窗自动截断",
+        "en": "Gateway O(1) auth + credential recovery + first-event/first-token timeouts + context truncation"
+      },
+      {
+        "zh": "插件状态（KV store）按插件隔离并持久化到数据库",
+        "en": "Plugin KV store isolated per-plugin and persisted to the database"
       }
     ]
   }
