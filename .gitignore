@@ -6,10 +6,15 @@ data-test/
 *.exe
 /cph
 release/
+# 内置 luahost
+internal/plugin/luahost.bin
 
 # IDE
 .idea/
 .vscode/
+
+# 内部计划文档（不入库）
+docs/
 
 # 日志
 *.log

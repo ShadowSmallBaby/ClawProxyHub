@@ -7,6 +7,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"io"
 	"os"
@@ -15,6 +16,15 @@ import (
 )
 
 const encPrefix = byte(0x01)
+
+// KeyLookupHash 返回 apikey 明文的确定性查找哈希（sha256 hex，64 字符）。
+// 高熵随机 key 无需加盐；用作 keys.key_lookup 索引列，鉴权按等值 O(1) 命中，
+// 免去 AES-GCM 密文（nonce 随机不可等值查）导致的全表解密扫描。
+// 与存量 sha256 hex 密钥（KeyCipher 即本值）天然一致，故可直接回填。
+func KeyLookupHash(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
 
 var (
 	keyOnce  sync.Once

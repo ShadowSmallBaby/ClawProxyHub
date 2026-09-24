@@ -104,6 +104,7 @@ func (s *Server) routePlugins(r authed) {
 	r.h("GET /admin/plugins/marketplace", s.marketplace)
 	r.h("POST /admin/plugins/install-market", s.installMarket)
 	r.h("POST /admin/plugins/install-upload", s.installUpload)
+	r.h("POST /admin/plugins/luahost-upload", s.uploadLuahost)
 	r.h("GET /admin/plugin-sources", s.listPluginSources)
 	r.h("GET /admin/plugin-sources/probe", s.probePluginSource)
 	r.h("PUT /admin/plugin-sources", s.putPluginSources)
@@ -209,11 +210,12 @@ func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request) {
 		// 契约版本与多实例能力（旧契约 / 未声明 instances 的插件只有默认实例，前端不展示实例选择）
 		ProtocolVersion int32 `json:"protocol_version"`
 		MultiInstance   bool  `json:"multi_instance"`
+		Runtime         string `json:"runtime,omitempty"` // 空=Go；"lua"=脚本插件（取自落盘 manifest，非握手）
 	}
 	out := []pluginView{}
 	for _, mf := range s.plugins.Installed() {
 		v := pluginView{Name: mf.Name, Label: labelOf(mf.Label, mf.Name), Version: mf.Version, Author: mf.Author,
-			ProtocolVersion: mf.ProtocolVersion}
+			ProtocolVersion: mf.ProtocolVersion, Runtime: mf.Runtime}
 		var rec model.Plugin // DB id（建分组/规则时引用）+ 停止时的 manifest 快照
 		if err := s.db.Where("name = ?", mf.Name).First(&rec).Error; err == nil {
 			v.ID = rec.ID

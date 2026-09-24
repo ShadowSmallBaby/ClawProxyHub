@@ -5,8 +5,23 @@
       <t-tab-panel value="gateway" :label="$t('settings.gateway')">
         <div class="panel">
           <t-form label-width="140px">
-            <t-form-item :label="$t('settings.firstTokenTimeout')" :help="$t('settings.firstTokenTimeoutHelp')">
+            <t-form-item :label="$t('settings.firstEventTimeout')" :help="$t('settings.firstEventTimeoutHelp')">
               <t-input-number v-model="gwForm.first_event_timeout" :min="5" :max="3600" theme="column" style="width: 160px" />
+            </t-form-item>
+            <t-form-item :label="$t('settings.firstTokenTimeout')" :help="$t('settings.firstTokenTimeoutHelp')">
+              <t-input-number v-model="gwForm.first_token_timeout" :min="5" :max="3600" theme="column" style="width: 160px" />
+            </t-form-item>
+            <t-form-item :label="$t('settings.maxRetries')" :help="$t('settings.maxRetriesHelp')">
+              <t-input-number v-model="gwForm.max_retries" :min="1" :max="10" theme="column" style="width: 160px" />
+            </t-form-item>
+            <t-form-item :label="$t('settings.contextTruncate')" :help="$t('settings.contextTruncateHelp')">
+              <t-switch v-model="gwForm.context_truncate_enabled" />
+            </t-form-item>
+            <t-form-item :label="$t('settings.contextTruncateRatio')" :help="$t('settings.contextTruncateRatioHelp')">
+              <t-input-number v-model="gwForm.context_truncate_ratio" :min="0.1" :max="1" :step="0.05" :decimal-places="2" theme="column" style="width: 160px" />
+            </t-form-item>
+            <t-form-item :label="$t('settings.contextBytesPerToken')" :help="$t('settings.contextBytesPerTokenHelp')">
+              <t-input-number v-model="gwForm.context_bytes_per_token" :min="1" :max="100" :step="0.5" :decimal-places="1" theme="column" style="width: 160px" />
             </t-form-item>
             <t-form-item :label="$t('settings.userAgent')" :help="$t('settings.userAgentHelp')">
               <t-input v-model="gwForm.user_agent" :placeholder="$t('settings.uaPh')" style="width: 480px" />
@@ -15,7 +30,7 @@
               <t-input v-model="gwForm.browser_user_agent" :placeholder="$t('settings.uaPh')" style="width: 480px" />
             </t-form-item>
             <t-form-item>
-              <t-button theme="primary" :loading="saving" @click="save({ first_event_timeout: gwForm.first_event_timeout, user_agent: gwForm.user_agent.trim(), browser_user_agent: gwForm.browser_user_agent.trim() })">{{ $t('common.save') }}</t-button>
+              <t-button theme="primary" :loading="saving" @click="save({ first_event_timeout: gwForm.first_event_timeout, first_token_timeout: gwForm.first_token_timeout, max_retries: gwForm.max_retries, user_agent: gwForm.user_agent.trim(), browser_user_agent: gwForm.browser_user_agent.trim(), context_truncate_enabled: gwForm.context_truncate_enabled, context_truncate_ratio: gwForm.context_truncate_ratio, context_bytes_per_token: gwForm.context_bytes_per_token })">{{ $t('common.save') }}</t-button>
             </t-form-item>
           </t-form>
         </div>
@@ -70,6 +85,28 @@
           <t-form label-width="140px">
             <t-form-item :label="$t('settings.taskJitter')" :help="$t('settings.taskJitterHelp')">
               <t-input-number v-model="taskForm.task_daily_jitter" :min="0" :max="45" :suffix="$t('settings.taskJitterUnit')" theme="column" style="width: 200px" @change="save({ task_daily_jitter: taskForm.task_daily_jitter })" />
+            </t-form-item>
+          </t-form>
+        </div>
+      </t-tab-panel>
+
+      <t-tab-panel value="plugin" :label="$t('settings.plugin')">
+        <div class="panel">
+          <t-form label-width="140px">
+            <t-form-item :label="$t('settings.luaEnabled')" :help="$t('settings.luaEnabledHelp')">
+              <t-switch v-model="pluginForm.plugin_lua_enabled" @change="save({ plugin_lua_enabled: pluginForm.plugin_lua_enabled })" />
+            </t-form-item>
+            <t-form-item :label="$t('settings.luaIsolation')" :help="$t('settings.luaIsolationHelp')">
+              <t-switch v-model="pluginForm.plugin_lua_isolation" disabled />
+            </t-form-item>
+            <t-form-item :label="$t('settings.luaUpdate')" :help="$t('settings.luaUpdateHelp')">
+              <input ref="luahostEl" type="file" hidden @change="onPickLuahost" />
+              <t-space>
+                <t-button variant="outline" :loading="uploadingLua" @click="luahostEl?.click()">
+                  <template #icon><upload-icon /></template>{{ $t('settings.luaUpdateManual') }}
+                </t-button>
+                <t-button variant="outline" disabled>{{ $t('settings.luaUpdateOnline') }}</t-button>
+              </t-space>
             </t-form-item>
           </t-form>
         </div>
@@ -146,24 +183,27 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { DeleteIcon, DownloadIcon, UploadIcon } from 'tdesign-icons-vue-next'
-import { settingsApi, systemApi, type SysInfo } from '../../api/settings'
+import { settingsApi, systemApi, uploadLuahost, type SysInfo } from '../../api/settings'
 import { logsApi } from '../../api/logs'
 import { refreshBranding } from '../../utils/branding'
 
 const { t } = useI18n()
 
 const tab = ref('gateway')
-const gwForm = reactive({ first_event_timeout: 90, user_agent: '', browser_user_agent: '' })
+const gwForm = reactive({ first_event_timeout: 60, first_token_timeout: 120, max_retries: 3, user_agent: '', browser_user_agent: '', context_truncate_enabled: true, context_truncate_ratio: 0.9, context_bytes_per_token: 3.5 })
 const netForm = reactive({ github_proxy: '' })
 const logForm = reactive({ log_retention_days: 0, run_level: 'error' })
 const taskForm = reactive({ task_daily_jitter: 30 })
 const siteForm = reactive({ site_name: '', site_abbr: '', site_logo: '' })
+const pluginForm = reactive({ plugin_lua_enabled: true, plugin_lua_isolation: true, plugin_lua_update_mode: 'manual' })
 const saving = ref(false)
 const exporting = ref(false)
 const backingUp = ref(false)
 const restoring = ref(false)
 const fileEl = ref<HTMLInputElement>()
 const logoEl = ref<HTMLInputElement>()
+const luahostEl = ref<HTMLInputElement>()
+const uploadingLua = ref(false)
 
 const sys = ref<SysInfo | null>(null)
 const countItems = [
@@ -179,9 +219,14 @@ const uptime = computed(() => {
 
 async function load() {
   const r = await settingsApi.get()
-  gwForm.first_event_timeout = r.settings?.first_event_timeout ?? 90
+  gwForm.first_token_timeout = r.settings?.first_token_timeout ?? 120
+  gwForm.first_event_timeout = r.settings?.first_event_timeout ?? 60
+  gwForm.max_retries = r.settings?.max_retries ?? 3
   gwForm.user_agent = r.settings?.user_agent ?? ''
   gwForm.browser_user_agent = r.settings?.browser_user_agent ?? ''
+  gwForm.context_truncate_enabled = r.settings?.context_truncate_enabled ?? true
+  gwForm.context_truncate_ratio = r.settings?.context_truncate_ratio ?? 0.9
+  gwForm.context_bytes_per_token = r.settings?.context_bytes_per_token ?? 3.5
   netForm.github_proxy = r.settings?.github_proxy ?? ''
   logForm.log_retention_days = r.settings?.log_retention_days ?? 0
   logForm.run_level = r.settings?.run_level ?? 'error'
@@ -189,6 +234,9 @@ async function load() {
   siteForm.site_name = r.settings?.site_name ?? ''
   siteForm.site_abbr = r.settings?.site_abbr ?? ''
   siteForm.site_logo = r.settings?.site_logo ?? ''
+  pluginForm.plugin_lua_enabled = r.settings?.plugin_lua_enabled ?? true
+  pluginForm.plugin_lua_isolation = r.settings?.plugin_lua_isolation ?? true
+  pluginForm.plugin_lua_update_mode = r.settings?.plugin_lua_update_mode ?? 'manual'
 }
 async function loadSys() {
   sys.value = await systemApi.info().catch(() => null)
@@ -204,6 +252,22 @@ async function save(patch: Record<string, unknown>) {
     MessagePlugin.error(e.message)
   } finally {
     saving.value = false
+  }
+}
+
+// 手动上传 luahost 二进制（覆盖共享运行时 + 重启 Lua 插件）
+async function onPickLuahost(ev: Event) {
+  const file = (ev.target as HTMLInputElement).files?.[0]
+  if (luahostEl.value) luahostEl.value.value = ''
+  if (!file) return
+  uploadingLua.value = true
+  try {
+    await uploadLuahost(file)
+    MessagePlugin.success(t('settings.luaUploadOk'))
+  } catch (e: any) {
+    MessagePlugin.error(e.message)
+  } finally {
+    uploadingLua.value = false
   }
 }
 

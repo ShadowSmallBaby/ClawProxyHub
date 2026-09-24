@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"log"
 	"strconv"
-	"sync"
+	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"google.golang.org/grpc"
 
@@ -20,17 +21,21 @@ import (
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
-// HostService ClawHost gRPC 实现。状态先走内存，持久化随 storage 模块接入。
+// HostService ClawHost gRPC 实现。每个插件实例经 forPlugin 派生独立视图，store 按插件名隔离并持久化到 DB。
 type HostService struct {
 	pb.UnimplementedClawHostServer
 
 	db     *gorm.DB
-	mu     sync.RWMutex
-	stores map[string]map[string][]byte // plugin name → key → value
+	plugin string // 绑定的插件名（store 命名空间）；空 = 未绑定的模板
 }
 
 func NewHostService(db *gorm.DB) *HostService {
-	return &HostService{db: db, stores: map[string]map[string][]byte{}}
+	return &HostService{db: db}
+}
+
+// forPlugin 派生一个绑定到具体插件的宿主视图（共享 db），store 按 plugin 名隔离。
+func (h *HostService) forPlugin(name string) *HostService {
+	return &HostService{db: h.db, plugin: name}
 }
 
 // runLogger 运行日志写入器（级别设置实时读库）。
@@ -62,20 +67,27 @@ func (h *HostService) Log(ctx context.Context, e *pb.LogEntry) (*pb.Empty, error
 }
 
 func (h *HostService) StoreGet(ctx context.Context, r *pb.StoreGetRequest) (*pb.StoreGetResponse, error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	// TODO: 按插件隔离 key 空间（grpc peer → plugin name）
-	v, ok := h.stores[""][r.Key]
-	return &pb.StoreGetResponse{Value: v, Found: ok}, nil
+	// 用 Find（而非 First）避免命中不到时 GORM 记 record-not-found 日志噪声。
+	var recs []model.PluginStore
+	if err := h.db.Where("plugin = ? AND key = ?", h.plugin, r.Key).Limit(1).Find(&recs).Error; err != nil {
+		h.runLogger().Warn("plugin", "store", "store get 失败: "+r.Key, err.Error(), nil)
+		return &pb.StoreGetResponse{Found: false}, nil
+	}
+	if len(recs) == 0 {
+		return &pb.StoreGetResponse{Found: false}, nil
+	}
+	return &pb.StoreGetResponse{Value: recs[0].Value, Found: true}, nil
 }
 
 func (h *HostService) StorePut(ctx context.Context, r *pb.StorePutRequest) (*pb.Empty, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.stores[""] == nil {
-		h.stores[""] = map[string][]byte{}
+	rec := model.PluginStore{Plugin: h.plugin, Key: r.Key, Value: r.Value, UpdatedAt: time.Now()}
+	// UPSERT：(plugin,key) 冲突则更新 value/updated_at
+	if err := h.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "plugin"}, {Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"value", "updated_at"}),
+	}).Create(&rec).Error; err != nil {
+		h.runLogger().Warn("plugin", "store", "store put 失败: "+r.Key, err.Error(), nil)
 	}
-	h.stores[""][r.Key] = r.Value
 	return &pb.Empty{}, nil
 }
 

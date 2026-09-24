@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.2.0
+
+Lua 插件运行时版。新增脚本插件宿主 LuaHost（社区零编译写 Lua 插件），并强化网关鉴权/恢复/超时体系、统一 SDK 传输层。
+
+- Added Lua 插件运行时（`hosts/luahost`，独立 module）：内嵌 gopher-lua VM 的通用 go-plugin 宿主，把 ClawPlugin 契约翻成 Lua——proto ↔ table 映射、`stream` 对象事件、`cph.http/json/hash/time/random/log/openai` 宿主能力、白名单沙箱 + 沙箱化 `require("lib.*")`；社区作者只写 `main.lua`，零 Go、零编译
+- Added LuaHost 分发与加载：`pack` 识别 `runtime=lua` 产平台无关包、市场/manifest 带 `runtime`；核心以 `-tags luahost_embed` 经 `go:embed` 内置 LuaHost，安装时注入；P1 共享单份（`data/hosts/luahost-<os>-<arch>` + `--dir`，一份服务所有 lua 插件）；P0 启动按 sha256 刷新；支持手动上传 LuaHost 替换（`.manual` 标记跳过自动刷新）
+- Added 系统设置「插件」板块：Lua 启用（关闭则拒装 lua 插件，安装网关兜底）、Lua 隔离（本版锁定为开）、Lua 更新（手动上传 / 在线检查占位）；插件卡片（市场 + 已装）展示 Go/Lua 运行时徽章
+- Added 插件 KV store 按插件名隔离并持久化到数据库（迁移 000014 `plugin_stores`，UPSERT，卸载级联清理）
+- Added 网关 O(1) 鉴权（`keys.key_lookup` 确定性查找列，免全表解密）+ 凭据恢复链（401 刷新同账号后重试）+ 首帧/首字双超时（路由级可覆盖）+ 线性重试 + 输入超窗自动截断
+- Changed SDK HTTP/SSE 统一传输层 + 日志铺底（`sdk/http.go` 出站 request/stream 统一、敏感头打码、debug 全量入库）
+- Changed 内部计划文档移出仓库（`docs/` 不入库）
+
 ## v1.1.6
 
 插件生态版。新增 commandcode 插件、ima 重构为七文件分层，修复前端重构遗留，离线市场快照同步。

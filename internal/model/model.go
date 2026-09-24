@@ -94,6 +94,8 @@ type Group struct {
 type Key struct {
 	ID        int64  `gorm:"primaryKey;autoIncrement"`
 	KeyCipher string `gorm:"uniqueIndex;size:256;column:key_cipher"`
+	// KeyLookup：sha256(raw) hex 确定性查找列，鉴权 O(1) 命中免全表解密；空 = 存量新格式密钥（回退扫描）。
+	KeyLookup string `gorm:"index;size:64;column:key_lookup;default:''"`
 	Name      string `gorm:"size:128;default:''"`
 	Enabled   bool   `gorm:"default:true"`
 	ExpiresAt *time.Time
@@ -115,8 +117,10 @@ type Route struct {
 	Name       string `gorm:"uniqueIndex;size:128"`        // 对外模型名
 	Strategy   string `gorm:"size:16;default:round_robin"` // round_robin/random/least_used/sticky
 	GroupsJSON string `gorm:"column:groups_json;default:'[]'"`
-	// 首事件超时（秒），0 = 跟随全局设置
-	TimeoutSeconds int32 `gorm:"column:timeout_seconds;default:0"`
+	// 首帧超时（秒），0 = 跟随全局设置（默认 60s）：等第一个事件的上限
+	FirstEventTimeoutSeconds int32 `gorm:"column:first_event_timeout_seconds;default:0"`
+	// 首字超时（秒），0 = 跟随全局设置（默认 120s）：首事件→首个内容 token
+	FirstTokenTimeoutSeconds int32 `gorm:"column:first_token_timeout_seconds;default:0"`
 	// 对话请求 UA，空 = 跟随全局（全局也空则透传客户端 UA）
 	UserAgent string `gorm:"column:user_agent;size:512;default:''"`
 	// 降级：主分组失败且状态类匹配时切到 failover 分组的指定模型（每次请求至多降一次）
@@ -258,6 +262,16 @@ type Setting struct {
 	Value     string
 	UpdatedAt time.Time `gorm:"column:updated_at"`
 }
+
+// PluginStore 插件 KV 状态（ClawHost.StoreGet/StorePut），按插件名隔离命名空间。
+type PluginStore struct {
+	Plugin    string    `gorm:"primaryKey;size:64"`
+	Key       string    `gorm:"primaryKey;size:191"`
+	Value     []byte
+	UpdatedAt time.Time `gorm:"column:updated_at"`
+}
+
+func (PluginStore) TableName() string { return "plugin_stores" }
 
 // OAuthCredential 第三方平台（LinuxDo/GitHub 等）用户登录态，供插件换取上游 token。
 // TokenBlob 经核心 AES-256-GCM 加密存储（复用凭据加密密钥）。

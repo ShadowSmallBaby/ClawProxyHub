@@ -159,8 +159,8 @@ func (m *Manager) Scan() ([]string, error) {
 	}
 	var found []string
 	for _, dir := range m.pluginDirs() {
-		if bin, err := pluginBinary(dir); err == nil {
-			found = append(found, bin)
+		if m.launchable(dir) {
+			found = append(found, dir)
 		}
 	}
 	return found, nil
@@ -215,9 +215,14 @@ func pluginBinary(dir string) (string, error) {
 
 // Start 启动一个插件子进程并完成契约握手。
 // go-plugin 层按 [MinProtocolVersion, ProtocolVersion] 协商版本，旧契约插件按协商到的版本握手（线格式向后兼容）。
-func (m *Manager) Start(ctx context.Context, binPath string) (*Instance, error) {
-	// 每个插件实例独立持有宿主服务，便于按插件隔离状态
-	set := goplugin.PluginSet{"claw_plugin": &ClawPluginPlugin{host: m.host}}
+func (m *Manager) Start(ctx context.Context, dir string) (*Instance, error) {
+	// 由插件目录解析启动命令与插件名（lua → 共享 luahost + --dir；go → 目录内二进制）
+	name, cmd, err := m.resolveLaunch(dir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", dir, err)
+	}
+	// 每个插件实例独立持有宿主服务（forPlugin 按插件名隔离 store 等状态）
+	set := goplugin.PluginSet{"claw_plugin": &ClawPluginPlugin{host: m.host.forPlugin(name)}}
 	versioned := map[int]goplugin.PluginSet{}
 	for v := sdk.MinProtocolVersion; v <= sdk.ProtocolVersion; v++ {
 		versioned[int(v)] = set
@@ -225,14 +230,14 @@ func (m *Manager) Start(ctx context.Context, binPath string) (*Instance, error) 
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig:  handshakeConfig,
 		VersionedPlugins: versioned,
-		Cmd:              execCommand(binPath),
+		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 	})
 
 	rpcClient, err := client.Client()
 	if err != nil {
 		client.Kill()
-		return nil, fmt.Errorf("connect plugin %s: %w", binPath, err)
+		return nil, fmt.Errorf("connect plugin %s: %w", dir, err)
 	}
 	negotiated := int32(client.NegotiatedVersion())
 
@@ -316,13 +321,9 @@ func (m *Manager) Get(name string) (*Instance, bool) {
 	if !ok {
 		return nil, false
 	}
-	bin, err := pluginBinary(dir)
-	if err != nil {
-		return nil, false
-	}
 	fmt.Printf("[plugin] %s crashed, restarting\n", name)
 	m.runLogger().Warn("plugin", "restart", "插件崩溃自动重启: "+name, "", nil)
-	inst2, err := m.Start(context.Background(), bin)
+	inst2, err := m.Start(context.Background(), dir)
 	if err == nil {
 		return inst2, true
 	}
@@ -342,28 +343,28 @@ func (m *Manager) Names() []string {
 	return names
 }
 
-// AutoStarts 开机自动启动的二进制列表：Scan 结果排除持久化停止的插件（enabled=0）。
+// AutoStarts 开机自动启动的插件目录列表：Scan 结果排除持久化停止的插件（enabled=0）。
 // DB 不可用 / 插件无记录（新装的）照常拉起。
 func (m *Manager) AutoStarts() ([]string, error) {
-	bins, err := m.Scan()
+	dirs, err := m.Scan()
 	if err != nil {
 		return nil, err
 	}
 	if m.db == nil {
-		return bins, nil
+		return dirs, nil
 	}
 	var names []string // Pluck 只能填充 slice，不能是 map
 	if err := m.db.Model(&model.Plugin{}).Where("enabled = ?", false).Pluck("name", &names).Error; err != nil || len(names) == 0 {
-		return bins, nil
+		return dirs, nil
 	}
 	disabled := make(map[string]bool, len(names))
 	for _, n := range names {
 		disabled[n] = true
 	}
-	out := bins[:0:0]
-	for _, bin := range bins {
-		if !disabled[filepath.Base(filepath.Dir(bin))] {
-			out = append(out, bin)
+	out := dirs[:0:0]
+	for _, d := range dirs {
+		if !disabled[filepath.Base(d)] {
+			out = append(out, d)
 		}
 	}
 	return out, nil

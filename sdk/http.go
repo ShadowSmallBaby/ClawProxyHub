@@ -5,10 +5,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
+
+	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
 // HTTPRequest 一次出站请求的描述（helper 参数）。
@@ -20,6 +26,8 @@ type HTTPRequest struct {
 	// Sensitive 敏感请求头名（不区分大小写）：日志中值替换为打码占位。
 	// 缺省打码 Authorization / Cookie / X-Api-Key / Set-Cookie。
 	Sensitive []string
+	// Proxy 出站代理（可选）：client 传 nil 时按此自建 client。
+	Proxy *pb.ProxyConfig
 }
 
 // HTTPResponse 一次出站请求的结果（helper 返回值）。
@@ -69,6 +77,9 @@ func (h *Host) HTTPPost(ctx context.Context, r HTTPRequest, client *http.Client)
 	for k, v := range r.Headers {
 		req.Header.Set(k, v)
 	}
+	if client == nil && r.Proxy != nil {
+		client = UpstreamClient(ProxyURL(r.Proxy))
+	}
 	h.logRequest(r, req.Header)
 	resp, err := doHTTP(client, req)
 	if err != nil {
@@ -84,6 +95,8 @@ func (h *Host) HTTPPost(ctx context.Context, r HTTPRequest, client *http.Client)
 
 // HTTPStream 发送流式请求并逐行回调 SSE（event, data）或原始行。
 // debug 级记录请求 + 完整响应流（拼接后一次性落日志）。
+//
+// Deprecated: 用 StreamSSE（行级 SSEParser + 统一日志 + 可选 Proxy 自建 client）。
 func (h *Host) HTTPStream(ctx context.Context, r HTTPRequest, client *http.Client,
 	onEvent func(event, data string) error) (*HTTPResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, r.Method, r.URL, bytes.NewReader(r.Body))
@@ -181,6 +194,44 @@ func doHTTP(client *http.Client, req *http.Request) (*http.Response, error) {
 		client = http.DefaultClient
 	}
 	return client.Do(req)
+}
+
+// ProxyURL 把 ProxyConfig 渲染成 http 代理 URL，未配置时返回空串。
+func ProxyURL(p *pb.ProxyConfig) string {
+	if p == nil || p.GetHost() == "" {
+		return ""
+	}
+	u := &url.URL{
+		Scheme: orStr(p.GetScheme(), "http"),
+		Host:   fmt.Sprintf("%s:%d", p.GetHost(), p.GetPort()),
+	}
+	if p.GetUsername() != "" {
+		u.User = url.UserPassword(p.GetUsername(), p.GetPassword())
+	}
+	return u.String()
+}
+
+// UpstreamClient 构造访问上游的 HTTP 客户端，proxyURL 非空时走该代理。
+func UpstreamClient(proxyURL string) *http.Client {
+	transport := &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+	}
+	if proxyURL != "" {
+		if u, err := url.Parse(proxyURL); err == nil {
+			transport.Proxy = http.ProxyURL(u)
+		}
+	}
+	return &http.Client{Transport: transport}
+}
+
+func orStr(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 // splitBlock SSE 按空行分块（\r\n\r\n 或 \n\n 双形态），返回 (块, 余下, 是否找到)。

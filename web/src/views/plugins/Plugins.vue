@@ -28,6 +28,7 @@
               <div class="plugin-name">{{ p.label || p.name }}</div>
               <div class="plugin-sub">
                 v{{ p.version }} · {{ p.author }}
+                <t-tag size="small" variant="light" :theme="p.runtime === 'lua' ? 'primary' : 'default'" :title="$t('plugins.runtime')">{{ p.runtime === 'lua' ? $t('plugins.runtimeLua') : $t('plugins.runtimeGo') }}</t-tag>
                 <t-tag size="small" variant="outline" class="proto-tag" :title="$t('plugins.protocol')">P{{ p.protocol_version ?? 1 }}</t-tag>
                 <t-tag v-if="!p.running" size="small" theme="warning" variant="light">{{ $t('plugins.stoppedTag') }}</t-tag>
               </div>
@@ -71,7 +72,10 @@
             <entity-icon :icon="e.icon" :name="e.label?.zh ?? e.name" size="40px" />
             <div class="market-meta">
               <div class="market-name">{{ label(e.label, e.name) }}</div>
-              <div class="market-sub">{{ e.author || $t('plugins.unknownAuthor') }}</div>
+              <div class="market-sub">
+                {{ e.author || $t('plugins.unknownAuthor') }}
+                <t-tag size="small" variant="light" :theme="e.runtime === 'lua' ? 'primary' : 'default'">{{ e.runtime === 'lua' ? $t('plugins.runtimeLua') : $t('plugins.runtimeGo') }}</t-tag>
+              </div>
             </div>
           </div>
           <div class="market-foot">

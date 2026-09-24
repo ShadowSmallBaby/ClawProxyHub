@@ -72,8 +72,8 @@ func newAggregate(protocol, model string) aggregate {
 	}
 }
 
-// streamOut 流式：编码写回 + 失败短路 + 日志收尾。first 为已取出的首事件。
-func (s *Server) streamOut(w http.ResponseWriter, events chan *pb.StreamEvent, first *pb.StreamEvent, log *requestLogCtx, enc streamEncoder, _ interface{}) {
+// streamOut 流式：编码写回 + 失败短路 + 日志收尾。prefix 为首内容前已缓冲的事件（含首个内容帧）。
+func (s *Server) streamOut(w http.ResponseWriter, events chan *pb.StreamEvent, prefix []*pb.StreamEvent, log *requestLogCtx, enc streamEncoder) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
@@ -99,10 +99,12 @@ func (s *Server) streamOut(w http.ResponseWriter, events chan *pb.StreamEvent, f
 		return true
 	}
 
-	if first != nil && !emit(first) {
-		io.WriteString(w, enc.finish())
-		log.write(s.db)
-		return
+	for _, ev := range prefix {
+		if !emit(ev) {
+			io.WriteString(w, enc.finish())
+			log.write(s.db)
+			return
+		}
 	}
 	for ev := range events {
 		if !emit(ev) {
@@ -113,10 +115,10 @@ func (s *Server) streamOut(w http.ResponseWriter, events chan *pb.StreamEvent, f
 	log.write(s.db)
 }
 
-// nonStreamOut 聚合：完整 JSON 一次写回。first 为已取出的首事件。
+// nonStreamOut 聚合：完整 JSON 一次写回。prefix 为首内容前已缓冲的事件（含首个内容帧）。
 // 返回 failCode 非 0：聚合中途失败且响应/日志均未写（凭据失效或可降级错误），
 // 交回 serve 层决定恢复重试或收尾；成功路径自行写响应与日志。
-func (s *Server) nonStreamOut(w http.ResponseWriter, events chan *pb.StreamEvent, first *pb.StreamEvent, log *requestLogCtx, aggr ...aggregate) (failCode int32, brief string) {
+func (s *Server) nonStreamOut(w http.ResponseWriter, events chan *pb.StreamEvent, prefix []*pb.StreamEvent, log *requestLogCtx, aggr ...aggregate) (failCode int32, brief string) {
 	if len(aggr) == 0 {
 		return 0, ""
 	}
@@ -135,9 +137,11 @@ func (s *Server) nonStreamOut(w http.ResponseWriter, events chan *pb.StreamEvent
 		a.feed(ev)
 		return true
 	}
-	if first != nil && !handle(first) {
-		drain(events)
-		return failCode, brief
+	for _, ev := range prefix {
+		if !handle(ev) {
+			drain(events)
+			return failCode, brief
+		}
 	}
 	for ev := range events {
 		if !handle(ev) {

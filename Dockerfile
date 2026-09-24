@@ -15,8 +15,10 @@ RUN go mod download
 
 COPY . .
 COPY --from=web /src/web/dist ./web/dist
-# mattn/go-sqlite3 需要 CGO（换 modernc 纯 Go 驱动后可 CGO_ENABLED=0）
-RUN CGO_ENABLED=1 go build -trimpath -ldflags "-s -w" -o /out/cph ./cmd/cph
+# 先编内置 luahost（纯 Go，供核心 go:embed 注入到 lua 插件目录）
+RUN CGO_ENABLED=0 go build -C hosts/luahost -trimpath -ldflags "-s -w" -o /src/internal/plugin/luahost.bin .
+# mattn/go-sqlite3 需要 CGO（换 modernc 纯 Go 驱动后可 CGO_ENABLED=0）；-tags luahost_embed 把 luahost 嵌进核心
+RUN CGO_ENABLED=1 go build -trimpath -ldflags "-s -w" -tags luahost_embed -o /out/cph ./cmd/cph
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
