@@ -6,6 +6,8 @@ data-test/
 *.exe
 /cph
 release/
+# 内置 luahost
+internal/plugin/luahost.bin
 
 # IDE
 .idea/

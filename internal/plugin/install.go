@@ -24,6 +24,11 @@ type PackageManifest struct {
 	Label           map[string]string `json:"label"` // 品牌名（多语言）
 	ProtocolVersion int32             `json:"protocol_version"`
 	MinCoreVersion  string            `json:"min_core_version"`
+	// Runtime 运行时：空=Go 插件（包内自带二进制）；"lua"=脚本插件（包内只含脚本，
+	// 安装时由核心注入内置 luahost 作为 plugin-<os>-<arch>）。
+	Runtime string `json:"runtime"`
+	// Entry 脚本入口（lua 固定 main.lua）；luahost 读同目录 main.lua，此字段仅声明。
+	Entry string `json:"entry"`
 	// Icon 插件图标：包内相对路径（如 "icon.png"，建议正方形 PNG 128–256px）。
 	// 安装时解出到插件目录，前端经 /assets/plugins/<name>/icon 读取。
 	Icon string `json:"icon"`
@@ -99,7 +104,13 @@ func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string, onP
 	if manifest.Name == "" {
 		return "", fmt.Errorf("manifest missing name")
 	}
-	if binFile == nil {
+	// lua 脚本插件：包内无二进制，改由核心注入内置 luahost（需以 -tags luahost_embed 构建）。
+	// Go 插件：包内必须自带当前平台二进制。
+	if manifest.Runtime == "lua" {
+		if len(luahostBin) == 0 {
+			return "", fmt.Errorf("核心未内置 luahost（请以 -tags luahost_embed 构建核心），无法安装 lua 插件 %q", manifest.Name)
+		}
+	} else if binFile == nil {
 		return "", fmt.Errorf("package missing binary for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 	if pv := manifest.ProtocolVersion; pv != 0 && (pv < sdk.MinProtocolVersion || pv > sdk.ProtocolVersion) {
@@ -130,7 +141,15 @@ func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string, onP
 	if runtime.GOOS == "windows" {
 		binPath += ".exe"
 	}
-	if err := extractTo(binFile, binPath); err != nil {
+	// lua：注入内置 luahost 作为平台二进制 + 解出脚本；Go：解出包内二进制。
+	if manifest.Runtime == "lua" {
+		if err := os.WriteFile(binPath, luahostBin, 0o755); err != nil {
+			return "", fmt.Errorf("write luahost: %w", err)
+		}
+		if err := extractLuaScripts(zr, target); err != nil {
+			return "", fmt.Errorf("extract scripts: %w", err)
+		}
+	} else if err := extractTo(binFile, binPath); err != nil {
 		return "", fmt.Errorf("extract binary: %w", err)
 	}
 	if runtime.GOOS != "windows" {
@@ -233,6 +252,27 @@ func (m *Manager) IconFile(name string) (string, bool) {
 		return "", false
 	}
 	return p, true
+}
+
+// extractLuaScripts 解出包内所有 .lua（main.lua 与 lib/*.lua），保留相对目录，只认基名防穿越。
+func extractLuaScripts(zr *zip.ReadCloser, target string) error {
+	for _, f := range zr.File {
+		name := filepath.ToSlash(f.Name)
+		if !strings.HasSuffix(name, ".lua") {
+			continue
+		}
+		dest := filepath.Join(target, filepath.Base(name))
+		if strings.HasPrefix(name, "lib/") {
+			if err := os.MkdirAll(filepath.Join(target, "lib"), 0o755); err != nil {
+				return err
+			}
+			dest = filepath.Join(target, "lib", filepath.Base(name))
+		}
+		if err := extractTo(f, dest); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func zipEntry(zr *zip.ReadCloser, base string) *zip.File {
