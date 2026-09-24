@@ -46,6 +46,9 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 			"context_truncate_enabled": s.settings.ContextTruncateEnabled(),
 			"context_truncate_ratio":   s.settings.ContextTruncateRatio(),
 			"context_bytes_per_token":  s.settings.ContextBytesPerToken(),
+			"plugin_lua_enabled":       s.settings.LuaEnabled(),
+			"plugin_lua_isolation":     s.settings.LuaIsolation(),
+			"plugin_lua_update_mode":   s.settings.LuaUpdateMode(),
 			"site_name":                s.settings.Get(setting.KeySiteName, ""), // 原值：空 = 默认，前端用 placeholder 提示
 			"site_abbr":                s.settings.Get(setting.KeySiteAbbr, ""),
 			"site_logo":                s.settings.SiteLogo(),
@@ -69,6 +72,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		ContextTruncateEnabled *bool    `json:"context_truncate_enabled"`
 		ContextTruncateRatio   *float64 `json:"context_truncate_ratio"`
 		ContextBytesPerToken   *float64 `json:"context_bytes_per_token"`
+		LuaEnabled             *bool    `json:"plugin_lua_enabled"`
+		LuaIsolation           *bool    `json:"plugin_lua_isolation"`
+		LuaUpdateMode          *string  `json:"plugin_lua_update_mode"`
 		SiteName               *string  `json:"site_name"`
 		SiteAbbr               *string  `json:"site_abbr"`
 		SiteLogo               *string  `json:"site_logo"`
@@ -158,6 +164,22 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.settings.Set(setting.KeyContextBytesPerToken, strconv.FormatFloat(*body.ContextBytesPerToken, 'g', -1, 64))
+	}
+	// 插件（lua 运行时）：启用总开关 / 隔离（本版锁定为开）/ 更新方式
+	if body.LuaEnabled != nil {
+		s.settings.Set(setting.KeyLuaEnabled, strconv.FormatBool(*body.LuaEnabled))
+	}
+	if body.LuaIsolation != nil { // 本版锁定为开：无论传入何值都存 true（前端 disabled，此为服务端兜底）
+		s.settings.Set(setting.KeyLuaIsolation, strconv.FormatBool(true))
+	}
+	if body.LuaUpdateMode != nil {
+		switch *body.LuaUpdateMode {
+		case "manual", "online":
+			s.settings.Set(setting.KeyLuaUpdateMode, *body.LuaUpdateMode)
+		default:
+			http.Error(w, `{"error":"lua 更新方式需为 manual/online"}`, http.StatusBadRequest)
+			return
+		}
 	}
 	// 站点品牌：空串 = 恢复默认（存空，读取时回退）
 	if body.SiteName != nil {

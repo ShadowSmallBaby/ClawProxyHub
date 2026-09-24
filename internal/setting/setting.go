@@ -91,6 +91,15 @@ const (
 	defaultContextBytesPerToken   = 3.5
 )
 
+// 插件（lua 运行时）设置。
+const (
+	KeyLuaEnabled    = "plugin.lua_enabled"     // 是否允许安装/运行 lua 插件（默认开）
+	KeyLuaIsolation  = "plugin.lua_isolation"   // lua 运行态隔离（默认开；本版锁定为开）
+	KeyLuaUpdateMode = "plugin.lua_update_mode" // luahost 更新方式：manual / online
+)
+
+const defaultLuaUpdateMode = "manual"
+
 // Store 设置存储。
 type Store struct {
 	db    *gorm.DB
@@ -181,6 +190,32 @@ func (s *Store) ContextBytesPerToken() float64 {
 		return defaultContextBytesPerToken
 	}
 	return f
+}
+
+// LuaEnabled 是否允许安装/运行 lua 插件；缺省开。
+func (s *Store) LuaEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(s.Get(KeyLuaEnabled, ""))) {
+	case "false", "0", "off", "no":
+		return false
+	}
+	return true
+}
+
+// LuaIsolation lua 运行态隔离（每插件一份运行态）；缺省开。本版锁定为开，仅持久化+展示。
+func (s *Store) LuaIsolation() bool {
+	switch strings.ToLower(strings.TrimSpace(s.Get(KeyLuaIsolation, ""))) {
+	case "false", "0", "off", "no":
+		return false
+	}
+	return true
+}
+
+// LuaUpdateMode luahost 更新方式：manual（手动上传）/ online（在线，占位）；非法回退 manual。
+func (s *Store) LuaUpdateMode() string {
+	if v := s.Get(KeyLuaUpdateMode, defaultLuaUpdateMode); v == "manual" || v == "online" {
+		return v
+	}
+	return defaultLuaUpdateMode
 }
 
 // GitHubProxy GitHub 代理前缀（以 / 结尾与否均可；空 = 直连）。

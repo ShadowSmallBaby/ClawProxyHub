@@ -2,6 +2,7 @@
 package admin
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/sha256"
 	_ "embed"
@@ -80,6 +81,7 @@ type MarketEntry struct {
 	DownloadURL string            `json:"download_url"`
 	SHA256      string            `json:"sha256"`
 	Source      string            `json:"source,omitempty"` // 来源插件源名（聚合时由核心填入，索引里不含）
+	Runtime     string            `json:"runtime,omitempty"` // 空=Go 插件；"lua"=脚本插件
 }
 
 // marketView 市场条目 + 本机安装状态（前端直接消费）。
@@ -241,6 +243,10 @@ func (s *Server) installZip(ctx context.Context, zipPath, source string, onPhase
 	if source == setting.OfficialSourceName {
 		source = ""
 	}
+	// lua 插件安装网关：设置里关闭 Lua 时拒装（覆盖市场/上传两条路径）
+	if zipManifestRuntime(zipPath) == "lua" && !s.settings.LuaEnabled() {
+		return "", fmt.Errorf("Lua 插件安装已在系统设置中禁用")
+	}
 	name, err := s.plugins.InstallZip(ctx, zipPath, source, onPhase)
 	if err != nil {
 		return "", err
@@ -249,6 +255,52 @@ func (s *Server) installZip(ctx context.Context, zipPath, source string, onPhase
 	s.db.Exec(`UPDATE plugins SET source = ? WHERE name = ?`, source, name)
 	s.plugins.RefreshCatalog(ctx)
 	return name, nil
+}
+
+// zipManifestRuntime 读 .cphplugin 包内 manifest.json 的 runtime（读不到即空=Go 插件）。
+func zipManifestRuntime(zipPath string) string {
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return ""
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		if filepath.Base(f.Name) != "manifest.json" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return ""
+		}
+		defer rc.Close()
+		var mf struct {
+			Runtime string `json:"runtime"`
+		}
+		_ = json.NewDecoder(rc).Decode(&mf)
+		return mf.Runtime
+	}
+	return ""
+}
+
+// uploadLuahost POST /admin/plugins/luahost-upload — 手动上传共享 luahost 二进制（multipart file），
+// 覆盖 data/hosts 下当前平台 luahost（打 .manual 标记，不再被内置字节自动刷新）并重启在跑的 lua 插件。
+func (s *Server) uploadLuahost(w http.ResponseWriter, r *http.Request) {
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, `{"error":"missing file"}`, http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, 128<<20)) // 128MB 上限
+	if err != nil || len(data) == 0 {
+		http.Error(w, `{"error":"read file"}`, http.StatusBadRequest)
+		return
+	}
+	if err := s.plugins.ReplaceLuahost(data); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // stopPlugin POST /admin/plugins/{name}/stop — 停止并写持久化状态（重启核心保持停止）。
@@ -271,7 +323,7 @@ func (s *Server) startPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, bin := range bins {
-		if filepath.Base(filepath.Dir(bin)) == name {
+		if filepath.Base(bin) == name { // Scan 返回插件目录
 			if _, err := s.plugins.Start(r.Context(), bin); err != nil {
 				http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
 				return
