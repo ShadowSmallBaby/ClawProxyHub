@@ -56,6 +56,9 @@ func (h *Host) conn() pb.ClawHostClient {
 	if h.client != nil {
 		return h.client
 	}
+	if h.dial == nil {
+		return nil // 未注入宿主连接（如单测直接构造 Host）：日志静默降级
+	}
 	c, err := h.dial()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[cph-sdk] host dial failed: %v\n", err)
