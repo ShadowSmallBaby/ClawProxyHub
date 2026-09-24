@@ -48,6 +48,18 @@
     "sha256": "a7d426b38c2527e6fc1787c699736b49ec2cc4f5d0f875c22798ea159fcd886c"
   },
   {
+    "name": "mirasim",
+    "version": "0.1.0",
+    "author": "cph",
+    "label": {
+      "en": "Mirasim",
+      "zh": "Mirasim"
+    },
+    "published_at": "2026-09-24",
+    "download_url": "https://github.com/ShadowSmallBaby/ClawProxyHubPlugins/releases/download/mirasim-v0.1.0/mirasim-0.1.0.cphplugin",
+    "sha256": "9f0673dd7229266cf28f674ab5571c45e8349f6a39373cf7eaa6f596edad3275"
+  },
+  {
     "name": "newapi",
     "version": "0.1.2",
     "author": "cph",
@@ -72,6 +84,18 @@
     "sha256": "934b95921b48a0c84ceb43634de63d75d0742f4052bd5b078f3a8f0a65fd0ff0"
   },
   {
+    "name": "todofor",
+    "version": "0.1.0",
+    "author": "cph",
+    "label": {
+      "en": "TodoFor",
+      "zh": "TodoFor"
+    },
+    "published_at": "2026-09-24",
+    "download_url": "https://github.com/ShadowSmallBaby/ClawProxyHubPlugins/releases/download/todofor-v0.1.0/todofor-0.1.0.cphplugin",
+    "sha256": "3e520f0e8bccbefcfaefe6203551277bd1ec80ad484de3ba6034b097e1543944"
+  },
+  {
     "name": "workbuddy",
     "version": "0.1.5",
     "author": "cph",
@@ -82,5 +106,17 @@
     "published_at": "2026-09-23",
     "download_url": "https://github.com/ShadowSmallBaby/ClawProxyHubPlugins/releases/download/workbuddy-v0.1.5/workbuddy-0.1.5.cphplugin",
     "sha256": "15e2e469c923ecd538317d7ee0e1480c42f13fa44ec2d6539cc498af19aa7fa9"
+  },
+  {
+    "name": "zcode",
+    "version": "0.1.0",
+    "author": "cph",
+    "label": {
+      "en": "ZCode",
+      "zh": "ZCode"
+    },
+    "published_at": "2026-09-24",
+    "download_url": "https://github.com/ShadowSmallBaby/ClawProxyHubPlugins/releases/download/zcode-v0.1.0/zcode-0.1.0.cphplugin",
+    "sha256": "f04ed8a4bb1bbdb440441a4504492f85b96c2ebd11ee65ee6a26ff739e13636c"
   }
 ]
