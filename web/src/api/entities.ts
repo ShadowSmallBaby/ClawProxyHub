@@ -10,7 +10,7 @@ import type {
 
 export interface MarketEntry {
   name: string; version: string; author?: string; icon?: string; label?: Record<string, string>
-  published_at?: string; source?: string; installed?: boolean; updatable?: boolean
+  published_at?: string; source?: string; installed?: boolean; updatable?: boolean; runtime?: string
 }
 export interface SettingField { key: string; title: string; description: string; type: string; default: unknown; options: unknown[] }
 // 市场安装进度事件：downloading（带字节数，total 未知为 -1）→ [stopping，仅升级] → installing → starting

@@ -14,6 +14,9 @@ export interface AdminSettings {
   context_truncate_enabled?: boolean
   context_truncate_ratio?: number
   context_bytes_per_token?: number
+  plugin_lua_enabled?: boolean
+  plugin_lua_isolation?: boolean
+  plugin_lua_update_mode?: string
   site_name?: string
   site_abbr?: string
   site_logo?: string
@@ -29,6 +32,16 @@ export interface SysInfo {
 export const settingsApi = {
   get: () => api.get<{ settings: AdminSettings }>('/admin/settings'),
   save: (patch: Record<string, unknown>) => api.put('/admin/settings', patch),
+}
+
+// 手动上传共享 luahost 二进制（multipart），覆盖 data/hosts 下当前平台版本并重启 Lua 插件
+export async function uploadLuahost(file: File) {
+  const fd = new FormData()
+  fd.append('file', file)
+  const resp = await fetch('/admin/plugins/luahost-upload', {
+    method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body: fd,
+  })
+  if (!resp.ok) throw new Error(JSON.parse(await resp.text()).error || `HTTP ${resp.status}`)
 }
 
 // 带鉴权头下载（<a download> 带不了 Authorization），blob 落成文件

@@ -47,6 +47,7 @@ export interface PluginInfo {
   instance_schema?: string // 实例级设置 JSON Schema（空 = 实例只有名称 + 地址）
   protocol_version?: number
   multi_instance?: boolean // 声明 instances 能力且契约 ≥2；否则只有默认实例
+  runtime?: string // 空 = Go 插件；"lua" = 脚本插件
 }
 
 // 实例：插件下的一个站点/部署（Plugin → Instance → Account）
