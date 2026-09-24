@@ -3,6 +3,7 @@
 package main
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 
@@ -10,7 +11,17 @@ import (
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
-func main() { sdk.Serve(&luahost{dir: exeDir()}) }
+func main() {
+	// --dir 指定插件目录（P1 共享 luahost：核心以 `luahost --dir <插件目录>` 启动）；
+	// 未指定则回退可执行文件所在目录（独立二进制/旧式逐插件拷贝仍兼容）。
+	dir := flag.String("dir", "", "插件目录（含 main.lua）")
+	flag.Parse()
+	d := *dir
+	if d == "" {
+		d = exeDir()
+	}
+	sdk.Serve(&luahost{dir: d})
+}
 
 // exeDir 插件目录：main.lua 与 plugin-<os>-<arch> 同级。
 func exeDir() string {

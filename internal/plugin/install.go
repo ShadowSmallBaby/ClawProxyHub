@@ -104,11 +104,13 @@ func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string, onP
 	if manifest.Name == "" {
 		return "", fmt.Errorf("manifest missing name")
 	}
-	// lua 脚本插件：包内无二进制，改由核心注入内置 luahost（需以 -tags luahost_embed 构建）。
+	// lua 脚本插件：包内无二进制，由核心用内置/共享 luahost 启动（P1：共享于 data/hosts）。
 	// Go 插件：包内必须自带当前平台二进制。
 	if manifest.Runtime == "lua" {
 		if len(luahostBin) == 0 {
-			return "", fmt.Errorf("核心未内置 luahost（请以 -tags luahost_embed 构建核心），无法安装 lua 插件 %q", manifest.Name)
+			if _, err := os.Stat(m.luahostFile()); err != nil {
+				return "", fmt.Errorf("核心未内置 luahost（请以 -tags luahost_embed 构建）或先上传 luahost，无法安装 lua 插件 %q", manifest.Name)
+			}
 		}
 	} else if binFile == nil {
 		return "", fmt.Errorf("package missing binary for %s/%s", runtime.GOOS, runtime.GOARCH)
@@ -137,23 +139,25 @@ func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string, onP
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return "", err
 	}
-	binPath := filepath.Join(target, platformBin)
-	if runtime.GOOS == "windows" {
-		binPath += ".exe"
-	}
-	// lua：注入内置 luahost 作为平台二进制 + 解出脚本；Go：解出包内二进制。
+	// lua：不再逐插件拷 luahost（P1 改用 data/hosts 共享二进制），仅解出脚本；Go：解出包内平台二进制。
 	if manifest.Runtime == "lua" {
-		if err := os.WriteFile(binPath, luahostBin, 0o755); err != nil {
-			return "", fmt.Errorf("write luahost: %w", err)
+		if _, err := m.ensureLuahost(); err != nil {
+			return "", err
 		}
 		if err := extractLuaScripts(zr, target); err != nil {
 			return "", fmt.Errorf("extract scripts: %w", err)
 		}
-	} else if err := extractTo(binFile, binPath); err != nil {
-		return "", fmt.Errorf("extract binary: %w", err)
-	}
-	if runtime.GOOS != "windows" {
-		os.Chmod(binPath, 0o755)
+	} else {
+		binPath := filepath.Join(target, platformBin)
+		if runtime.GOOS == "windows" {
+			binPath += ".exe"
+		}
+		if err := extractTo(binFile, binPath); err != nil {
+			return "", fmt.Errorf("extract binary: %w", err)
+		}
+		if runtime.GOOS != "windows" {
+			os.Chmod(binPath, 0o755)
+		}
 	}
 	// manifest 一并落盘（卸载/诊断用）
 	if mf := zipEntry(zr, "manifest.json"); mf != nil {
@@ -166,9 +170,9 @@ func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string, onP
 		}
 	}
 
-	// 5. 启动
+	// 5. 启动（Start 由插件目录解析启动命令）
 	report(PhaseStarting)
-	if _, err := m.Start(ctx, binPath); err != nil {
+	if _, err := m.Start(ctx, target); err != nil {
 		return manifest.Name, fmt.Errorf("installed but failed to start: %w", err)
 	}
 	return manifest.Name, nil

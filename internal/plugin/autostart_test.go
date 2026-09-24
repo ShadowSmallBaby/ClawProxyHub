@@ -42,13 +42,13 @@ func TestAutoStartsSkipsDisabled(t *testing.T) {
 	db.Model(&model.Plugin{}).Where("name = ?", "beta").Update("enabled", false)
 
 	m := &Manager{dir: root, db: db}
-	bins, err := m.AutoStarts()
+	dirs, err := m.AutoStarts()
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := map[string]bool{}
-	for _, b := range bins {
-		got[filepath.Base(filepath.Dir(b))] = true
+	for _, d := range dirs {
+		got[filepath.Base(d)] = true // AutoStarts 现返回插件目录
 	}
 	if !got["alpha"] || got["beta"] || !got["gamma"] {
 		t.Fatalf("autostart set wrong: %v (want alpha+gamma, not beta)", got)
