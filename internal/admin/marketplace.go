@@ -303,6 +303,7 @@ func (s *Server) uninstallPlugin(w http.ResponseWriter, r *http.Request) {
 		}
 		s.db.Delete(&p)
 	}
+	s.db.Where("plugin = ?", name).Delete(&model.PluginStore{}) // 清该插件的 KV 状态
 	s.plugins.RefreshCatalog(r.Context())
 	writeJSON(w, http.StatusOK, map[string]interface{}{"uninstalled": true, "impact": impact})
 }

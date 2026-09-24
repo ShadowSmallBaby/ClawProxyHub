@@ -216,8 +216,9 @@ func pluginBinary(dir string) (string, error) {
 // Start 启动一个插件子进程并完成契约握手。
 // go-plugin 层按 [MinProtocolVersion, ProtocolVersion] 协商版本，旧契约插件按协商到的版本握手（线格式向后兼容）。
 func (m *Manager) Start(ctx context.Context, binPath string) (*Instance, error) {
-	// 每个插件实例独立持有宿主服务，便于按插件隔离状态
-	set := goplugin.PluginSet{"claw_plugin": &ClawPluginPlugin{host: m.host}}
+	// 每个插件实例独立持有宿主服务（forPlugin 按插件名隔离 store 等状态）
+	name := filepath.Base(filepath.Dir(binPath))
+	set := goplugin.PluginSet{"claw_plugin": &ClawPluginPlugin{host: m.host.forPlugin(name)}}
 	versioned := map[int]goplugin.PluginSet{}
 	for v := sdk.MinProtocolVersion; v <= sdk.ProtocolVersion; v++ {
 		versioned[int(v)] = set

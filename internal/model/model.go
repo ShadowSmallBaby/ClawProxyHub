@@ -263,6 +263,16 @@ type Setting struct {
 	UpdatedAt time.Time `gorm:"column:updated_at"`
 }
 
+// PluginStore 插件 KV 状态（ClawHost.StoreGet/StorePut），按插件名隔离命名空间。
+type PluginStore struct {
+	Plugin    string    `gorm:"primaryKey;size:64"`
+	Key       string    `gorm:"primaryKey;size:191"`
+	Value     []byte
+	UpdatedAt time.Time `gorm:"column:updated_at"`
+}
+
+func (PluginStore) TableName() string { return "plugin_stores" }
+
 // OAuthCredential 第三方平台（LinuxDo/GitHub 等）用户登录态，供插件换取上游 token。
 // TokenBlob 经核心 AES-256-GCM 加密存储（复用凭据加密密钥）。
 type OAuthCredential struct {
