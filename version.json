@@ -1,5 +1,5 @@
 {
-  "version": "1.2.1",
+  "version": "1.2.2",
   "release_url": "https://github.com/ShadowSmallBaby/ClawProxyHub/releases",
   "changelog": {
     "title": {
@@ -8,16 +8,12 @@
     },
     "items": [
       {
-        "zh": "插件全量重构：出站传输统一走 SDK 层（统一打码日志），新增 14 个插件",
-        "en": "Plugins fully migrated to the SDK transport layer; 14 new plugins added"
+        "zh": "修复长会话请求撞 core↔插件 gRPC 4MB 上限导致的 502",
+        "en": "Fix 502 when long conversations exceed the 4MB core↔plugin gRPC limit"
       },
       {
-        "zh": "新增首个 Lua 插件 autoclaw（runtime=lua 示范）",
-        "en": "First Lua plugin autoclaw (runtime=lua reference)"
-      },
-      {
-        "zh": "市场快照同步 10 条：mirasim / todofor / zcode 上架",
-        "en": "Marketplace snapshot synced to 10 entries: mirasim / todofor / zcode"
+        "zh": "新增 CPH_GRPC_MAX_MSG_SIZE 环境变量（默认 64MB，支持 64mb/4096kb 等写法）",
+        "en": "New CPH_GRPC_MAX_MSG_SIZE env var (default 64MB, accepts 64mb/4096kb, etc.)"
       }
     ]
   }
