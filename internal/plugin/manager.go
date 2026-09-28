@@ -227,11 +227,18 @@ func (m *Manager) Start(ctx context.Context, dir string) (*Instance, error) {
 	for v := sdk.MinProtocolVersion; v <= sdk.ProtocolVersion; v++ {
 		versioned[int(v)] = set
 	}
+	maxMsg := sdk.GRPCMaxMsgSize()
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig:  handshakeConfig,
 		VersionedPlugins: versioned,
 		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
+		GRPCDialOptions: []grpc.DialOption{
+			grpc.WithDefaultCallOptions(
+				grpc.MaxCallRecvMsgSize(maxMsg),
+				grpc.MaxCallSendMsgSize(maxMsg),
+			),
+		},
 	})
 
 	rpcClient, err := client.Client()
