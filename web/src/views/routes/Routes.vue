@@ -146,7 +146,7 @@ const columns = computed(() => [
   { colKey: 'Name', title: t('routes.colName'), align: 'center' },
   { colKey: 'strategy', title: t('routes.colStrategy'), width: 110, align: 'center' },
   { colKey: 'groups', title: t('routes.colGroups'), align: 'center' },
-  { colKey: 'timeout', title: t('routes.colTimeout'), width: 90, align: 'center' },
+  { colKey: 'timeout', title: t('routes.colTimeout'), width: 108, align: 'center' },
   { colKey: 'failover', title: t('routes.colFailover'), width: 220, align: 'center' },
   { colKey: 'op', title: t('common.colOp'), width: 130, align: 'center' },
 ])
