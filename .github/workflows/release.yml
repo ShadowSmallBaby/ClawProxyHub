@@ -1,0 +1,123 @@
+name: release
+
+# 核心库发版附件：完整版（内置 luahost）+ 轻量版 + 独立 luahost 二进制。
+# 已有 Release 只补/覆盖附件、不动正文；只有 tag 没有 Release 时自动建一个再挂附件。
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "目标 tag（留空取最新的 v*.*.*）"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # 先定目标 tag：构建和发布都用它，避免手动触发时版本号被编成分支名
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Resolve target tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"; exit 0; fi
+          tag=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/v" --jq '.[].ref' \
+            | sed 's#refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          [ -n "$tag" ] || { echo "no v*.*.* tag found"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: windows, goarch: amd64, ext: ".exe" }
+          - { goos: linux, goarch: amd64, ext: "" }
+          - { goos: linux, goarch: arm64, ext: "" }
+          - { goos: darwin, goarch: amd64, ext: "" }
+          - { goos: darwin, goarch: arm64, ext: "" }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          submodules: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # luahost 独立 module 且 replace 回核心库，-C 下构建仍解析 replace
+      - name: Build luahost
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: go build -C hosts/luahost -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/luahost.bin" .
+
+      - name: Build full (luahost embedded)
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ needs.resolve.outputs.tag }}
+        run: |
+          cp luahost.bin internal/plugin/luahost.bin
+          go build -trimpath -tags luahost_embed -ldflags "-s -w -X github.com/ShadowSmallBaby/ClawProxyHub/internal/version.Core=${VERSION#v}" \
+            -o "cph-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/cph
+
+      - name: Build lite (no luahost)
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ needs.resolve.outputs.tag }}
+        run: |
+          go build -trimpath -ldflags "-s -w -X github.com/ShadowSmallBaby/ClawProxyHub/internal/version.Core=${VERSION#v}" \
+            -o "cph-${{ matrix.goos }}-${{ matrix.goarch }}-lite${{ matrix.ext }}" ./cmd/cph
+          mv luahost.bin "luahost-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cph-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            cph-*
+            luahost-*
+
+  publish:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cph-*
+          merge-multiple: true
+          path: dist
+
+      # 已有 Release：只补/覆盖附件，正文不动；只有 tag：建 Release 再挂附件
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ needs.resolve.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* --title "$tag" --notes "自动构建，更新说明见 CHANGELOG.md"
+          fi
+          echo "uploaded to $tag:"
+          ls -lh dist
