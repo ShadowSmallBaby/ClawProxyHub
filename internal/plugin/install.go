@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
 )
@@ -190,7 +191,20 @@ func (m *Manager) Uninstall(name string) error {
 	if !ok {
 		return nil
 	}
-	return os.RemoveAll(dir)
+	return removeWithRetry(dir)
+}
+
+// removeWithRetry 带重试删除：Windows 下进程退出到文件锁释放有延迟（Access is denied），
+// 退避重试几轮再报错。
+func removeWithRetry(dir string) error {
+	var err error
+	for i := 0; i < 5; i++ {
+		if err = os.RemoveAll(dir); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(200*(i+1)) * time.Millisecond)
+	}
+	return err
 }
 
 // pluginDir 按插件名定位落盘目录：先 <dir>/<name>，再 <dir>/<source>/<name>（命名空间安装）。
