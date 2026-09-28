@@ -136,7 +136,7 @@ const columns = computed(() => [
   { colKey: 'routes', title: t('keys.colRoutes'), align: 'center' },
   { colKey: 'last_used_at', title: t('keys.colLastUsed'), width: 110, cell: (_h: any, { row }: any) => row.last_used_at ? timeAgo(row.last_used_at) : t('keys.never'), align: 'center' },
   { colKey: 'created_at', title: t('keys.colCreatedAt'), width: 180, cell: (_h: any, { row }: any) => fmtTime(row.created_at), align: 'center' },
-  { colKey: 'op', title: t('common.colOp'), width: 150, align: 'center' },
+  { colKey: 'op', title: t('common.colOp'), width: 200, align: 'center' },
 ])
 
 function routeName(id: number): string {
