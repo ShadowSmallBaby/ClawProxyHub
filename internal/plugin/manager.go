@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
@@ -300,6 +301,7 @@ func (m *Manager) syncRecord(inst *Instance) {
 		m.db.Create(&model.Plugin{
 			Name: mf.Name, Version: mf.Version, Author: mf.Author,
 			ProtocolVersion: inst.Protocol, ManifestJSON: string(manifestJSON), Enabled: true,
+			InstalledAt: time.Now(), // 非 gorm 约定名不会自动填；漏设会写零值覆盖 DB 的 CURRENT_TIMESTAMP 默认 → 0001-01-01
 		})
 		return
 	}

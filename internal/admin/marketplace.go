@@ -109,12 +109,10 @@ func (s *Server) marketplace(w http.ResponseWriter, r *http.Request) {
 	if online {
 		source = "online"
 	}
-	// 本机已装版本（manifest 落盘为准）
+	// 本机已装版本（磁盘 manifest.json 为准；含未运行/已崩溃的插件，避免运行时未注册被误判为未安装）
 	local := map[string]string{}
-	for _, name := range s.plugins.Names() {
-		if inst, ok := s.plugins.Get(name); ok {
-			local[pluginKey(inst.Manifest.Author, inst.Manifest.Name)] = inst.Manifest.Version
-		}
+	for _, mf := range s.plugins.Installed() {
+		local[pluginKey(mf.Author, mf.Name)] = mf.Version
 	}
 	out := make([]marketView, 0, len(entries))
 	for _, e := range entries {

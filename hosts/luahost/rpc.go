@@ -68,7 +68,19 @@ func (h *luahost) Handshake(ctx context.Context, req *pb.HandshakeRequest) (*pb.
 			return &pb.HandshakeResponse{Error: e}, nil
 		}
 		if mt := tblField(t, "manifest"); mt != nil {
-			return &pb.HandshakeResponse{Manifest: manifestFromTable(mt)}, nil
+			pbm := manifestFromTable(mt)
+			// 身份与协议版本由宿主管理（脚本不管 manifest）：name/version/author 以 manifest.json 为准
+			// （pack 打包时唯一来源是 manifest.json，防脚本硬编码漂移；author 缺失会让市场按 author+name 判同插件时失配）；
+			// 协议版本以协商版本为准。
+			if mf, ferr := loadManifest(h.dir); ferr == nil && mf.Name != "" {
+				pbm.Name = mf.Name
+				if mf.Version != "" {
+					pbm.Version = mf.Version
+				}
+				pbm.Author = mf.Author
+			}
+			pbm.ProtocolVersion = req.ProtocolVersion
+			return &pb.HandshakeResponse{Manifest: pbm}, nil
 		}
 	}
 	mf, ferr := loadManifest(h.dir)
