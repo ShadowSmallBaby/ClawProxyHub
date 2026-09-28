@@ -159,6 +159,78 @@ func (h *luahost) GetProfile(ctx context.Context, cred *pb.CredentialBlob) (*pb.
 	return profileFromTable(t), nil
 }
 
+// ListTaskCapabilities 调 plugin.tasks() → {capabilities={{id,label,kind,per_account,default_schedule},...}}；
+// 脚本未声明 tasks() 回空（未声明任务能力，与 Go 插件 Unimplemented 兜底同构）。
+func (h *luahost) ListTaskCapabilities(ctx context.Context, req *pb.TaskCapabilitiesRequest) (*pb.TaskCapabilities, error) {
+	t, present, err := h.call1("tasks", func(L *lua.LState) []lua.LValue { return nil })
+	if err != nil {
+		return nil, err
+	}
+	if !present || t == nil {
+		return &pb.TaskCapabilities{}, nil
+	}
+	out := &pb.TaskCapabilities{}
+	if caps, ok := t.RawGetString("capabilities").(*lua.LTable); ok {
+		caps.ForEach(func(_, v lua.LValue) {
+			c, ok := v.(*lua.LTable)
+			if !ok {
+				return
+			}
+			out.Capabilities = append(out.Capabilities, &pb.TaskCapability{
+				Id:              strField(c, "id"),
+				Label:           strMapField(c, "label"),
+				Kind:            strField(c, "kind"),
+				PerAccount:      boolField(c, "per_account"),
+				DefaultSchedule: strField(c, "default_schedule"),
+			})
+		})
+	}
+	return out, nil
+}
+
+// RunTask 调 plugin.task(req) → {summary, changed, blob, detail_json, notification, error}。
+// credential_id 从凭据信封带入 req.context（脚本侧一般只读 blob）。脚本未实现回 501。
+func (h *luahost) RunTask(ctx context.Context, req *pb.RunTaskRequest) (*pb.RunTaskResponse, error) {
+	t, present, err := h.call1("task", func(L *lua.LState) []lua.LValue {
+		r := L.NewTable()
+		r.RawSetString("capability_id", lua.LString(req.CapabilityId))
+		if req.Credential != nil {
+			r.RawSetString("credential", credToTable(L, req.Credential))
+		}
+		if len(req.Context) > 0 {
+			c := L.NewTable()
+			for k, v := range req.Context {
+				c.RawSetString(k, lua.LString(v))
+			}
+			r.RawSetString("context", c)
+		}
+		return []lua.LValue{r}
+	})
+	if err != nil {
+		return &pb.RunTaskResponse{Error: &pb.Error{Code: 502, Message: err.Error()}}, nil
+	}
+	if !present || t == nil {
+		return &pb.RunTaskResponse{Error: &pb.Error{Code: 501, Message: "script has no task()"}}, nil
+	}
+	out := &pb.RunTaskResponse{
+		Summary:    strField(t, "summary"),
+		Changed:    boolField(t, "changed"),
+		DetailJson: strField(t, "detail_json"),
+	}
+	if b := strField(t, "blob"); b != "" {
+		out.Blob = []byte(b)
+	}
+	if n := tblField(t, "notification"); n != nil {
+		out.Notification = &pb.TaskNotification{
+			Title: strField(n, "title"), Content: strField(n, "content"), Level: strField(n, "level"),
+		}
+	}
+	if e := errorFromField(t); e != nil {
+		out.Error = e
+	}
+	return out, nil
+}
+
 // credArg 凭据可空：nil 传空 table，脚本自行判空。
 func credArg(L *lua.LState, c *pb.CredentialBlob) *lua.LTable {
 	if c == nil {

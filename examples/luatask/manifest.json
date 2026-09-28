@@ -1,0 +1,8 @@
+{
+  "name": "luatask",
+  "version": "0.1.0",
+  "author": "cph",
+  "runtime": "lua",
+  "label": { "zh": "Lua 任务示例", "en": "Lua Task Sample" },
+  "settings_schema": ""
+}
