@@ -231,7 +231,7 @@ func (s *Server) accountDetail(w http.ResponseWriter, r *http.Request) {
 	s.db.Where("account_id = ?", acct.ID).Order("started_at DESC").Limit(20).Find(&runs)
 	var pauseUntil *string
 	if acct.PausedUntil != nil {
-		t := acct.PausedUntil.Format("2006-01-02 15:04:05")
+		t := acct.PausedUntil.Format(time.RFC3339)
 		pauseUntil = &t
 	}
 	manualPause := acct.PausedUntil != nil && acct.PausedUntil.After(time.Now().AddDate(50, 0, 0))

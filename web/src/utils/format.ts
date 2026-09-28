@@ -18,9 +18,13 @@ export function timeAgo(ts: string): string {
   return t('common.yearsAgo', { n: Math.floor(mo / 12) })
 }
 
-// "2026-10-01T12:00:00" → "2026-10-01 12:00:00"（空值显示 -）
+// 解析带时区偏移的时间串（RFC3339 或 SQLite 空格格式），按浏览器本地时区显示（空值显示 -）
 export function fmtTime(ts?: string | null): string {
-  return ts ? ts.replace('T', ' ').slice(0, 19) : '-'
+  if (!ts) return '-'
+  const d = new Date(ts.replace(' ', 'T')) // 空格转 T，兼容 SQLite 原始时间列，保证跨浏览器解析
+  if (isNaN(d.getTime())) return ts.replace('T', ' ').slice(0, 19) // 解析失败兜底原样截取
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
 // 数字缩写：1.2M / 3.4K

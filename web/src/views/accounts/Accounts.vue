@@ -61,7 +61,7 @@
           <t-descriptions-item :label="$t('accounts.status')">{{ dict(accountStatusDict, detail.status) }}</t-descriptions-item>
           <t-descriptions-item v-if="detail.pause_reason" :label="$t('accounts.pauseReason')">{{ detail.pause_reason }}</t-descriptions-item>
           <t-descriptions-item v-if="detail.paused_until && !detail.manual_pause" :label="$t('accounts.resumeAt')">
-            {{ detail.paused_until?.replace('T', ' ').slice(0, 19) }}
+            {{ fmtTime(detail.paused_until) }}
           </t-descriptions-item>
           <t-descriptions-item :label="$t('accounts.lastRefresh')">{{ fmtTime(detail.last_refresh_at) }}</t-descriptions-item>
           <t-descriptions-item :label="$t('accounts.lastUsed')">{{ fmtTime(detail.last_used_at) }}</t-descriptions-item>
@@ -477,7 +477,7 @@ function pausedInfo(row: Account): string {
   if (row.status !== 'active' || !row.paused_until) return ''
   const until = new Date(row.paused_until).getTime()
   if (!until || until <= Date.now()) return ''
-  const untilText = row.paused_until.replace('T', ' ').slice(0, 19)
+  const untilText = fmtTime(row.paused_until)
   return until - Date.now() > 365 * 24 * 3600 * 1000
     ? t('accounts.pausedManual', { reason: row.pause_reason || t('accounts.autoPause') })
     : t('accounts.pausedRateLimited', { until: untilText, reason: row.pause_reason || '' })

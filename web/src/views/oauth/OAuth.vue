@@ -64,6 +64,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { oauthApi, type OAuthCred } from '../../api/entities'
+import { fmtTime } from '../../utils/format'
 
 const { t } = useI18n()
 
@@ -87,11 +88,6 @@ const columns = computed(() => [
   { colKey: 'expires_at', title: t('oauth.colExpires'), width: 180, align: 'center' },
   { colKey: 'op', title: t('common.colOp'), width: 140, align: 'center' },
 ])
-
-function fmtTime(s: string) {
-  const d = new Date(s)
-  return isNaN(d.getTime()) ? s : d.toLocaleString()
-}
 
 function resetForm() {
   form.platform = ''; form.account_label = ''; form.token = ''; form.expires_at = ''; form.extra_json = ''
