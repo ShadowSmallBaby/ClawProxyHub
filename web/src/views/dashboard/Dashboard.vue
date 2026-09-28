@@ -120,6 +120,7 @@ import { useChart } from '../../composables'
 import LogCells from '../../components/LogCells.vue'
 import { dict, protocolDict } from '../../utils/dict'
 import { modelLabel } from '../../utils/logfmt'
+import { fmtTime } from '../../utils/format'
 import type { RequestLog, Stats } from '../../api/types'
 
 const { t } = useI18n()
@@ -150,7 +151,7 @@ const recentColumns = computed(() => [
   { colKey: 'tokens', title: 'Token', width: 190, align: 'center' },
   { colKey: 'latency', title: t('dashboard.latency'), width: 130, align: 'center' },
   { colKey: 'ua', title: t('logs.client'), width: 140, align: 'center' },
-  { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => row.CreatedAt?.replace('T', ' ').slice(0, 19) ?? '-', align: 'center' },
+  { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => fmtTime(row.CreatedAt), align: 'center' },
 ])
 
 // 模型调用分布（最近 200 条聚合）

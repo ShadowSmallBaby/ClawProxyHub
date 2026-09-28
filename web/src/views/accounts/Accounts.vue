@@ -343,7 +343,7 @@ import PageHeader from '../../components/PageHeader.vue'
 import EntityIcon from '../../components/EntityIcon.vue'
 import GroupPicker from './GroupPicker.vue'
 import { pluginLabelOf, instanceNameOf } from '../../utils/lookup'
-import { timeAgo, fmtNum, fmtTime } from '../../utils/format'
+import { timeAgo, fmtNum, fmtTime, normalizeTime } from '../../utils/format'
 import { copyText } from '../../utils/common'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -497,7 +497,7 @@ const pluginLabel = (pluginID: number) => pluginLabelOf(plugins.value, pluginID)
 // 自动暂停（429 限时 / 402 手动）判定：active 但 paused_until 在未来
 function pausedInfo(row: Account): string {
   if (row.status !== 'active' || !row.paused_until) return ''
-  const until = new Date(row.paused_until).getTime()
+  const until = new Date(normalizeTime(row.paused_until)).getTime()
   if (!until || until <= Date.now()) return ''
   const untilText = fmtTime(row.paused_until)
   return until - Date.now() > 365 * 24 * 3600 * 1000
@@ -506,7 +506,7 @@ function pausedInfo(row: Account): string {
 }
 
 function pausedLabel(row: Account): string {
-  const until = row.paused_until ? new Date(row.paused_until).getTime() : 0
+  const until = row.paused_until ? new Date(normalizeTime(row.paused_until)).getTime() : 0
   return until - Date.now() > 365 * 24 * 3600 * 1000 ? t('accounts.pausedManualTag') : t('accounts.pausedRateLimitedTag')
 }
 

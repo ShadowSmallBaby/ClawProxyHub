@@ -140,7 +140,7 @@
       <div v-if="runRow" class="run-detail">
         <div class="run-meta">
           <t-tag :theme="levelTheme(runRow.Level)" variant="light">{{ levelText(runRow.Level) }}</t-tag>
-          <span class="dim">{{ runRow.CreatedAt?.replace('T', ' ').slice(0, 19) }}</span>
+          <span class="dim">{{ fmtTime(runRow.CreatedAt) }}</span>
         </div>
         <div class="run-line"><b>{{ $t('logs.runModule') }}:</b> {{ runRow.Module }}</div>
         <div class="run-line"><b>{{ $t('logs.runAction') }}:</b> {{ runRow.Action }}</div>
@@ -165,6 +165,7 @@ import { pluginLabelOf } from '../../utils/lookup'
 import { usePagination } from '../../composables'
 import { dict, protocolDict } from '../../utils/dict'
 import { modelLabel } from '../../utils/logfmt'
+import { fmtTime } from '../../utils/format'
 import type { RequestLog, RunLog } from '../../api/types'
 
 const { t } = useI18n()
@@ -226,7 +227,7 @@ const columns = computed(() => [
   { colKey: 'latency', title: t('logs.latency'), width: 130, align: 'center' },
   { colKey: 'ClientIP', title: 'IP', width: 120, align: 'center' },
   { colKey: 'ua', title: t('logs.client'), width: 140, align: 'center' },
-  { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => row.CreatedAt?.replace('T', ' ').slice(0, 19) ?? '-', align: 'center' },
+  { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => fmtTime(row.CreatedAt), align: 'center' },
 ])
 
 async function load() {
@@ -292,7 +293,7 @@ const runColumns = computed(() => [
   { colKey: 'Module', title: t('logs.runModule'), width: 100, ellipsis: true, align: 'center' },
   { colKey: 'Action', title: t('logs.runAction'), width: 120, ellipsis: true, align: 'center' },
   { colKey: 'Message', title: t('logs.runMessage'), ellipsis: true },
-  { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => row.CreatedAt?.replace('T', ' ').slice(0, 19) ?? '-', align: 'center' },
+  { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => fmtTime(row.CreatedAt), align: 'center' },
 ])
 
 async function loadRun() {

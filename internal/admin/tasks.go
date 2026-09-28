@@ -654,7 +654,8 @@ func (s *Server) dashboardStats(w http.ResponseWriter, r *http.Request) {
 		RunningPlugins int64 `json:"running_plugins"`
 	}
 	s.db.Model(&model.RequestLog{}).Count(&stats.TotalRequests)
-	s.db.Model(&model.RequestLog{}).Where("created_at >= date('now','localtime')").Count(&stats.TodayRequests)
+	// created_at 落库为 UTC，日界取 UTC 与之对齐（localtime 在 CST 凌晨会超前一天，今日统计恒为 0）
+	s.db.Model(&model.RequestLog{}).Where("created_at >= date('now')").Count(&stats.TodayRequests)
 	var okCount int64
 	s.db.Model(&model.RequestLog{}).Where("status < 400").Count(&okCount)
 	if stats.TotalRequests > 0 {

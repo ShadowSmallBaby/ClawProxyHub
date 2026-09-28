@@ -128,6 +128,7 @@ import { MessagePlugin } from 'tdesign-vue-next'
 import { accountApi, pluginApi, taskApi } from '../../api/entities'
 import { pluginLabelOf } from '../../utils/lookup'
 import { dict, runStatusDict, triggerDict } from '../../utils/dict'
+import { fmtTime, normalizeTime } from '../../utils/format'
 import type { TaskRule, TaskRun } from '../../api/types'
 
 const { t } = useI18n()
@@ -261,7 +262,7 @@ const runColumns = computed(() => [
   { colKey: 'account', title: t('tasks.colAccount'), width: 140, cell: (_h: any, { row }: any) => row.account || '-', align: 'center' },
   { colKey: 'status', title: t('tasks.colResult'), width: 90, align: 'center' },
   { colKey: 'summary', title: t('tasks.colSummary'), ellipsis: true, align: 'center' },
-  { colKey: 'started_at', title: t('common.colTime'), width: 190, cell: (_h: any, { row }: any) => row.started_at?.replace('T', ' ').slice(0, 19) ?? '-', align: 'center' },
+  { colKey: 'started_at', title: t('common.colTime'), width: 190, cell: (_h: any, { row }: any) => fmtTime(row.started_at), align: 'center' },
 ])
 
 // 触发值输入框 placeholder（短示例）；once 走日期时间选择器，格式说明在行下方
@@ -289,7 +290,7 @@ function onceToRFC3339(v: string): string {
 // 列表展示：once 的 RFC3339 转回本地 "YYYY-MM-DD HH:mm"
 function fmtTriggerValue(row: TaskRule): string {
   if (row.trigger_type !== 'once') return row.trigger_value
-  const d = new Date(row.trigger_value)
+  const d = new Date(normalizeTime(row.trigger_value))
   if (isNaN(d.getTime())) return row.trigger_value
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`

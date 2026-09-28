@@ -119,7 +119,7 @@
             <t-descriptions-item :label="$t('settings.sysVersion')">v{{ sys.version }}</t-descriptions-item>
             <t-descriptions-item :label="$t('settings.sysProtocol')">v{{ sys.protocol_version }}</t-descriptions-item>
             <t-descriptions-item :label="$t('settings.sysRuntime')">{{ sys.go_version }} · {{ sys.os }}/{{ sys.arch }}</t-descriptions-item>
-            <t-descriptions-item :label="$t('settings.sysStarted')">{{ sys.started_at.replace('T', ' ').slice(0, 19) }}</t-descriptions-item>
+            <t-descriptions-item :label="$t('settings.sysStarted')">{{ fmtTime(sys.started_at) }}</t-descriptions-item>
             <t-descriptions-item :label="$t('settings.sysUptime')">{{ uptime }}</t-descriptions-item>
             <t-descriptions-item :label="$t('settings.sysDataDir')"><code>{{ sys.data_dir }}</code></t-descriptions-item>
             <t-descriptions-item :label="$t('settings.sysDbSize')">{{ fmtBytes(sys.db_size_bytes) }}</t-descriptions-item>
@@ -186,6 +186,7 @@ import { DeleteIcon, DownloadIcon, UploadIcon } from 'tdesign-icons-vue-next'
 import { settingsApi, systemApi, uploadLuahost, type SysInfo } from '../../api/settings'
 import { logsApi } from '../../api/logs'
 import { refreshBranding } from '../../utils/branding'
+import { fmtTime } from '../../utils/format'
 
 const { t } = useI18n()
 
