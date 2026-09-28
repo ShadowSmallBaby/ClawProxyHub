@@ -9,7 +9,7 @@
   </t-tooltip>
 
   <!-- 更新日志弹窗：点版本徽标有更新时展示，右下按钮跳发布页 -->
-  <t-dialog v-model:visible="changelogVisible" :header="changelogTitle" :footer="false" width="480px">
+  <t-dialog v-model:visible="changelogVisible" :header="changelogTitle" :footer="false" width="480px" attach="body">
     <div class="changelog-ver">v{{ version }} → <b>v{{ latest }}</b></div>
     <ul v-if="changelog?.items?.length" class="changelog-list">
       <li v-for="(it, i) in changelog.items" :key="i">{{ clText(it) }}</li>

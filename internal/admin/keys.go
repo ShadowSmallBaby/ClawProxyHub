@@ -58,10 +58,10 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 	var out []keyView
 	for _, k := range keys {
 		v := keyView{ID: k.ID, Name: k.Name, Enabled: k.Enabled,
-			CreatedAt:  k.CreatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt:  k.CreatedAt.Format(time.RFC3339),
 			LastUsedAt: lastUseMap[k.ID], KeyMask: keyMask(k.ID, k.CreatedAt)}
 		if k.ExpiresAt != nil {
-			t := k.ExpiresAt.Format("2006-01-02 15:04:05")
+			t := k.ExpiresAt.Format(time.RFC3339)
 			v.ExpiresAt = &t
 		}
 		var routes []model.KeyRoute

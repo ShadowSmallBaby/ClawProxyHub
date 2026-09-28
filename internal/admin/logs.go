@@ -52,7 +52,7 @@ func (s *Server) exportLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, l := range batch {
 			cw.Write([]string{
-				strconv.FormatInt(l.ID, 10), l.CreatedAt.Format("2006-01-02 15:04:05"),
+				strconv.FormatInt(l.ID, 10), l.CreatedAt.Local().Format("2006-01-02 15:04:05"),
 				ptrInt(l.KeyID), ptrInt(l.PluginID), ptrInt(l.AccountID),
 				l.RouteName, l.Model, l.Protocol, strconv.Itoa(int(l.Status)),
 				strconv.Itoa(int(l.InputTokens)), strconv.Itoa(int(l.OutputTokens)), strconv.Itoa(int(l.CachedTokens)),

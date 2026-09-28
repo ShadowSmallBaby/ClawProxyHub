@@ -97,6 +97,11 @@ func (s *Server) routeSession(r authed) {
 // routePlugins 插件：概览 / 设置 / 分发。
 func (s *Server) routePlugins(r authed) {
 	r.h("GET /admin/plugins", s.listPlugins)
+	// 在线编辑（用户自建 Lua 插件）：脚手架 / 新建 / 读源码 / 存源码
+	r.h("GET /admin/plugins/scaffold", s.pluginScaffold)
+	r.h("POST /admin/plugins/local", s.createLocalPlugin)
+	r.h("GET /admin/plugins/{name}/source", s.getPluginSource)
+	r.h("PUT /admin/plugins/{name}/source", s.putPluginSource)
 	r.h("GET /admin/plugins/{name}/auth-methods", s.authMethods)
 	r.h("GET /admin/plugins/{name}/settings", s.pluginSettings)
 	r.h("GET /admin/plugins/{name}/task-capabilities", s.pluginTaskCapabilities)
@@ -211,11 +216,12 @@ func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request) {
 		ProtocolVersion int32 `json:"protocol_version"`
 		MultiInstance   bool  `json:"multi_instance"`
 		Runtime         string `json:"runtime,omitempty"` // 空=Go；"lua"=脚本插件（取自落盘 manifest，非握手）
+		Editable        bool   `json:"editable"`          // 用户自建（data/plugins/local/）才可在线编辑
 	}
 	out := []pluginView{}
 	for _, mf := range s.plugins.Installed() {
 		v := pluginView{Name: mf.Name, Label: labelOf(mf.Label, mf.Name), Version: mf.Version, Author: mf.Author,
-			ProtocolVersion: mf.ProtocolVersion, Runtime: mf.Runtime}
+			ProtocolVersion: mf.ProtocolVersion, Runtime: mf.Runtime, Editable: s.plugins.IsLocalPlugin(mf.Name)}
 		var rec model.Plugin // DB id（建分组/规则时引用）+ 停止时的 manifest 快照
 		if err := s.db.Where("name = ?", mf.Name).First(&rec).Error; err == nil {
 			v.ID = rec.ID

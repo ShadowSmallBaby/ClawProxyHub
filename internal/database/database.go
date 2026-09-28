@@ -87,6 +87,8 @@ func Open(ctx context.Context, dsn string) (*gorm.DB, error) {
 	}
 
 	gdb, err := gorm.Open(sqlite.Dialector{Conn: sqlDB}, &gorm.Config{
+		// created_at/updated_at 落库统一 UTC，消除运行机系统时区差异（展示端按本地时区换算）
+		NowFunc: func() time.Time { return time.Now().UTC() },
 		// 记录不存在属正常业务路径（首次读设置等），不打 error 日志
 		Logger: gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags),
 			gormlogger.Config{

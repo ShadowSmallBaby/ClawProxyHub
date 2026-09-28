@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.3.0
+
+插件创作版。新增在线 Lua 插件编辑器（自建插件零编译），luahost 补齐任务契约，作者来源统一为 manifest.json；全站时间按本地时区显示，离线市场快照全量同步至 26 条。
+
+- Added 在线 Lua 插件编辑器：自建插件落 `data/plugins/local/<name>/`，全屏编辑页 + CodeMirror 6（Lua 高亮/补全/搜索）；`GET /admin/plugins/scaffold`、`POST /admin/plugins/local`、`GET/PUT /admin/plugins/{name}/source`；保存即热更重启进程；身份托管（name 建档固定、version 恒 latest、双语 label 随代码同步 manifest.json）；仅自建插件可编辑（`editable`）
+- Added luahost 任务契约：`RunTask` → 脚本 `task(req)`、`ListTaskCapabilities` → 脚本 `tasks()`，ClawPlugin 8 个 RPC 全覆盖（此前 lua 插件任务调用必落 Unimplemented）；`examples/luatask` 最小骨架示范
+- Changed author 统一以落盘 manifest.json 为准：核心握手后覆盖 Go 插件 main.go / lua 脚本声明的 author，前端与 DB 作者来源单一
+- Fixed lua 插件市场识别：luahost 握手从 manifest.json 补全 author（原只补 name/version），修复按 author+name 判同插件失配、已装插件误显示「安装」；已装判定改用磁盘 `Installed()`，未运行/崩溃插件也能识别；`syncRecord` 首次入库补 `InstalledAt=time.Now()`，修复零值覆盖 DB 默认导致 `installed_at=0001-01-01`
+- Fixed 全站时区：GORM `NowFunc` 统一 `created_at/updated_at` 落库 UTC，admin 时间序列化改 RFC3339 带时区，前端 `fmtTime` 按浏览器本地时区格式化，修复服务器 UTC 导致的 8 小时偏差
+- Fixed VersionChip 更新日志弹窗 attach 到 body，修复组件化后被困 header 区域；密钥列表操作列、路由列表超时列加宽，避免内容换行
+- Added 账号管理按「插件 · 实例」筛选（`instance_id=0` 记为默认实例）
+- Changed 离线市场快照全量同步 10 → 26 条：新增 16 个插件（autoclaw/chatjimmy/codearts/codebuff/doubao/gorkcli/improvado/joycode/loomy/mimo/notion/postman/puter/qoder/raccoon/trae），10 个插件版本 bump（cline 0.1.5、commandcode 0.1.2、ima 0.1.3、lobsterai 0.1.7、mirasim 0.1.1、newapi 0.1.4、opencode 0.1.4、todofor 0.1.1、workbuddy 0.1.7、zcode 0.1.1，CI 发布 sha256）；plugins submodule → 0f52234
+
 ## v1.2.2
 
 稳定性修复版。修复长会话/大请求撞 core↔插件 gRPC 默认 4MB 上限导致的 502，改为经环境变量抬高上限。

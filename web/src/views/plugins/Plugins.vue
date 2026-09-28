@@ -5,6 +5,7 @@
       <t-space>
         <t-button variant="outline" @click="openSources">{{ $t('plugins.sources') }}</t-button>
         <t-button variant="outline" :loading="marketLoading" @click="openMarket">{{ $t('plugins.market') }}</t-button>
+        <t-button variant="outline" @click="openEditor(null)">{{ $t('plugins.editorNew') }}</t-button>
         <t-upload
           :auto-upload="false"
           :show-upload-progress="false"
@@ -35,7 +36,7 @@
             </div>
           </div>
         </template>
-        <t-space direction="vertical" style="width: 100%">
+        <t-space direction="vertical" style="width: 100%; flex: 1">
           <t-space v-if="p.capabilities?.length" size="small">
             <t-tag v-for="c in p.capabilities" :key="c" size="small" variant="light">{{ dict(capabilityDict, c) }}</t-tag>
           </t-space>
@@ -47,9 +48,10 @@
               </t-tag>
             </t-space>
           </div>
-          <t-space size="small" style="margin-top: 4px">
+          <t-space size="small" class="plugin-ops">
             <t-link theme="primary" @click="openSettings(p)">{{ $t('plugins.settings') }}</t-link>
             <t-link v-if="p.multi_instance" theme="primary" @click="openInstances(p)">{{ $t('menu.instances') }}</t-link>
+            <t-link v-if="p.editable" theme="primary" @click="openEditor(p)">{{ $t('plugins.editorEdit') }}</t-link>
             <t-link theme="primary" @click="restart(p)">{{ $t('plugins.restart') }}</t-link>
             <t-link theme="warning" :disabled="!p.running" @click="stop(p.name)">{{ $t('plugins.stop') }}</t-link>
             <t-link theme="danger" @click="askUninstall(p)">{{ $t('plugins.uninstall') }}</t-link>
@@ -202,6 +204,7 @@ import PageHeader from '../../components/PageHeader.vue'
 import { useAsync } from '../../composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import type { ResponseType } from 'tdesign-vue-next'
 import { pluginApi, pluginSourceApi, instanceApi, type MarketEntry } from '../../api/entities'
@@ -213,6 +216,7 @@ import { notifyDeleteImpact } from '../../utils/impact'
 import type { InstanceInfo, PluginInfo, PluginSource } from '../../api/types'
 
 const { t } = useI18n()
+const router = useRouter()
 
 const plugins = ref<PluginInfo[]>([])
 
@@ -467,6 +471,13 @@ function openInstanceForm(row: InstanceInfo | null) {
   instanceFormVisible.value = true
 }
 
+// ---------- 在线编辑器 ----------
+
+function openEditor(p: PluginInfo | null) {
+  if (p) router.push(`/plugins/editor/${p.name}`)
+  else router.push('/plugins/editor')
+}
+
 // ---------- 删除确认（插件卸载 / 实例删除共用一个影响面弹窗） ----------
 
 // deleteUrl 缺省 = 弹窗只做确认，确认后由 after 自行执行（插件卸载走进度弹窗）
@@ -620,6 +631,9 @@ onMounted(load)
 .proto-tag { font-family: ui-monospace, monospace; }
 .methods-title { font-size: 13px; color: var(--td-text-color-secondary); margin-bottom: 4px; }
 .plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 14px; }
+.plugin-grid :deep(.c-card) { display: flex; flex-direction: column; height: 100%; }
+.plugin-grid :deep(.c-card .t-card__body) { display: flex; flex-direction: column; flex: 1; }
+.plugin-ops { margin-top: auto; padding-top: 4px; }
 .mono { font-family: ui-monospace, monospace; font-size: 12px; }
 
 /* 市场卡片 */

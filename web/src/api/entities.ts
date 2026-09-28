@@ -43,6 +43,28 @@ export const pluginApi = {
       body: form,
     })
   },
+  // 在线编辑（用户自建 Lua 插件）：脚手架 / 读源码 / 存源码 / 新建（multipart 含 icon）
+  scaffold: () => api.get<{ lua: string }>('/admin/plugins/scaffold'),
+  createLocal: (name: string, label: string, lua: string, icon?: File) => {
+    const form = new FormData()
+    form.append('name', name)
+    form.append('label', label)
+    form.append('lua', lua)
+    if (icon) form.append('icon', icon)
+    return fetch('/admin/plugins/local', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${getToken()}` },
+      body: form,
+    }).then(async (resp) => {
+      if (!resp.ok) {
+        const text = await resp.text()
+        throw new Error(JSON.parse(text).error ?? text)
+      }
+      return resp.json() as Promise<{ created: string }>
+    })
+  },
+  source: (name: string, file: string) => api.get<{ content: string }>(`/admin/plugins/${name}/source?file=${encodeURIComponent(file)}`),
+  saveSource: (name: string, file: string, content: string) => api.put(`/admin/plugins/${name}/source`, { file, content }),
 }
 
 // ---------- 插件源 ----------

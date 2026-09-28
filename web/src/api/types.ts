@@ -48,6 +48,7 @@ export interface PluginInfo {
   protocol_version?: number
   multi_instance?: boolean // 声明 instances 能力且契约 ≥2；否则只有默认实例
   runtime?: string // 空 = Go 插件；"lua" = 脚本插件
+  editable?: boolean // 用户自建（data/plugins/local/）才可在线编辑
 }
 
 // 实例：插件下的一个站点/部署（Plugin → Instance → Account）

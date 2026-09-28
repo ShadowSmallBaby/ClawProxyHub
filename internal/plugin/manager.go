@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
@@ -279,6 +280,11 @@ func (m *Manager) Start(ctx context.Context, dir string) (*Instance, error) {
 			negotiated, hs.Manifest.GetProtocolVersion())
 	}
 
+	// author 统一以落盘 manifest.json 为准（Go 插件 main.go / lua 脚本声明的 author 均不作数），
+	// 令前端与 DB 显示的作者来源单一；读不到时保留握手声明。
+	if a := manifestAuthor(dir); a != "" {
+		hs.Manifest.Author = a
+	}
 	inst := &Instance{Name: hs.Manifest.Name, Manifest: hs.Manifest, Protocol: negotiated, client: client, rpc: pc}
 	m.mu.Lock()
 	m.plugins[inst.Name] = inst
@@ -300,6 +306,7 @@ func (m *Manager) syncRecord(inst *Instance) {
 		m.db.Create(&model.Plugin{
 			Name: mf.Name, Version: mf.Version, Author: mf.Author,
 			ProtocolVersion: inst.Protocol, ManifestJSON: string(manifestJSON), Enabled: true,
+			InstalledAt: time.Now(), // 非 gorm 约定名不会自动填；漏设会写零值覆盖 DB 的 CURRENT_TIMESTAMP 默认 → 0001-01-01
 		})
 		return
 	}

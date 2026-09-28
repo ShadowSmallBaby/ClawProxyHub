@@ -16,6 +16,8 @@ func autoclawDir() string {
 	return filepath.Join("..", "..", "plugins", "plugins-lua", "autoclaw")
 }
 
+func luataskDir() string { return filepath.Join("..", "..", "examples", "luatask") }
+
 func newAutoclaw() *luahost {
 	return &luahost{dir: autoclawDir(), pool: newVMPool(autoclawDir(), nil)}
 }
@@ -90,6 +92,41 @@ func TestChatBadCredE2E(t *testing.T) {
 	last := fs.events[len(fs.events)-1]
 	if last.GetTaskFailed() == nil {
 		t.Errorf("expected task_failed for missing credential, got %T", last.Event)
+	}
+}
+
+// TestListTaskCapabilities 端到端过 ListTaskCapabilities：luatask 示例声明 daily_report（autoclaw 未声明任务 → 空）。
+func TestListTaskCapabilities(t *testing.T) {
+	h := &luahost{dir: luataskDir(), pool: newVMPool(luataskDir(), nil)}
+	caps, err := h.ListTaskCapabilities(context.Background(), &pb.TaskCapabilitiesRequest{})
+	if err != nil {
+		t.Fatalf("ListTaskCapabilities: %v", err)
+	}
+	if len(caps.Capabilities) == 0 || caps.Capabilities[0].Id != "daily_report" {
+		t.Errorf("expected daily_report capability, got %+v", caps.Capabilities)
+	}
+	empty := newAutoclaw()
+	caps2, err := empty.ListTaskCapabilities(context.Background(), &pb.TaskCapabilitiesRequest{})
+	if err != nil {
+		t.Fatalf("ListTaskCapabilities(autoclaw): %v", err)
+	}
+	if len(caps2.Capabilities) != 0 {
+		t.Errorf("autoclaw 未声明任务，expected empty, got %+v", caps2.Capabilities)
+	}
+}
+
+// TestRunTaskBadCred 端到端过 RunTask：luatask 无凭据时全局任务照常出摘要。
+func TestRunTaskBadCred(t *testing.T) {
+	h := &luahost{dir: luataskDir(), pool: newVMPool(luataskDir(), nil)}
+	resp, err := h.RunTask(context.Background(), &pb.RunTaskRequest{CapabilityId: "daily_report"})
+	if err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected task error: %s", resp.Error.Message)
+	}
+	if resp.Summary == "" {
+		t.Error("expected non-empty summary")
 	}
 }
 

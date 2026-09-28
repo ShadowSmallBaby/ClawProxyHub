@@ -42,6 +42,7 @@ import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { clearToken } from '../../api/client'
 import { authApi, type Me } from '../../api/auth'
+import { fmtTime } from '../../utils/format'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -52,10 +53,6 @@ const roleLabel = computed(() => t(me.value?.role === 'guest' ? 'common.guest' :
 const pwVisible = ref(false)
 const pwForm = reactive({ old: '', password: '', confirm: '' })
 const savingPw = ref(false)
-
-function fmtTime(s?: string): string {
-  return s ? s.replace('T', ' ').slice(0, 19) : '-'
-}
 
 function openPw() {
   pwForm.old = ''

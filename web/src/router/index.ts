@@ -16,6 +16,8 @@ const router = createRouter({
         { path: '', redirect: '/dashboard' },
         { path: 'dashboard', component: () => import('../views/dashboard/Dashboard.vue') },
         { path: 'plugins', component: () => import('../views/plugins/Plugins.vue') },
+        { path: 'plugins/editor', component: () => import('../views/plugins/PluginEditor.vue') },
+        { path: 'plugins/editor/:name', component: () => import('../views/plugins/PluginEditor.vue') },
         { path: 'instances', component: () => import('../views/instances/Instances.vue') },
         { path: 'accounts', component: () => import('../views/accounts/Accounts.vue') },
         { path: 'groups', component: () => import('../views/groups/Groups.vue') },

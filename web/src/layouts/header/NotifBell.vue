@@ -21,7 +21,7 @@
             <span class="notif-dot" />
             <div class="notif-body">
               <div class="notif-title">{{ n.title }}</div>
-              <div class="notif-time">{{ n.created_at.replace('T', ' ').slice(0, 16) }}</div>
+              <div class="notif-time">{{ fmtTime(n.created_at) }}</div>
             </div>
           </div>
         </div>
@@ -32,7 +32,7 @@
   <!-- 通知详情弹窗 -->
   <t-dialog v-model:visible="detailVisible" :header="current?.title" :footer="false" width="480px">
     <div class="notif-content">{{ current?.content }}</div>
-    <div v-if="current" class="notif-meta">{{ current.created_at.replace('T', ' ').slice(0, 19) }}</div>
+    <div v-if="current" class="notif-meta">{{ fmtTime(current.created_at) }}</div>
   </t-dialog>
 </template>
 
@@ -40,6 +40,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { NotificationIcon } from 'tdesign-icons-vue-next'
 import { notificationApi, type Notification } from '../../api/auth'
+import { fmtTime } from '../../utils/format'
 
 const notifications = ref<Notification[]>([])
 const unread = ref(0)

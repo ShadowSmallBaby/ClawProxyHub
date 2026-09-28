@@ -1,11 +1,11 @@
 <template>
   <div class="page">
     <page-header>
-      
+      <t-select v-model="instanceFilter" clearable :placeholder="$t('accounts.filterInstance')" :options="instanceFilterOptions" style="width: 240px" />
       <t-button theme="primary" :disabled="!plugins.length" @click="openAdd">{{ $t('accounts.add') }}</t-button>
     </page-header>
 
-    <c-table row-key="id" :data="accounts" :columns="columns" :loading="loading">
+    <c-table row-key="id" :data="filteredAccounts" :columns="columns" :loading="loading">
       <template #display_name="{ row }">
         <span class="acct-name" @click="openDetail(row.id)">{{ row.display_name || `#${row.id}` }}</span>
       </template>
@@ -61,7 +61,7 @@
           <t-descriptions-item :label="$t('accounts.status')">{{ dict(accountStatusDict, detail.status) }}</t-descriptions-item>
           <t-descriptions-item v-if="detail.pause_reason" :label="$t('accounts.pauseReason')">{{ detail.pause_reason }}</t-descriptions-item>
           <t-descriptions-item v-if="detail.paused_until && !detail.manual_pause" :label="$t('accounts.resumeAt')">
-            {{ detail.paused_until?.replace('T', ' ').slice(0, 19) }}
+            {{ fmtTime(detail.paused_until) }}
           </t-descriptions-item>
           <t-descriptions-item :label="$t('accounts.lastRefresh')">{{ fmtTime(detail.last_refresh_at) }}</t-descriptions-item>
           <t-descriptions-item :label="$t('accounts.lastUsed')">{{ fmtTime(detail.last_used_at) }}</t-descriptions-item>
@@ -367,6 +367,7 @@ const groups = ref<GroupInfo[]>([])
 const instances = ref<InstanceInfo[]>([])
 const proxies = ref<{ ID: number; Scheme: string; Host: string; Port: number }[]>([])
 const loading = ref(false)
+const instanceFilter = ref<string | undefined>(undefined) // "pluginId:instanceId"，空 = 全部
 
 // 编辑弹窗
 const editVisible = ref(false)
@@ -452,6 +453,27 @@ const columns = computed(() => [
   { colKey: 'op', title: t('common.colOp'), width: 200, align: 'center' },
 ])
 
+// 按「插件 · 实例」筛选：选项取账号出现过的组合，instance_id=0 记为「默认」
+const instanceFilterOptions = computed(() => {
+  const seen = new Map<string, { plugin_id: number; instance_id: number }>()
+  for (const a of accounts.value) {
+    const iid = a.instance_id || 0
+    const key = `${a.plugin_id}:${iid}`
+    if (!seen.has(key)) seen.set(key, { plugin_id: a.plugin_id, instance_id: iid })
+  }
+  return [...seen.values()]
+    .sort((x, y) => x.plugin_id - y.plugin_id || x.instance_id - y.instance_id)
+    .map(({ plugin_id, instance_id }) => ({
+      value: `${plugin_id}:${instance_id}`,
+      label: `${pluginLabel(plugin_id)} · ${instance_id ? instanceName(instance_id) : t('accounts.defaultInstance')}`,
+    }))
+})
+const filteredAccounts = computed(() => {
+  if (!instanceFilter.value) return accounts.value
+  const [pid, iid] = instanceFilter.value.split(':').map(Number)
+  return accounts.value.filter((a) => a.plugin_id === pid && (a.instance_id || 0) === iid)
+})
+
 // 调度开关：active ↔ disabled（expired 需重新授权，不可直接开关）
 async function toggleSchedule(row: Account) {
   if (row.status === 'active') {
@@ -477,7 +499,7 @@ function pausedInfo(row: Account): string {
   if (row.status !== 'active' || !row.paused_until) return ''
   const until = new Date(row.paused_until).getTime()
   if (!until || until <= Date.now()) return ''
-  const untilText = row.paused_until.replace('T', ' ').slice(0, 19)
+  const untilText = fmtTime(row.paused_until)
   return until - Date.now() > 365 * 24 * 3600 * 1000
     ? t('accounts.pausedManual', { reason: row.pause_reason || t('accounts.autoPause') })
     : t('accounts.pausedRateLimited', { until: untilText, reason: row.pause_reason || '' })

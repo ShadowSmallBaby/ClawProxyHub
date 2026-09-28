@@ -76,7 +76,7 @@ import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { FileCopyIcon } from 'tdesign-icons-vue-next'
 import { keyApi, routeApi } from '../../api/entities'
-import { timeAgo } from '../../utils/format'
+import { timeAgo, fmtTime } from '../../utils/format'
 import BindSelect from '../../components/BindSelect.vue'
 import type { KeyInfo, RouteInfo } from '../../api/types'
 
@@ -135,8 +135,8 @@ const columns = computed(() => [
   { colKey: 'enabled', title: t('keys.enabled'), width: 90, align: 'center' },
   { colKey: 'routes', title: t('keys.colRoutes'), align: 'center' },
   { colKey: 'last_used_at', title: t('keys.colLastUsed'), width: 110, cell: (_h: any, { row }: any) => row.last_used_at ? timeAgo(row.last_used_at) : t('keys.never'), align: 'center' },
-  { colKey: 'created_at', title: t('keys.colCreatedAt'), width: 180, align: 'center' },
-  { colKey: 'op', title: t('common.colOp'), width: 150, align: 'center' },
+  { colKey: 'created_at', title: t('keys.colCreatedAt'), width: 180, cell: (_h: any, { row }: any) => fmtTime(row.created_at), align: 'center' },
+  { colKey: 'op', title: t('common.colOp'), width: 200, align: 'center' },
 ])
 
 function routeName(id: number): string {
