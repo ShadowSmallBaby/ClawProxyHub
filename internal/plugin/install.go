@@ -51,6 +51,20 @@ func (m *Manager) Installed() []PackageManifest {
 	return out
 }
 
+// manifestAuthor 读插件目录落盘 manifest.json 的 author；作者统一以此为准，
+// Go 插件 main.go / lua 脚本握手声明的 author 均由核心在启动后覆盖。读不到返回空。
+func manifestAuthor(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return ""
+	}
+	var mf PackageManifest
+	if json.Unmarshal(data, &mf) != nil {
+		return ""
+	}
+	return mf.Author
+}
+
 // Install 阶段（InstallZip 的进度回调值）。
 const (
 	PhaseStopping   = "stopping"   // 升级：停旧进程

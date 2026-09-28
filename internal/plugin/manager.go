@@ -280,6 +280,11 @@ func (m *Manager) Start(ctx context.Context, dir string) (*Instance, error) {
 			negotiated, hs.Manifest.GetProtocolVersion())
 	}
 
+	// author 统一以落盘 manifest.json 为准（Go 插件 main.go / lua 脚本声明的 author 均不作数），
+	// 令前端与 DB 显示的作者来源单一；读不到时保留握手声明。
+	if a := manifestAuthor(dir); a != "" {
+		hs.Manifest.Author = a
+	}
 	inst := &Instance{Name: hs.Manifest.Name, Manifest: hs.Manifest, Protocol: negotiated, client: client, rpc: pc}
 	m.mu.Lock()
 	m.plugins[inst.Name] = inst
