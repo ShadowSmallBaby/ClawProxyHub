@@ -1,0 +1,70 @@
+name: Bug 反馈
+description: 核心、Web、市场或 luahost 的异常行为
+title: "fix: "
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 核心版本
+      description: 设置页或 version.json 中的版本号，Docker 请附镜像标签
+      placeholder: 1.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: env
+    attributes:
+      label: 运行环境
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - Docker
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: 相关组件
+      options:
+        - 核心 / 网关
+        - Web 仪表盘
+        - 插件安装与市场
+        - Lua / luahost
+        - 账号 / 路由 / 密钥
+        - 其他
+    validations:
+      required: true
+  - type: input
+    id: plugin
+    attributes:
+      label: 插件
+      description: 与插件有关时填写名称和版本；插件自身逻辑问题请改到插件仓库
+      placeholder: lobsterai 0.4.0
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: 关键报错即可，注意去掉密钥和账号凭据
+      render: text
