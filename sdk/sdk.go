@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 
 	goplugin "github.com/hashicorp/go-plugin"
@@ -40,6 +42,57 @@ func HandshakeConfig() goplugin.HandshakeConfig {
 		MagicCookieKey:   MagicCookieKey,
 		MagicCookieValue: MagicCookieVal,
 	}
+}
+
+// gRPC 消息上限（core↔插件）：默认 4MB 太小，长会话请求会撞 ResourceExhausted → 502。
+// 由 env 启动期注入，核心与插件读同一变量保持两端一致（改后需重启进程；SDK 变更需重编插件）。
+const (
+	// EnvGRPCMaxMsgSize gRPC 收发消息字节上限的环境变量名（纯字节整数）。
+	EnvGRPCMaxMsgSize = "CPH_GRPC_MAX_MSG_SIZE"
+	// DefaultGRPCMaxMsgSize 缺省上限：64MB。
+	DefaultGRPCMaxMsgSize = 64 << 20
+	// minGRPCMaxMsgSize 下限保护：低于 gRPC 原生 4MB 默认值一律回退，避免配得更小。
+	minGRPCMaxMsgSize = 4 << 20
+)
+
+// GRPCMaxMsgSize 解析 env 得到 gRPC 消息上限；空/非法/过小回退默认。
+func GRPCMaxMsgSize() int {
+	n, ok := parseByteSize(os.Getenv(EnvGRPCMaxMsgSize))
+	if !ok || n < minGRPCMaxMsgSize {
+		return DefaultGRPCMaxMsgSize
+	}
+	return n
+}
+
+// parseByteSize 解析字节大小，兼容纯字节整数与 kb/mb/gb 单位（大小写、是否带 b、是否带空格均不敏感，
+// 如 67108864 / 64mb / 64MB / 64m / 4096kb / "64 MB"）；单位按 1024 进制。返回 (字节数, 是否有效)。
+func parseByteSize(s string) (int, bool) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return 0, false
+	}
+	mult := 1
+	switch { // 先匹配两字母单位再单字母，避免 "mb" 被 "b" 抢先命中
+	case strings.HasSuffix(s, "gb"):
+		mult, s = 1<<30, s[:len(s)-2]
+	case strings.HasSuffix(s, "mb"):
+		mult, s = 1<<20, s[:len(s)-2]
+	case strings.HasSuffix(s, "kb"):
+		mult, s = 1<<10, s[:len(s)-2]
+	case strings.HasSuffix(s, "g"):
+		mult, s = 1<<30, s[:len(s)-1]
+	case strings.HasSuffix(s, "m"):
+		mult, s = 1<<20, s[:len(s)-1]
+	case strings.HasSuffix(s, "k"):
+		mult, s = 1<<10, s[:len(s)-1]
+	case strings.HasSuffix(s, "b"):
+		s = s[:len(s)-1]
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil || f <= 0 {
+		return 0, false
+	}
+	return int(f * float64(mult)), true
 }
 
 // Host 宿主回调能力（由核心注入，插件实现里可取用）。
@@ -169,6 +222,8 @@ func Serve(impl Plugin) {
 			"claw_plugin": &pluginServer{impl: impl},
 		},
 		GRPCServer: func(opts []grpc.ServerOption) *grpc.Server {
+			max := GRPCMaxMsgSize()
+			opts = append(opts, grpc.MaxRecvMsgSize(max), grpc.MaxSendMsgSize(max))
 			return grpc.NewServer(opts...)
 		},
 	}

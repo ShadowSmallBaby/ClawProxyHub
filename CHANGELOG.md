@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.2
+
+稳定性修复版。修复长会话/大请求撞 core↔插件 gRPC 默认 4MB 上限导致的 502，改为经环境变量抬高上限。
+
+- Fixed 长会话/大请求撞 core↔插件 gRPC 默认 4MB 上限报 502（`ResourceExhausted: received message larger than max`）：新增 `CPH_GRPC_MAX_MSG_SIZE`（默认 64MB，支持 `64mb`/`64m`/`4096kb`/纯字节等写法，1024 进制），SDK 服务端 opts 与核心客户端 `GRPCDialOptions` 读同一变量抬高 gRPC 收发上限，两端一致；env 属 SDK 逻辑，现有插件须重编方生效
+
 ## v1.2.1
 
 插件生态版。插件全量重构至 SDK 统一传输层，新增 14 个插件与首个 Lua 插件，离线市场快照同步。
