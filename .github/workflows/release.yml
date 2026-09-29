@@ -112,6 +112,8 @@ jobs:
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
+          # publish 无 checkout（只有 artifacts），gh 需要 GH_REPO 显式指定仓库，否则找 .git 失败
+          GH_REPO: ${{ github.repository }}
         run: |
           tag="${{ needs.resolve.outputs.tag }}"
           if gh release view "$tag" >/dev/null 2>&1; then
