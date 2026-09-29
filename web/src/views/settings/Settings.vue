@@ -7,28 +7,28 @@
         <div class="panel">
           <div class="s-form">
             <form-item :label="$t('settings.firstEventTimeout')" :tip="$t('settings.firstEventTimeoutHelp')">
-              <t-input-number v-model="gwForm.first_event_timeout" :min="5" :max="3600" theme="column" style="width: 160px" />
+              <t-input-number v-model="gwForm.first_event_timeout" :min="5" :max="3600" theme="column" class="w-sm" />
             </form-item>
             <form-item :label="$t('settings.firstTokenTimeout')" :tip="$t('settings.firstTokenTimeoutHelp')">
-              <t-input-number v-model="gwForm.first_token_timeout" :min="5" :max="3600" theme="column" style="width: 160px" />
+              <t-input-number v-model="gwForm.first_token_timeout" :min="5" :max="3600" theme="column" class="w-sm" />
             </form-item>
             <form-item :label="$t('settings.maxRetries')" :tip="$t('settings.maxRetriesHelp')">
-              <t-input-number v-model="gwForm.max_retries" :min="1" :max="10" theme="column" style="width: 160px" />
+              <t-input-number v-model="gwForm.max_retries" :min="1" :max="10" theme="column" class="w-sm" />
             </form-item>
             <form-item :label="$t('settings.contextTruncate')" :tip="$t('settings.contextTruncateHelp')">
               <t-switch v-model="gwForm.context_truncate_enabled" />
             </form-item>
             <form-item :label="$t('settings.contextTruncateRatio')" :tip="$t('settings.contextTruncateRatioHelp')">
-              <t-input-number v-model="gwForm.context_truncate_ratio" :min="0.1" :max="1" :step="0.05" :decimal-places="2" theme="column" style="width: 160px" />
+              <t-input-number v-model="gwForm.context_truncate_ratio" :min="0.1" :max="1" :step="0.05" :decimal-places="2" theme="column" class="w-sm" />
             </form-item>
             <form-item :label="$t('settings.contextBytesPerToken')" :tip="$t('settings.contextBytesPerTokenHelp')">
-              <t-input-number v-model="gwForm.context_bytes_per_token" :min="1" :max="100" :step="0.5" :decimal-places="1" theme="column" style="width: 160px" />
+              <t-input-number v-model="gwForm.context_bytes_per_token" :min="1" :max="100" :step="0.5" :decimal-places="1" theme="column" class="w-sm" />
             </form-item>
             <form-item :label="$t('settings.userAgent')" :tip="$t('settings.userAgentHelp')">
-              <t-input v-model="gwForm.user_agent" :placeholder="$t('settings.uaPh')" style="width: 480px" />
+              <t-input v-model="gwForm.user_agent" :placeholder="$t('settings.uaPh')" class="w-2xl" />
             </form-item>
             <form-item :label="$t('settings.browserUserAgent')" :tip="$t('settings.browserUserAgentHelp')">
-              <t-input v-model="gwForm.browser_user_agent" :placeholder="$t('settings.uaPh')" style="width: 480px" />
+              <t-input v-model="gwForm.browser_user_agent" :placeholder="$t('settings.uaPh')" class="w-2xl" />
             </form-item>
             <div class="save-row">
               <t-button theme="primary" :loading="saving" @click="save({ first_event_timeout: gwForm.first_event_timeout, first_token_timeout: gwForm.first_token_timeout, max_retries: gwForm.max_retries, user_agent: gwForm.user_agent.trim(), browser_user_agent: gwForm.browser_user_agent.trim(), context_truncate_enabled: gwForm.context_truncate_enabled, context_truncate_ratio: gwForm.context_truncate_ratio, context_bytes_per_token: gwForm.context_bytes_per_token })">{{ $t('common.save') }}</t-button>
@@ -41,7 +41,7 @@
         <div class="panel">
           <div class="s-form">
             <form-item :label="$t('settings.githubProxy')" :tip="$t('settings.githubProxyHelp')">
-              <t-input v-model="netForm.github_proxy" placeholder="https://ghproxy.com" style="width: 360px" />
+              <t-input v-model="netForm.github_proxy" placeholder="https://ghproxy.com" class="w-xl" />
             </form-item>
             <div class="save-row">
               <t-button theme="primary" :loading="saving" @click="save({ github_proxy: netForm.github_proxy.trim() })">{{ $t('common.save') }}</t-button>
@@ -54,13 +54,13 @@
         <div class="panel">
           <div class="s-form">
             <form-item :label="$t('settings.logRetention')" :tip="$t('settings.logRetentionHelp')">
-              <t-select v-model="logForm.log_retention_days" style="width: 200px" @change="save({ log_retention_days: logForm.log_retention_days })">
+              <t-select v-model="logForm.log_retention_days" class="w-sm" @change="save({ log_retention_days: logForm.log_retention_days })">
                 <t-option :value="0" :label="$t('settings.retentionForever')" />
                 <t-option v-for="d in [7, 14, 30, 60, 90, 180, 365]" :key="d" :value="d" :label="$t('settings.retentionDays', { n: d })" />
               </t-select>
             </form-item>
             <form-item :label="$t('settings.runLevel')" :tip="$t('settings.runLevelHelp')">
-              <t-select v-model="logForm.run_level" style="width: 200px" @change="save({ run_level: logForm.run_level })">
+              <t-select v-model="logForm.run_level" class="w-sm" @change="save({ run_level: logForm.run_level })">
                 <t-option value="error" :label="$t('settings.runLevelError')" />
                 <t-option value="warn" :label="$t('settings.runLevelWarn')" />
                 <t-option value="debug" :label="$t('settings.runLevelDebug')" />
@@ -85,7 +85,7 @@
         <div class="panel">
           <div class="s-form">
             <form-item :label="$t('settings.taskJitter')" :tip="$t('settings.taskJitterHelp')">
-              <t-input-number v-model="taskForm.task_daily_jitter" :min="0" :max="45" :suffix="$t('settings.taskJitterUnit')" theme="column" style="width: 200px" @change="save({ task_daily_jitter: taskForm.task_daily_jitter })" />
+              <t-input-number v-model="taskForm.task_daily_jitter" :min="0" :max="45" :suffix="$t('settings.taskJitterUnit')" theme="column" class="w-sm" @change="save({ task_daily_jitter: taskForm.task_daily_jitter })" />
             </form-item>
           </div>
         </div>
@@ -135,10 +135,10 @@
               </div>
             </form-item>
             <form-item :label="$t('settings.siteName')" :tip="$t('settings.siteNameHelp')">
-              <t-input v-model="siteForm.site_name" :maxlength="32" placeholder="ClawProxyHub" clearable style="width: 280px" />
+              <t-input v-model="siteForm.site_name" :maxlength="32" placeholder="ClawProxyHub" clearable class="w-md" />
             </form-item>
             <form-item :label="$t('settings.siteAbbr')" :tip="$t('settings.siteAbbrHelp')">
-              <t-input v-model="siteForm.site_abbr" :maxlength="8" placeholder="CPH" clearable style="width: 160px" />
+              <t-input v-model="siteForm.site_abbr" :maxlength="8" placeholder="CPH" clearable class="w-sm" />
             </form-item>
             <div class="save-row">
               <t-button theme="primary" :loading="saving" @click="saveSite">{{ $t('common.save') }}</t-button>
@@ -193,9 +193,9 @@
     </mobile-fab>
 
     <!-- 手机端系统信息抽屉：一列展示 -->
-    <t-drawer v-if="isPhone" v-model:visible="sysOpen" :header="$t('settings.sysInfo')" placement="bottom" size="85%" :footer="false">
+    <c-drawer v-if="isPhone" v-model:visible="sysOpen" :header="$t('settings.sysInfo')" :footer="false">
       <sys-info-card :sys="sys" />
-    </t-drawer>
+    </c-drawer>
 
   </div>
 </template>

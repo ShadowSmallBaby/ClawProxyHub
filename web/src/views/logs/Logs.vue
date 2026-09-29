@@ -3,17 +3,17 @@
     <page-header v-if="!isPhone">
       <template v-if="tab === 'requests'">
         <!-- 过滤栏：模糊搜索 + 下拉 + 时间区间，窄屏自动换行 -->
-        <div class="filters">
-          <t-input v-model="filters.key" :placeholder="$t('logs.searchKey')" clearable style="width: 280px" @enter="search" />
-          <t-input v-model="filters.model" :placeholder="$t('logs.searchModel')" clearable style="width: 280px" @enter="search" />
-          <t-input v-model="filters.route" :placeholder="$t('logs.searchRoute')" clearable style="width: 280px" @enter="search" />
-          <t-select v-model="filters.plugin_id" :placeholder="$t('logs.pluginAll')" clearable style="width: 130px">
+        <filter-bar>
+          <t-input v-model="filters.key" :placeholder="$t('logs.searchKey')" clearable class="w-md" @enter="search" />
+          <t-input v-model="filters.model" :placeholder="$t('logs.searchModel')" clearable class="w-md" @enter="search" />
+          <t-input v-model="filters.route" :placeholder="$t('logs.searchRoute')" clearable class="w-md" @enter="search" />
+          <t-select v-model="filters.plugin_id" :placeholder="$t('logs.pluginAll')" clearable class="w-xs">
             <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
           </t-select>
-          <t-select v-model="filters.protocol" :placeholder="$t('logs.protocolAll')" clearable style="width: 160px">
+          <t-select v-model="filters.protocol" :placeholder="$t('logs.protocolAll')" clearable class="w-sm">
             <t-option v-for="(v, k) in protocolDict" :key="k" :value="k" :label="dict(protocolDict, k)" />
           </t-select>
-          <t-select v-model="filters.status_class" :placeholder="$t('logs.statusAll')" clearable style="width: 120px">
+          <t-select v-model="filters.status_class" :placeholder="$t('logs.statusAll')" clearable class="w-xs">
             <t-option value="success" :label="$t('logs.statusSuccess')" />
             <t-option value="client_error" :label="$t('logs.statusClientErr')" />
             <t-option value="server_error" :label="$t('logs.statusServerErr')" />
@@ -25,30 +25,30 @@
             :presets="presets"
             presets-placement="bottom"
             :placeholder="[$t('logs.timeFrom'), $t('logs.timeTo')]"
-            style="width: 300px"
+            class="w-lg"
           />
           <t-button theme="primary" @click="search">{{ $t('logs.search') }}</t-button>
           <t-button variant="outline" @click="reset">{{ $t('logs.reset') }}</t-button>
-        </div>
+        </filter-bar>
       </template>
       <template v-else>
-        <div class="filters">
-          <t-select v-model="runFilters.level" :placeholder="$t('logs.runLevelAll')" clearable style="width: 130px">
+        <filter-bar>
+          <t-select v-model="runFilters.level" :placeholder="$t('logs.runLevelAll')" clearable class="w-xs">
             <t-option value="error" :label="$t('settings.runLevelError')" />
             <t-option value="warn" :label="$t('settings.runLevelWarn')" />
             <t-option value="debug" :label="$t('settings.runLevelDebug')" />
             <t-option value="info" :label="$t('settings.runLevelInfo')" />
           </t-select>
-          <t-input v-model="runFilters.module" :placeholder="$t('logs.runModulePh')" clearable style="width: 160px" @enter="searchRun" />
-          <t-input v-model="runFilters.keyword" :placeholder="$t('logs.runKeywordPh')" clearable style="width: 280px" @enter="searchRun" />
+          <t-input v-model="runFilters.module" :placeholder="$t('logs.runModulePh')" clearable class="w-sm" @enter="searchRun" />
+          <t-input v-model="runFilters.keyword" :placeholder="$t('logs.runKeywordPh')" clearable class="w-md" @enter="searchRun" />
           <t-button theme="primary" @click="searchRun">{{ $t('logs.search') }}</t-button>
           <t-button variant="outline" @click="resetRun">{{ $t('logs.reset') }}</t-button>
-        </div>
+        </filter-bar>
       </template>
     </page-header>
 
     <!-- 手机端：筛选收进底部抽屉，页头隐藏 -->
-    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('logs.search')" placement="bottom" size="85%" :footer="false">
+    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('logs.search')" :footer="false">
       <div class="filters">
         <template v-if="tab === 'requests'">
           <t-input v-model="filters.key" :placeholder="$t('logs.searchKey')" clearable @enter="search" />
@@ -167,7 +167,7 @@
     />
 
     <!-- 运行日志明细抽屉 -->
-    <c-drawer v-model:visible="runVisible" :header="$t('logs.runDetail')" :placement="isPhone ? 'bottom' : 'right'" :size="isPhone ? '85%' : '560px'" :footer="false" close-on-overlay-click>
+    <c-drawer v-model:visible="runVisible" :header="$t('logs.runDetail')" :footer="false" width="560px" close-on-overlay-click>
       <div v-if="runRow" class="run-detail">
         <div class="run-meta">
           <t-tag :theme="levelTheme(runRow.Level)" variant="light">{{ levelText(runRow.Level) }}</t-tag>
@@ -193,7 +193,7 @@
 </template>
 
 <script setup lang="ts">
-import { CTable, CTabs, CPagination, MobileFab , CDrawer } from '@/components/base'
+import { CTable, CTabs, CPagination, MobileFab , CDrawer, FilterBar } from '@/components/base'
 import PageHeader from '@/components/PageHeader.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'

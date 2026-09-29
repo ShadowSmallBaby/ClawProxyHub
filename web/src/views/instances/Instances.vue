@@ -1,14 +1,16 @@
 <template>
   <div class="page">
     <page-header v-if="!isPhone">
-      <t-select v-model="filterPlugin" clearable :placeholder="$t('instances.filterPlugin')" style="width: 200px" @change="load">
-        <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
-      </t-select>
-      <t-button theme="primary" :disabled="!multiPlugins.length" @click="openCreate">{{ $t('instances.add') }}</t-button>
+      <filter-bar>
+        <t-select v-model="filterPlugin" clearable :placeholder="$t('instances.filterPlugin')" class="w-md" @change="load">
+          <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
+        </t-select>
+        <t-button theme="primary" :disabled="!multiPlugins.length" @click="openCreate">{{ $t('instances.add') }}</t-button>
+      </filter-bar>
     </page-header>
 
     <!-- 手机端：插件筛选收进底部抽屉 -->
-    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('instances.filterPlugin')" placement="bottom" size="85%" :footer="false">
+    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('instances.filterPlugin')" :footer="false">
       <t-select v-model="filterPlugin" clearable :placeholder="$t('instances.filterPlugin')" @change="load">
         <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
       </t-select>
@@ -48,7 +50,7 @@
 </template>
 
 <script setup lang="ts">
-import { CCard, CTable, MobileFab , CDrawer } from '@/components/base'
+import { CCard, CTable, MobileFab , CDrawer, FilterBar } from '@/components/base'
 import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'
 import { pluginLabelOf } from '@/utils/lookup'

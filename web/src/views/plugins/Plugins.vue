@@ -61,7 +61,7 @@
     </div>
 
     <!-- 市场：多源时按源下拉懒加载，默认 official -->
-    <c-drawer v-model:visible="marketVisible" :header="$t('plugins.market')" :placement="isPhone ? 'bottom' : 'right'" :size="isPhone ? '85%' : '420px'" :footer="false" close-on-overlay-click>
+    <c-drawer v-model:visible="marketVisible" :header="$t('plugins.market')" :footer="false" width="420px" close-on-overlay-click>
       <t-select v-if="sources.length > 1" v-model="marketSourceName" style="width: 100%; margin-bottom: 12px" @change="loadMarket">
         <t-option v-for="s in sources.filter((x) => x.enabled)" :key="s.name" :value="s.name" :label="s.name" />
       </t-select>
@@ -121,7 +121,7 @@
           <t-select v-else-if="f.options?.length" v-model="settingsValues[f.key]" clearable style="width: 100%">
             <t-option v-for="o in f.options" :key="String(o)" :value="o" :label="String(o)" />
           </t-select>
-          <t-input-number v-else-if="f.type === 'number'" v-model="settingsValues[f.key]" theme="column" style="width: 160px" />
+          <t-input-number v-else-if="f.type === 'number'" v-model="settingsValues[f.key]" theme="column" class="w-sm" />
           <t-input v-else v-model="settingsValues[f.key]" :placeholder="f.default ? $t('plugins.phDefault', { d: f.default }) : $t('plugins.phDefaultNone')" />
         </form-item>
       </t-form>
@@ -129,7 +129,7 @@
     </c-drawer>
 
     <!-- 插件实例：多实例插件的实例列表，统一在此增改删 -->
-    <c-drawer v-model:visible="instancesVisible" :header="$t('plugins.instancesHeader', { name: instancesPlugin?.label || (instancesPlugin?.name ?? '') })" :placement="isPhone ? 'bottom' : 'right'" :size="isPhone ? '85%' : '640px'" :footer="false" close-on-overlay-click>
+    <c-drawer v-model:visible="instancesVisible" width="640px" :header="$t('plugins.instancesHeader', { name: instancesPlugin?.label || (instancesPlugin?.name ?? '') })" :footer="false" close-on-overlay-click>
       <div style="margin-bottom: 12px">
         <t-button theme="primary" size="small" @click="openInstanceForm(null)">{{ $t('instances.add') }}</t-button>
       </div>
@@ -155,7 +155,7 @@
     />
 
     <!-- 插件源：卡片式（首卡 = 添加） -->
-    <c-drawer v-model:visible="sourcesVisible" :header="$t('plugins.sourcesTitle')" :placement="isPhone ? 'bottom' : 'right'" :size="isPhone ? '85%' : '760px'" :footer="false" close-on-overlay-click>
+    <c-drawer v-model:visible="sourcesVisible" :header="$t('plugins.sourcesTitle')" :footer="false" width="760px" close-on-overlay-click>
       <div class="source-grid">
         <div class="source-card source-add" @click="openSourceForm(null)">
           <div class="source-add-plus">＋</div>

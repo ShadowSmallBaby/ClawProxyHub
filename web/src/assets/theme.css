@@ -60,6 +60,8 @@ body,
 #app {
   height: 100%;
   margin: 0;
+  /* 外层锁死滚动：侧栏/头部固定，滚动全部收敛到 .content 内部 */
+  overflow: hidden;
 }
 
 /* 全局隐藏滚动条（滚动照常，仅不显示滚动条） */
@@ -80,18 +82,14 @@ body,
   box-sizing: border-box;
 }
 
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 20px;
-}
-
-.page-title {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
-}
+/* 控件宽度工具类：替代行内 width（!important 压过 TDesign 组件默认 width:100%） */
+.w-2xs { width: 110px !important; }
+.w-xs { width: 120px !important; }
+.w-sm { width: 160px !important; }
+.w-md { width: 240px !important; }
+.w-lg { width: 300px !important; }
+.w-xl { width: 360px !important; }
+.w-2xl { width: 480px !important; }
 
 /* 页面背景：明色淡蓝灰 / 暗色深蓝黑（纯色，不用渐变） */
 .t-layout__content {
@@ -141,22 +139,6 @@ body,
   .t-col:not(.stat-col) {
     flex: 0 0 100% !important;
     max-width: 100% !important;
-  }
-
-  /* 设置页等表单：标签置顶 + 输入撑满，避免 label 140px 把内容挤出屏 */
-  .t-form__item {
-    flex-direction: column !important;
-    align-items: stretch !important;
-  }
-  .t-form__label {
-    width: auto !important;
-    text-align: left !important;
-    padding-right: 0 !important;
-    justify-content: flex-start !important;
-  }
-  .t-form__controls {
-    margin-left: 0 !important;
-    width: 100%;
   }
   /* 弹层抽屉：内容区内部滚动，底部操作钉住 */
   .t-drawer__body {

@@ -54,7 +54,7 @@
         <form-item :label="$t('routes.groupMapping')" mark>
           <div class="entries">
             <div v-for="(e, i) in form.groups" :key="i" class="entry">
-              <bind-select v-model="e.group_id" :multiple="false" :options="groupOptions" :placeholder="$t('routes.groupPh')" style="width: 160px" @update:model-value="loadGroupModels(e.group_id)" />
+              <bind-select v-model="e.group_id" :multiple="false" :options="groupOptions" :placeholder="$t('routes.groupPh')" class="w-sm" @update:model-value="loadGroupModels(e.group_id)" />
               <!-- 模型：下拉取分组账号模型并集，也可手动输入 -->
               <t-select
                 v-model="e.model"
@@ -65,7 +65,7 @@
                 :placeholder="$t('routes.modelPh')"
                 style="flex: 1"
               />
-              <t-input-number v-model="e.weight" :min="0" :max="100" theme="column" style="width: 110px" :placeholder="$t('routes.weightPh')" />
+              <t-input-number v-model="e.weight" :min="0" :max="100" theme="column" class="w-2xs" :placeholder="$t('routes.weightPh')" />
               <t-popconfirm :content="$t('routes.removeEntry')" @confirm="form.groups.splice(i, 1)">
                 <t-button theme="danger" variant="text" shape="square" size="small">
                   <template #icon><minus-circle-icon /></template>
@@ -79,11 +79,11 @@
           </div>
         </form-item>
         <form-item :label="$t('routes.firstEventTimeout')">
-          <t-input-number v-model="form.first_event_timeout_seconds" :min="0" :max="3600" theme="column" style="width: 140px" />
+          <t-input-number v-model="form.first_event_timeout_seconds" :min="0" :max="3600" theme="column" class="w-2xs" />
           <span class="hint">{{ $t('routes.timeoutHint') }}</span>
         </form-item>
         <form-item :label="$t('routes.firstTokenTimeout')">
-          <t-input-number v-model="form.first_token_timeout_seconds" :min="0" :max="3600" theme="column" style="width: 140px" />
+          <t-input-number v-model="form.first_token_timeout_seconds" :min="0" :max="3600" theme="column" class="w-2xs" />
           <span class="hint">{{ $t('routes.timeoutHint') }}</span>
         </form-item>
         <form-item :label="$t('routes.userAgent')" :tip="$t('routes.userAgentHint')">
@@ -101,10 +101,10 @@
             </t-checkbox-group>
           </form-item>
           <form-item :label="$t('routes.failoverGroup')" mark>
-            <bind-select v-model="form.failover_group_id" :multiple="false" :options="groupOptions" :placeholder="$t('routes.pickGroup')" style="width: 240px" />
+            <bind-select v-model="form.failover_group_id" :multiple="false" :options="groupOptions" :placeholder="$t('routes.pickGroup')" class="w-md" />
           </form-item>
           <form-item :label="$t('routes.failoverModel')" mark>
-            <t-input v-model="form.failover_model" :placeholder="$t('routes.failoverModelPh')" style="width: 360px" />
+            <t-input v-model="form.failover_model" :placeholder="$t('routes.failoverModelPh')" class="w-xl" />
           </form-item>
         </template>
       </t-form>

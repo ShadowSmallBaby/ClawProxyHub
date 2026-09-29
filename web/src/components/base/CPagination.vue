@@ -6,6 +6,8 @@
     :page-size-options="isPhone ? [] : pageSizeOptions"
     :show-jumper="!isPhone && showJumper"
     :theme="isPhone ? 'simple' : theme"
+    :max-page-btn="5"
+    :folded-max-page-btn="3"
   />
 </template>
 

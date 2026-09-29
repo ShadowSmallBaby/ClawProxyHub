@@ -1,12 +1,14 @@
 <template>
   <div class="page">
     <page-header v-if="!isPhone">
-      <t-select v-model="instanceFilter" clearable :placeholder="$t('accounts.filterInstance')" :options="instanceFilterOptions" style="width: 240px" />
-      <t-button theme="primary" :disabled="!plugins.length" @click="openAdd">{{ $t('accounts.add') }}</t-button>
+      <filter-bar>
+        <t-select v-model="instanceFilter" clearable :placeholder="$t('accounts.filterInstance')" :options="instanceFilterOptions" class="w-md" />
+        <t-button theme="primary" :disabled="!plugins.length" @click="openAdd">{{ $t('accounts.add') }}</t-button>
+      </filter-bar>
     </page-header>
 
     <!-- 手机端：实例筛选收进底部抽屉 -->
-    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('accounts.filterInstance')" placement="bottom" size="85%" :footer="false">
+    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('accounts.filterInstance')" :footer="false">
       <t-select v-model="instanceFilter" clearable :placeholder="$t('accounts.filterInstance')" :options="instanceFilterOptions" />
     </c-drawer>
 
@@ -59,7 +61,7 @@
     </c-table>
 
     <!-- 账号详情：套餐/积分 + 任务执行情况 -->
-    <c-drawer v-model:visible="detailVisible" :header="detailHeader" :placement="isPhone ? 'bottom' : 'right'" :size="isPhone ? '85%' : '720px'" :footer="false" close-on-overlay-click>
+    <c-drawer v-model:visible="detailVisible" :header="detailHeader" :footer="false" width="720px" close-on-overlay-click>
       <t-space v-if="detail" direction="vertical" style="width: 100%" size="large">
         <t-descriptions :column="1" bordered size="small">
           <t-descriptions-item :label="$t('accounts.account')">{{ detail.display_name || `#${detail.id}` }}</t-descriptions-item>
@@ -299,7 +301,7 @@
     </c-drawer>
 
     <!-- 在线测试：选端点/模型/问题 → 响应日志 -->
-    <c-drawer v-model:visible="testVisible" :header="$t('accounts.testTitle')" :placement="isPhone ? 'bottom' : 'right'" :size="isPhone ? '85%' : '560px'" :footer="false" close-on-overlay-click>
+    <c-drawer v-model:visible="testVisible" :header="$t('accounts.testTitle')" :footer="false" width="560px" close-on-overlay-click>
       <t-space v-if="testRow" direction="vertical" style="width: 100%" size="large">
         <t-form>
           <form-item :label="$t('accounts.testEndpoint')">
@@ -352,7 +354,7 @@
 </template>
 
 <script setup lang="ts">
-import { CCard, CDrawer, CTable, CTabs, MobileFab } from '@/components/base'
+import { CCard, CDrawer, CTable, CTabs, MobileFab, FilterBar } from '@/components/base'
 import { FormItem } from '@/components'
 import PageHeader from '@/components/PageHeader.vue'
 import EntityIcon from '@/components/EntityIcon.vue'

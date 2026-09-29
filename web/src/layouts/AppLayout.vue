@@ -4,7 +4,7 @@
     <app-sidebar :items="visibleMenuItems" />
     <!-- 移动端：侧栏改为抽屉（品牌区 + 菜单 + 功能区 footer） -->
     <mobile-nav-drawer v-if="isMobile" v-model:visible="drawerVisible" :items="visibleMenuItems" />
-    <t-layout>
+    <t-layout class="inner">
       <app-header :username="username" :role="role" :current-page="currentPage" :is-mobile="isMobile" @toggle-menu="drawerVisible = true" />
       <!-- 内容区域：内部滚动，头部与侧栏固定 -->
       <t-content class="content">
@@ -77,10 +77,18 @@ const currentPage = computed(
 .layout {
   height: 100%;
 }
-/* 内容区域：占满剩余高度，内部滚动（头部/侧栏固定） */
+/* 内层布局：压住 flex 默认 min-width:auto，不被超宽内容撑出视口（header/侧栏始终固定可见） */
+.inner {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+/* 内容区域：占满剩余高度，仅纵向滚动（筛选条/表格等宽度交给 flex-wrap 换行消化） */
 .content {
   flex: 1;
-  overflow-y: auto;
   height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 </style>

@@ -79,7 +79,7 @@
         <form-item :label="$t('tasks.trigger')" mark>
           <div class="trigger-box">
             <div class="trigger-row">
-              <t-select v-model="form.trigger_type" style="width: 110px" :disabled="editingAuto" :placeholder="$t('tasks.triggerPh')">
+              <t-select v-model="form.trigger_type" class="w-2xs" :disabled="editingAuto" :placeholder="$t('tasks.triggerPh')">
                 <t-option value="interval" :label="$t('tasks.triggerInterval')" />
                 <t-option value="daily" :label="$t('tasks.triggerDaily')" />
                 <t-option value="once" :label="$t('tasks.triggerOnce')" />

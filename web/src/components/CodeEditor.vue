@@ -125,7 +125,7 @@ async function mountCM() {
   ])
   const { StreamLanguage, syntaxHighlighting, HighlightStyle } = cmLang as any
   const { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } = cmView as any
-  const { defaultKeymap, indentWithTab } = cmCmds as any
+  const { defaultKeymap, indentWithTab, history, historyKeymap } = cmCmds as any
   const { autocompletion } = cmAuto as any
   const { searchKeymap, highlightSelectionMatches, search } = cmSearch as any
   const { tags } = await import('@lezer/highlight')
@@ -136,6 +136,7 @@ async function mountCM() {
   const baseKeymap = [
     indentWithTab,
     defaultKeymap ?? (cmCmds as any).default?.defaultKeymap,
+    ...(historyKeymap ?? (cmCmds as any).default?.historyKeymap ?? []),
     ...(searchKeymap ?? (cmSearch as any).default?.searchKeymap ?? []),
   ].flat(9).filter(Boolean)
 
@@ -157,6 +158,7 @@ async function mountCM() {
     doc: props.modelValue,
     extensions: [
       EditorState.phrases.of(CM_PHRASES),
+      history(),
       lineNumbers(),
       highlightActiveLine(),
       drawSelection(),
@@ -214,11 +216,46 @@ onBeforeUnmount(() => {
 <style scoped>
 .code-editor { position: relative; display: flex; border: 1px solid var(--td-component-stroke); border-radius: 6px; overflow: hidden; background: #1e222a; }
 .ce-cm { flex: 1; min-width: 0; }
-.ce-cm :deep(.cm-editor) { height: 100%; font-size: 13px; }
+.ce-cm :deep(.cm-editor) { height: 100%; font-size: 13px; line-height: 20px; font-family: ui-monospace, monospace; font-variant-ligatures: none; }
 .ce-cm :deep(.cm-editor) .cm-gutters { background: #1e222a; color: #5c6370; border-right: 1px solid #2c313a; }
-.ce-cm :deep(.cm-content) { color: #d7dae0; }
+.ce-cm :deep(.cm-activeLineGutter) { background: #262b35; color: #aab2c0; }
+/* 选中高亮：暗色下明显（默认 selectionBackground #222/#233 与背景同色）。
+   单行选择走 ::selection 路径、跨行走 selectionLayer，两条路都要覆盖 */
+.ce-cm :deep(.cm-selectionBackground) {
+  background: rgba(76, 125, 255, 0.45) !important;
+}
+.ce-cm :deep(.cm-focused .cm-selectionBackground) {
+  background: rgba(76, 125, 255, 0.55) !important;
+}
+.ce-cm :deep(.cm-line ::selection),
+.ce-cm :deep(.cm-line::selection) {
+  background: rgba(76, 125, 255, 0.5) !important;
+}
+/* 光标：参考官方 dark（白色 caret），亮蓝更醒目且与选中色同系 */
+.ce-cm :deep(.cm-content) { color: #d7dae0; caret-color: #7fa7ff; }
+.ce-cm :deep(.cm-cursor) {
+  border-left: 2px solid #7fa7ff;
+}
+.ce-cm :deep(.cm-cursors) {
+  /* 非聚焦光标半透明可见 */
+  opacity: 0.6;
+}
+/* Ctrl+F 搜索命中：琥珀色，selected 当前跳转项加深 */
+.ce-cm :deep(.cm-searchMatch) {
+  background: rgba(255, 199, 84, 0.22);
+}
+.ce-cm :deep(.cm-searchMatch.cm-searchMatch-selected) {
+  background: rgba(255, 199, 84, 0.5);
+}
+/* 选中词的全量匹配（highlightSelectionMatches）：与搜索命中区分的淡绿 */
+.ce-cm :deep(.cm-selectionMatch) {
+  background: rgba(152, 195, 121, 0.18);
+}
+.ce-cm :deep(.cm-selectionMatch.cm-selectionMatch-main) {
+  background: rgba(152, 195, 121, 0.32);
+}
 .ce-cm :deep(.cm-activeLine) { background: #262b35; }
-.ce-cm :deep(.cm-scroller) { font-family: ui-monospace, monospace; line-height: 20px; }
+.ce-cm :deep(.cm-scroller) { line-height: 20px; }
 .ce-gutter {
   width: 44px; flex: none; padding: 8px 0; text-align: right; overflow: hidden;
   background: #1e222a; border-right: 1px solid #2c313a;
@@ -235,15 +272,18 @@ onBeforeUnmount(() => {
 .ce-cm :deep(.cm-panels) {
   position: absolute;
   top: 6px;
+  left: auto;
   right: 8px;
   z-index: 10;
-  width: 38%;          /* 35–40%，不撑满编辑区 */
   min-width: 280px;
   border: 1px solid #3a3f4b;
   border-radius: 8px;
   background: #252932;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
   overflow: hidden;
+  /* 面板整体靠右：收缩到内容宽，不横向铺满 */
+  width: fit-content;
+  max-width: 45%;
 }
 .ce-cm :deep(.cm-panels.cm-panels-top) {
   border-bottom: none;
@@ -296,4 +336,33 @@ onBeforeUnmount(() => {
   accent-color: #4c7dff;
   cursor: pointer;
 }
+
+/* 补全浮层：与编辑器同风格的深底卡片 */
+.ce-cm :deep(.cm-tooltip) {
+  border: 1px solid #3a3f4b !important;
+  border-radius: 8px;
+  background: #252932 !important;
+  color: #d7dae0 !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+.ce-cm :deep(.cm-tooltip.cm-tooltip-autocomplete > ul) {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  max-height: 12em;
+}
+.ce-cm :deep(.cm-tooltip-autocomplete ul li) {
+  padding: 3px 8px;
+}
+.ce-cm :deep(.cm-tooltip-autocomplete ul li[aria-selected]) {
+  background: rgba(76, 125, 255, 0.28) !important;
+  color: #eaf1ff !important;
+}
+.ce-cm :deep(.cm-completionLabel) { color: #d7dae0; }
+.ce-cm :deep(.cm-completionDetail) { color: #7f848e; font-style: italic; }
+.ce-cm :deep(.cm-completionIcon-function, .cm-completionIcon-class) { color: #61afef; }
+.ce-cm :deep(.cm-completionIcon-namespace) { color: #c678dd; }
+.ce-cm :deep(.cm-completionIcon-keyword) { color: #c678dd; }
+/* tooltip 内 info 文档（补全右侧详情） */
+.ce-cm :deep(.cm-tooltip.cm-tooltip-autocomplete > ul > li) { display: flex; }
 </style>

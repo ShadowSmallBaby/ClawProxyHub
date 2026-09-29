@@ -11,6 +11,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-bottom: 20px;
 }
 .page-header-left {
   display: flex;
@@ -22,6 +23,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
+  /* 允许收缩换行：筛选条一行放不下时折行，不撑破内容区 */
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 </style>

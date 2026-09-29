@@ -32,7 +32,7 @@
           <t-input v-model="form.host" :placeholder="$t('proxies.hostPh')" />
         </form-item>
         <form-item :label="$t('proxies.port')" mark>
-          <t-input-number v-model="form.port" :min="1" :max="65535" theme="column" style="width: 160px" />
+          <t-input-number v-model="form.port" :min="1" :max="65535" theme="column" class="w-sm" />
         </form-item>
         <form-item :label="$t('proxies.username')">
           <t-input v-model="form.username" :placeholder="$t('common.optional')" />
