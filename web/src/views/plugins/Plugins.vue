@@ -213,23 +213,23 @@
 </template>
 
 <script setup lang="ts">
-import { CCard, CDrawer, CTable, MobileFab } from '../../components/base'
-import EntityIcon from '../../components/EntityIcon.vue'
-import PageHeader from '../../components/PageHeader.vue'
-import { useAsync, useIsMobile } from '../../composables'
+import { CCard, CDrawer, CTable, MobileFab } from '@/components/base'
+import EntityIcon from '@/components/EntityIcon.vue'
+import PageHeader from '@/components/PageHeader.vue'
+import { useAsync, useIsMobile } from '@/composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { ShopIcon, CloudUploadIcon, AppIcon } from 'tdesign-icons-vue-next'
 import type { ResponseType } from 'tdesign-vue-next'
-import { pluginApi, pluginSourceApi, instanceApi, type MarketEntry } from '../../api/entities'
-import InstanceFormDialog from '../../components/InstanceFormDialog.vue'
-import DeleteImpactDialog from '../../components/DeleteImpactDialog.vue'
-import OpProgressDialog, { type OpLog, type OpStep } from '../../components/OpProgressDialog.vue'
-import { capabilityDict, dict, label } from '../../utils/dict'
-import { notifyDeleteImpact } from '../../utils/impact'
-import type { InstanceInfo, PluginInfo, PluginSource } from '../../api/types'
+import { pluginApi, pluginSourceApi, instanceApi, type MarketEntry } from '@/api/entities'
+import InstanceFormDialog from '@/components/InstanceFormDialog.vue'
+import DeleteImpactDialog from '@/components/DeleteImpactDialog.vue'
+import OpProgressDialog, { type OpLog, type OpStep } from '@/components/OpProgressDialog.vue'
+import { capabilityDict, dict, label } from '@/utils/dict'
+import { notifyDeleteImpact } from '@/utils/impact'
+import type { InstanceInfo, PluginInfo, PluginSource } from '@/api/types'
 
 const { t } = useI18n()
 const router = useRouter()

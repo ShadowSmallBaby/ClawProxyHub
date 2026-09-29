@@ -38,7 +38,7 @@
 <script setup lang="ts">
 import { computed, useAttrs } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useIsMobile } from '../../composables'
+import { useIsMobile } from '@/composables'
 
 defineOptions({ inheritAttrs: false })
 
@@ -102,13 +102,14 @@ const dialogWidth = computed(() => (isPhone.value ? '85%' : props.width || '480p
   }
   .c-dialog .t-dialog {
     border-radius: 12px;
+    max-height: calc(100vh - 48px); /* 上下留 24px，不超出视口 */
   }
   .c-dialog .t-dialog__header {
     padding: 10px 14px;
   }
   .c-dialog .t-dialog__body {
     padding: 12px 14px;
-    max-height: calc(100vh - 120px);
+    max-height: calc(100vh - 144px);
     overflow-y: auto;
   }
 }

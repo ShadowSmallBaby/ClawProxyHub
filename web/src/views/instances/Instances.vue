@@ -48,17 +48,17 @@
 </template>
 
 <script setup lang="ts">
-import { CCard, CTable, MobileFab , CDrawer } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
-import { useAsync, useIsMobile } from '../../composables'
-import { pluginLabelOf } from '../../utils/lookup'
+import { CCard, CTable, MobileFab , CDrawer } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
+import { useAsync, useIsMobile } from '@/composables'
+import { pluginLabelOf } from '@/utils/lookup'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AddIcon, FilterIcon } from 'tdesign-icons-vue-next'
-import { pluginApi, instanceApi } from '../../api/entities'
-import InstanceFormDialog from '../../components/InstanceFormDialog.vue'
-import DeleteImpactDialog from '../../components/DeleteImpactDialog.vue'
-import type { InstanceInfo, PluginInfo } from '../../api/types'
+import { pluginApi, instanceApi } from '@/api/entities'
+import InstanceFormDialog from '@/components/InstanceFormDialog.vue'
+import DeleteImpactDialog from '@/components/DeleteImpactDialog.vue'
+import type { InstanceInfo, PluginInfo } from '@/api/types'
 
 const { t } = useI18n()
 const { isPhone } = useIsMobile()

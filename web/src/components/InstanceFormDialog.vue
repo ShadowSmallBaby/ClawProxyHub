@@ -46,8 +46,8 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { CDrawer } from './base'
-import { instanceApi } from '../api/entities'
-import type { InstanceInfo, PluginInfo } from '../api/types'
+import { instanceApi } from '@/api/entities'
+import type { InstanceInfo, PluginInfo } from '@/api/types'
 
 const props = defineProps<{
   visible: boolean

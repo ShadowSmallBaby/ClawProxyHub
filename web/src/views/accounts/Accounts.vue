@@ -352,25 +352,25 @@
 </template>
 
 <script setup lang="ts">
-import { CCard, CDrawer, CTable, CTabs, MobileFab } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
-import EntityIcon from '../../components/EntityIcon.vue'
+import { CCard, CDrawer, CTable, CTabs, MobileFab } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
+import EntityIcon from '@/components/EntityIcon.vue'
 import GroupPicker from './GroupPicker.vue'
-import { pluginLabelOf, instanceNameOf } from '../../utils/lookup'
-import { timeAgo, fmtNum, fmtTime, normalizeTime } from '../../utils/format'
-import { copyText } from '../../utils/common'
+import { pluginLabelOf, instanceNameOf } from '@/utils/lookup'
+import { timeAgo, fmtNum, fmtTime, normalizeTime } from '@/utils/format'
+import { copyText } from '@/utils/common'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useIsMobile } from '../../composables'
+import { useIsMobile } from '@/composables'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { AddIcon, FilterIcon } from 'tdesign-icons-vue-next'
-import { accountApi, groupApi, instanceApi, pluginApi, proxyApi } from '../../api/entities'
-import BindSelect from '../../components/BindSelect.vue'
-import DeleteImpactDialog from '../../components/DeleteImpactDialog.vue'
-import { accountStatusDict, capabilityDict, dict, label, runStatusDict } from '../../utils/dict'
-import type { Account, AccountDetail, AuthMethod, GroupInfo, InstanceInfo, LoginResp, ModelInfo, NextStep, PluginInfo } from '../../api/types'
-import { isQrDataUrl } from '../../api/types'
+import { accountApi, groupApi, instanceApi, pluginApi, proxyApi } from '@/api/entities'
+import BindSelect from '@/components/BindSelect.vue'
+import DeleteImpactDialog from '@/components/DeleteImpactDialog.vue'
+import { accountStatusDict, capabilityDict, dict, label, runStatusDict } from '@/utils/dict'
+import type { Account, AccountDetail, AuthMethod, GroupInfo, InstanceInfo, LoginResp, ModelInfo, NextStep, PluginInfo } from '@/api/types'
+import { isQrDataUrl } from '@/api/types'
 
 const { t } = useI18n()
 const { isPhone } = useIsMobile()

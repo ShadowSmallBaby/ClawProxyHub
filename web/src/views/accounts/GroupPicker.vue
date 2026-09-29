@@ -34,7 +34,7 @@
 
 <script setup lang="ts">
 import { CheckIcon } from 'tdesign-icons-vue-next'
-import type { GroupInfo } from '../../api/types'
+import type { GroupInfo } from '@/api/types'
 
 const props = defineProps<{
   modelValue: number[] | null // 账号 group_ids

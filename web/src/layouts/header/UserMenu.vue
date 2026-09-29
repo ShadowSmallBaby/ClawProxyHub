@@ -37,9 +37,9 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { PoweroffIcon, SettingIcon, UserIcon } from 'tdesign-icons-vue-next'
-import i18n from '../../i18n'
-import { clearToken } from '../../api/client'
-import { useAsync } from '../../composables'
+import i18n from '@/i18n'
+import { clearToken } from '@/api/client'
+import { useAsync } from '@/composables'
 
 const props = defineProps<{
   username: string

@@ -33,8 +33,8 @@
 import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ChevronLeftIcon, ChevronRightIcon } from 'tdesign-icons-vue-next'
-import { branding, brandLogo, brandCustom } from '../utils/branding'
-import { useIsMobile } from '../composables'
+import { branding, brandLogo, brandCustom } from '@/utils/branding'
+import { useIsMobile } from '@/composables'
 import type { MenuItem } from './types'
 
 defineProps<{ items: MenuItem[] }>()

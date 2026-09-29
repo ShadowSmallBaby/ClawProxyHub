@@ -71,7 +71,7 @@
 </template>
 
 <script setup lang="ts">
-import { CCard, CTable } from '../../components/base'
+import { CCard, CTable } from '@/components/base'
 import StatCards from './parts/StatCards.vue'
 import QuotaCarousel from './parts/QuotaCarousel.vue'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -83,13 +83,13 @@ import { CanvasRenderer } from 'echarts/renderers'
 import {
   DashboardIcon, CheckCircleIcon, ChartBarIcon, UserIcon, AppIcon, LockOnIcon,
 } from 'tdesign-icons-vue-next'
-import { statsApi, type QuotaPlugin, type TrendPoint } from '../../api/stats'
-import { useChart } from '../../composables'
-import LogCells from '../../components/LogCells.vue'
-import { dict, protocolDict } from '../../utils/dict'
-import { modelLabel } from '../../utils/logfmt'
-import { fmtTime } from '../../utils/format'
-import type { RequestLog, Stats } from '../../api/types'
+import { statsApi, type QuotaPlugin, type TrendPoint } from '@/api/stats'
+import { useChart } from '@/composables'
+import LogCells from '@/components/LogCells.vue'
+import { dict, protocolDict } from '@/utils/dict'
+import { modelLabel } from '@/utils/logfmt'
+import { fmtTime } from '@/utils/format'
+import type { RequestLog, Stats } from '@/api/types'
 
 const { t } = useI18n()
 

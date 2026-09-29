@@ -40,7 +40,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ChevronLeftIcon, ChevronRightIcon } from 'tdesign-icons-vue-next'
-import { useIsMobile } from '../../../composables'
+import { useIsMobile } from '@/composables'
 
 export interface QuotaItem {
   plugin: string

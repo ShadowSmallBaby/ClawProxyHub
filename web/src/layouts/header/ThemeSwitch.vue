@@ -10,7 +10,7 @@
 
 <script setup lang="ts">
 import { MoonIcon, SunnyIcon } from 'tdesign-icons-vue-next'
-import { useTheme } from '../../composables'
+import { useTheme } from '@/composables'
 
 const { dark } = useTheme()
 </script>

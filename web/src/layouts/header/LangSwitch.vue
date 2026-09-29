@@ -23,7 +23,7 @@
 
 <script setup lang="ts">
 import { CheckIcon, TranslateIcon } from 'tdesign-icons-vue-next'
-import { useLocale, type Locale } from '../../composables'
+import { useLocale, type Locale } from '@/composables'
 
 const { locale, setLocale } = useLocale()
 const langs: Locale[] = ['zh', 'en']

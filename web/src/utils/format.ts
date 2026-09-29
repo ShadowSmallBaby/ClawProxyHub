@@ -1,5 +1,5 @@
 // 通用格式化：相对时间 / 绝对时间 / 数字缩写 / 字节数。
-import i18n from '../i18n'
+import i18n from '@/i18n'
 
 const t = (k: string, v?: Record<string, unknown>) => i18n.global.t(k, v ?? {})
 

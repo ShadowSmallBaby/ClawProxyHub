@@ -1,5 +1,5 @@
 // 日志/最近请求共用的格式化。
-import type { RequestLog } from '../api/types'
+import type { RequestLog } from '@/api/types'
 
 // 大数缩写：如 35.9K / 110.2K
 export function fmtTokens(n: number): string {

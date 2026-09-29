@@ -126,20 +126,20 @@
 </template>
 
 <script setup lang="ts">
-import { CTabs } from '../../components/base'
-import { CDrawer } from '../../components/base'
-import { CCard, CTable, CPagination, MobileFab } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
+import { CTabs } from '@/components/base'
+import { CDrawer } from '@/components/base'
+import { CCard, CTable, CPagination, MobileFab } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AddIcon, RefreshIcon } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { accountApi, pluginApi, taskApi } from '../../api/entities'
-import { pluginLabelOf } from '../../utils/lookup'
-import { useIsMobile } from '../../composables'
-import { dict, runStatusDict, triggerDict } from '../../utils/dict'
-import { fmtTime, normalizeTime } from '../../utils/format'
-import type { TaskRule, TaskRun } from '../../api/types'
+import { accountApi, pluginApi, taskApi } from '@/api/entities'
+import { pluginLabelOf } from '@/utils/lookup'
+import { useIsMobile } from '@/composables'
+import { dict, runStatusDict, triggerDict } from '@/utils/dict'
+import { fmtTime, normalizeTime } from '@/utils/format'
+import type { TaskRule, TaskRun } from '@/api/types'
 
 const { t } = useI18n()
 const { isPhone } = useIsMobile()

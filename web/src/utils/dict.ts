@@ -1,5 +1,5 @@
 // 枚举值 → 双语文案字典；dict()/label() 均跟随当前语言（i18n locale 响应式）。
-import i18n from '../i18n'
+import i18n from '@/i18n'
 
 // 双语文案：zh / en
 type Bi = { zh: string; en: string }

@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { getToken, getRole } from '../api/client'
+import { getToken, getRole } from '@/api/client'
 
 // guest 角色可访问的路径（与后端 menusForRole 保持一致）
 const GUEST_PATHS = ['dashboard', 'logs', 'profile']
@@ -7,28 +7,28 @@ const GUEST_PATHS = ['dashboard', 'logs', 'profile']
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/login', component: () => import('../views/auth/Login.vue') },
-    { path: '/setup', component: () => import('../views/auth/Setup.vue') },
+    { path: '/login', component: () => import('@/views/auth/Login.vue') },
+    { path: '/setup', component: () => import('@/views/auth/Setup.vue') },
     {
       path: '/',
-      component: () => import('../layouts/AppLayout.vue'),
+      component: () => import('@/layouts/AppLayout.vue'),
       children: [
         { path: '', redirect: '/dashboard' },
-        { path: 'dashboard', component: () => import('../views/dashboard/Dashboard.vue') },
-        { path: 'plugins', component: () => import('../views/plugins/Plugins.vue') },
-        { path: 'plugins/editor', component: () => import('../views/plugins/PluginEditor.vue') },
-        { path: 'plugins/editor/:name', component: () => import('../views/plugins/PluginEditor.vue') },
-        { path: 'instances', component: () => import('../views/instances/Instances.vue') },
-        { path: 'accounts', component: () => import('../views/accounts/Accounts.vue') },
-        { path: 'groups', component: () => import('../views/groups/Groups.vue') },
-        { path: 'proxies', component: () => import('../views/proxies/Proxies.vue') },
-        { path: 'routes', component: () => import('../views/routes/Routes.vue') },
-        { path: 'keys', component: () => import('../views/keys/Keys.vue') },
-        { path: 'oauth', component: () => import('../views/oauth/OAuth.vue') },
-        { path: 'tasks', component: () => import('../views/tasks/Tasks.vue') },
-        { path: 'logs', component: () => import('../views/logs/Logs.vue') },
-        { path: 'settings', component: () => import('../views/settings/Settings.vue') },
-        { path: 'profile', component: () => import('../views/profile/Profile.vue') },
+        { path: 'dashboard', component: () => import('@/views/dashboard/Dashboard.vue') },
+        { path: 'plugins', component: () => import('@/views/plugins/Plugins.vue') },
+        { path: 'plugins/editor', component: () => import('@/views/plugins/PluginEditor.vue') },
+        { path: 'plugins/editor/:name', component: () => import('@/views/plugins/PluginEditor.vue') },
+        { path: 'instances', component: () => import('@/views/instances/Instances.vue') },
+        { path: 'accounts', component: () => import('@/views/accounts/Accounts.vue') },
+        { path: 'groups', component: () => import('@/views/groups/Groups.vue') },
+        { path: 'proxies', component: () => import('@/views/proxies/Proxies.vue') },
+        { path: 'routes', component: () => import('@/views/routes/Routes.vue') },
+        { path: 'keys', component: () => import('@/views/keys/Keys.vue') },
+        { path: 'oauth', component: () => import('@/views/oauth/OAuth.vue') },
+        { path: 'tasks', component: () => import('@/views/tasks/Tasks.vue') },
+        { path: 'logs', component: () => import('@/views/logs/Logs.vue') },
+        { path: 'settings', component: () => import('@/views/settings/Settings.vue') },
+        { path: 'profile', component: () => import('@/views/profile/Profile.vue') },
       ],
     },
   ],

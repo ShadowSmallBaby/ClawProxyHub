@@ -39,9 +39,9 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { NotificationIcon } from 'tdesign-icons-vue-next'
-import { notificationApi, type Notification } from '../../api/auth'
-import { CDialog } from '../../components/base'
-import { fmtTime } from '../../utils/format'
+import { notificationApi, type Notification } from '@/api/auth'
+import { CDialog } from '@/components/base'
+import { fmtTime } from '@/utils/format'
 
 const notifications = ref<Notification[]>([])
 const unread = ref(0)

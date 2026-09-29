@@ -193,7 +193,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.code-editor { display: flex; border: 1px solid var(--td-component-stroke); border-radius: 6px; overflow: hidden; background: #1e222a; }
+.code-editor { position: relative; display: flex; border: 1px solid var(--td-component-stroke); border-radius: 6px; overflow: hidden; background: #1e222a; }
 .ce-cm { flex: 1; min-width: 0; }
 .ce-cm :deep(.cm-editor) { height: 100%; font-size: 13px; }
 .ce-cm :deep(.cm-editor) .cm-gutters { background: #1e222a; color: #5c6370; border-right: 1px solid #2c313a; }
@@ -210,5 +210,58 @@ onBeforeUnmount(() => {
   flex: 1; padding: 8px 10px; border: none; outline: none; resize: none;
   font-family: ui-monospace, monospace; font-size: 13px; line-height: 20px;
   white-space: pre; overflow: auto; background: transparent; color: #d7dae0;
+}
+
+/* 搜索面板：右上角浮层（VSCode 风格），不挤占编辑区 */
+.ce-cm :deep(.cm-panels) {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 10;
+  width: auto;
+  min-width: 240px;
+  border: 1px solid #3a3f4b;
+  border-radius: 8px;
+  background: #252932;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+.ce-cm :deep(.cm-panels.cm-panels-top) {
+  border-bottom: none;
+}
+.ce-cm :deep(.cm-panel) {
+  padding: 6px 8px;
+}
+.ce-cm :deep(.cm-panel input) {
+  background: #1e222a;
+  color: #d7dae0;
+  border: 1px solid #3a3f4b;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+  outline: none;
+}
+.ce-cm :deep(.cm-panel input:focus) {
+  border-color: #4c7dff;
+}
+.ce-cm :deep(.cm-panel button) {
+  color: #9aa1ad;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.ce-cm :deep(.cm-panel button:hover) {
+  color: #d7dae0;
+  background: #31363f;
+}
+.ce-cm :deep(.cm-panel button[name=close]) {
+  color: #7f848e;
+}
+.ce-cm :deep(.cm-panel label) {
+  color: #9aa1ad;
+  font-size: 11px;
 }
 </style>

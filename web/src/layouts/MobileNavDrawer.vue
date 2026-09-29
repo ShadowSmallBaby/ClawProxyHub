@@ -30,7 +30,7 @@
 
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { branding, brandLogo, brandCustom } from '../utils/branding'
+import { branding, brandLogo, brandCustom } from '@/utils/branding'
 import ActionIcons from './ActionIcons.vue'
 import type { MenuItem } from './types'
 

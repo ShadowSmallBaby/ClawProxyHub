@@ -193,21 +193,21 @@
 </template>
 
 <script setup lang="ts">
-import { CTable, CTabs, CPagination, MobileFab , CDrawer } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
+import { CTable, CTabs, CPagination, MobileFab , CDrawer } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { DownloadIcon, FilterIcon } from 'tdesign-icons-vue-next'
-import { logsApi, runLogsApi } from '../../api/logs'
-import { pluginApi } from '../../api/entities'
-import LogCells from '../../components/LogCells.vue'
-import EllipsisCell from '../../components/EllipsisCell.vue'
-import { pluginLabelOf } from '../../utils/lookup'
-import { usePagination, useIsMobile } from '../../composables'
-import { dict, protocolDict } from '../../utils/dict'
-import { modelLabel } from '../../utils/logfmt'
-import { fmtTime } from '../../utils/format'
-import type { RequestLog, RunLog } from '../../api/types'
+import { logsApi, runLogsApi } from '@/api/logs'
+import { pluginApi } from '@/api/entities'
+import LogCells from '@/components/LogCells.vue'
+import EllipsisCell from '@/components/EllipsisCell.vue'
+import { pluginLabelOf } from '@/utils/lookup'
+import { usePagination, useIsMobile } from '@/composables'
+import { dict, protocolDict } from '@/utils/dict'
+import { modelLabel } from '@/utils/logfmt'
+import { fmtTime } from '@/utils/format'
+import type { RequestLog, RunLog } from '@/api/types'
 
 const { t } = useI18n()
 const { isPhone } = useIsMobile()

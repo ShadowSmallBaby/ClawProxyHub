@@ -119,18 +119,18 @@
 </template>
 
 <script setup lang="ts">
-import { CDrawer } from '../../components/base'
-import { CCard, CTable, MobileFab } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
-import { useAsync, useIsMobile } from '../../composables'
+import { CDrawer } from '@/components/base'
+import { CCard, CTable, MobileFab } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
+import { useAsync, useIsMobile } from '@/composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AddIcon, MinusCircleIcon } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { groupApi, routeApi } from '../../api/entities'
-import BindSelect from '../../components/BindSelect.vue'
-import { dict, strategyDict } from '../../utils/dict'
-import type { GroupInfo, RouteGroupEntry, RouteInfo } from '../../api/types'
+import { groupApi, routeApi } from '@/api/entities'
+import BindSelect from '@/components/BindSelect.vue'
+import { dict, strategyDict } from '@/utils/dict'
+import type { GroupInfo, RouteGroupEntry, RouteInfo } from '@/api/types'
 
 const { t } = useI18n()
 const { isPhone } = useIsMobile()

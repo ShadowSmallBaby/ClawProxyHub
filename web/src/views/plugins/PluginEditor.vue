@@ -48,9 +48,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { ArrowLeftIcon } from 'tdesign-icons-vue-next'
-import { CDrawer } from '../../components/base'
-import CodeEditor from '../../components/CodeEditor.vue'
-import { pluginApi } from '../../api/entities'
+import { CDrawer } from '@/components/base'
+import CodeEditor from '@/components/CodeEditor.vue'
+import { pluginApi } from '@/api/entities'
 
 const route = useRoute()
 const router = useRouter()

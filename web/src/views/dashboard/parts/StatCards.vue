@@ -19,8 +19,8 @@
 
 <script setup lang="ts">
 import type { Component } from 'vue'
-import { CCard } from '../../../components/base'
-import { useIsMobile } from '../../../composables'
+import { CCard } from '@/components/base'
+import { useIsMobile } from '@/composables'
 
 export interface StatCard {
   label: string

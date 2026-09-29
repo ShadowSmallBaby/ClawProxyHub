@@ -32,9 +32,9 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { CDrawer } from './base'
-import { api } from '../api/client'
-import type { DeleteImpact } from '../api/types'
-import { notifyDeleteImpact } from '../utils/impact'
+import { api } from '@/api/client'
+import type { DeleteImpact } from '@/api/types'
+import { notifyDeleteImpact } from '@/utils/impact'
 
 const props = defineProps<{
   visible: boolean

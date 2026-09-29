@@ -34,15 +34,15 @@
 </template>
 
 <script setup lang="ts">
-import { CDrawer } from '../../components/base'
-import { CCard, CTable } from '../../components/base'
+import { CDrawer } from '@/components/base'
+import { CCard, CTable } from '@/components/base'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { clearToken } from '../../api/client'
-import { authApi, type Me } from '../../api/auth'
-import { fmtTime } from '../../utils/format'
+import { clearToken } from '@/api/client'
+import { authApi, type Me } from '@/api/auth'
+import { fmtTime } from '@/utils/format'
 
 const { t } = useI18n()
 const router = useRouter()

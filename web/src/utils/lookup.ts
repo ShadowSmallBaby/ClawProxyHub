@@ -1,10 +1,10 @@
 // 关联字段展示辅助：插件品牌名 / 实例名 / 实例下拉项（Accounts/Groups/Instances/Logs/Tasks 复用）。
-import type { GroupInfo, InstanceInfo } from '../api/types'
-import type { PluginInfo } from '../api/types'
+import type { GroupInfo, InstanceInfo } from '@/api/types'
+import type { PluginInfo } from '@/api/types'
 
 // 最小插件结构（列表页只有 {id,label,name} 也够）
 interface PluginLite { id: number; name: string; label?: string }
-import type { Proxy } from '../api/entities'
+import type { Proxy } from '@/api/entities'
 
 // 插件品牌名映射：关联字段统一显示品牌而非 id；无插件（0/null）显示 -
 export function pluginLabelOf(plugins: (PluginInfo | PluginLite)[], id: number | null | undefined): string {

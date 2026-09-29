@@ -10,7 +10,7 @@
 </template>
 
 <script setup lang="ts">
-import { useIsMobile } from '../../composables'
+import { useIsMobile } from '@/composables'
 
 defineOptions({ inheritAttrs: false })
 

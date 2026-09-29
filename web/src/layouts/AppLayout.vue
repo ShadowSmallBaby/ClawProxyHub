@@ -21,8 +21,8 @@ import { DashboardIcon, AppIcon, UserIcon, FolderIcon, InternetIcon, LockOnIcon,
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
 import MobileNavDrawer from './MobileNavDrawer.vue'
-import { authApi } from '../api/auth'
-import { useTheme, useIsMobile } from '../composables'
+import { authApi } from '@/api/auth'
+import { useTheme, useIsMobile } from '@/composables'
 import type { MenuItem } from './types'
 
 useTheme()

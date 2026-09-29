@@ -24,9 +24,9 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { CDialog } from '../../components/base'
-import { versionApi, type Changelog } from '../../api/auth'
-import { useLocalizedText } from '../../composables'
+import { CDialog } from '@/components/base'
+import { versionApi, type Changelog } from '@/api/auth'
+import { useLocalizedText } from '@/composables'
 
 const { t } = useI18n()
 const clText = useLocalizedText()

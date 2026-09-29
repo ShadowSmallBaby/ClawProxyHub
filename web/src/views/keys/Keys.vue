@@ -72,19 +72,19 @@
 </template>
 
 <script setup lang="ts">
-import { CDrawer } from '../../components/base'
-import { CCard, CTable, MobileFab } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
-import { useAsync, useIsMobile } from '../../composables'
-import { useDialogVisible } from '../../composables'
+import { CDrawer } from '@/components/base'
+import { CCard, CTable, MobileFab } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
+import { useAsync, useIsMobile } from '@/composables'
+import { useDialogVisible } from '@/composables'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { FileCopyIcon, AddIcon } from 'tdesign-icons-vue-next'
-import { keyApi, routeApi } from '../../api/entities'
-import { timeAgo, fmtTime } from '../../utils/format'
-import BindSelect from '../../components/BindSelect.vue'
-import type { KeyInfo, RouteInfo } from '../../api/types'
+import { keyApi, routeApi } from '@/api/entities'
+import { timeAgo, fmtTime } from '@/utils/format'
+import BindSelect from '@/components/BindSelect.vue'
+import type { KeyInfo, RouteInfo } from '@/api/types'
 
 const { t } = useI18n()
 const { isPhone } = useIsMobile()
