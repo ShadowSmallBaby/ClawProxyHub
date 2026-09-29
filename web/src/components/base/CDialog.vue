@@ -4,6 +4,7 @@
     v-bind="dialogAttrs"
     :visible="visible"
     :width="dialogWidth"
+    placement="center"
     :footer="false"
     :close-btn="!showActions"
     :close-on-overlay-click="true"
@@ -100,16 +101,26 @@ const dialogWidth = computed(() => (isPhone.value ? '85%' : props.width || '480p
   .c-dialog.t-dialog__ctx {
     z-index: 2600;
   }
+
+  /* position 容器上下留白收窄，给内容更多空间 */
+  .c-dialog .t-dialog__position {
+    padding: 24px 0;
+  }
+  /* dialog 弹性限高：内容多时整卡不超过视口，body 内部滚动 */
   .c-dialog .t-dialog {
+    display: flex;
+    flex-direction: column;
     border-radius: 12px;
-    max-height: calc(100vh - 48px); /* 上下留 24px，不超出视口 */
+    max-height: 100%;
   }
   .c-dialog .t-dialog__header {
+    flex-shrink: 0;
     padding: 10px 14px;
   }
   .c-dialog .t-dialog__body {
+    flex: 1;
+    min-height: 0;
     padding: 12px 14px;
-    max-height: calc(100vh - 144px);
     overflow-y: auto;
   }
 }

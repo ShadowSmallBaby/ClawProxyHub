@@ -97,13 +97,30 @@ function buildCompletionSource() {
   }
 }
 
+// CodeMirror 内置 UI 中文案（搜索面板等），经 EditorState.phrases facet 注入
+const CM_PHRASES = {
+  Find: '查找',
+  Replace: '替换',
+  next: '下一个',
+  previous: '上一个',
+  all: '全部',
+  replace: '替换',
+  'replace all': '全部替换',
+  'match case': '区分大小写',
+  regexp: '正则',
+  'by word': '整词',
+  close: '关闭',
+  'goto line': '跳转到行',
+}
+
 async function mountCM() {
-  const [cmLang, cmView, cmCmds, cmAuto, cmSearch, legacy] = await Promise.all([
+  const [cmLang, cmView, cmCmds, cmAuto, cmSearch, cmState, legacy] = await Promise.all([
     import('@codemirror/language'),
     import('@codemirror/view'),
     import('@codemirror/commands'),
     import('@codemirror/autocomplete'),
     import('@codemirror/search'),
+    import('@codemirror/state'),
     import('@codemirror/legacy-modes/mode/lua'),
   ])
   const { StreamLanguage, syntaxHighlighting, HighlightStyle } = cmLang as any
@@ -114,6 +131,7 @@ async function mountCM() {
   const { tags } = await import('@lezer/highlight')
 
   // CJS 互操作兜底：命名导出缺失回退 default；extension 用 flat 归一化（spread 非数组会抛错）
+  const { EditorState } = cmState as any
   const luaMode = legacy.lua ?? (legacy as any).default?.lua ?? (() => null)
   const baseKeymap = [
     indentWithTab,
@@ -138,6 +156,7 @@ async function mountCM() {
     parent: cmRef.value!,
     doc: props.modelValue,
     extensions: [
+      EditorState.phrases.of(CM_PHRASES),
       lineNumbers(),
       highlightActiveLine(),
       drawSelection(),
@@ -218,8 +237,8 @@ onBeforeUnmount(() => {
   top: 6px;
   right: 8px;
   z-index: 10;
-  width: auto;
-  min-width: 240px;
+  width: 38%;          /* 35–40%，不撑满编辑区 */
+  min-width: 280px;
   border: 1px solid #3a3f4b;
   border-radius: 8px;
   background: #252932;
@@ -263,5 +282,18 @@ onBeforeUnmount(() => {
 .ce-cm :deep(.cm-panel label) {
   color: #9aa1ad;
   font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.ce-cm :deep(.cm-panel label input[type=checkbox]) {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: #4c7dff;
+  cursor: pointer;
 }
 </style>

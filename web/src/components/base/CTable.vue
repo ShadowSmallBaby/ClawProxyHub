@@ -52,7 +52,7 @@ const props = defineProps<{
   loading?: boolean
   // 移动端改卡片渲染（桌面不受影响）
   mobileCards?: boolean
-  // 手机端只展示这些列（colKey），其余折叠；不传则全展示。平板始终全展示
+  // 手机端只展示这些列（colKey），其余折叠；不传则全展示
   phoneCols?: string[]
   // 操作列 colKey，卡片里单独放底部
   opKey?: string
@@ -79,7 +79,7 @@ function toggleFold(row: Record<string, any>, index: number) {
   expanded.value = next
 }
 
-// 手机端按 phoneCols 折叠，平板/未配置则全展示
+// 手机端按 phoneCols 折叠，未配置则全展示
 function isFolded(col: Column): boolean {
   if (!isPhone.value || !props.phoneCols?.length) return false
   if (col.colKey === opKey.value) return false
