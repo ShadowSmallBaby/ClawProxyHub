@@ -2,8 +2,10 @@
 <template>
   <t-layout class="layout">
     <app-sidebar :items="visibleMenuItems" />
+    <!-- 移动端：侧栏改为抽屉（品牌区 + 菜单 + 功能区 footer） -->
+    <mobile-nav-drawer v-if="isMobile" v-model:visible="drawerVisible" :items="visibleMenuItems" />
     <t-layout>
-      <app-header :username="username" :role="role" :current-page="currentPage" />
+      <app-header :username="username" :role="role" :current-page="currentPage" :is-mobile="isMobile" @toggle-menu="drawerVisible = true" />
       <!-- 内容区域：内部滚动，头部与侧栏固定 -->
       <t-content class="content">
         <router-view />
@@ -18,13 +20,16 @@ import { useRoute } from 'vue-router'
 import { DashboardIcon, AppIcon, UserIcon, FolderIcon, InternetIcon, LockOnIcon, TimeIcon, FileIcon, RootListIcon, SettingIcon, CertificateIcon, ServerIcon } from 'tdesign-icons-vue-next'
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
+import MobileNavDrawer from './MobileNavDrawer.vue'
 import { authApi } from '../api/auth'
-import { useTheme } from '../composables'
+import { useTheme, useIsMobile } from '../composables'
 import type { MenuItem } from './types'
 
 useTheme()
 
 const route = useRoute()
+const { isMobile } = useIsMobile()
+const drawerVisible = ref(false)
 
 // 用户名由 /admin/me 下发（token 已是 JWT，不能再从中拆用户名）
 const username = ref('')

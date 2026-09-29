@@ -43,7 +43,7 @@ import { useAsync } from '../../composables'
 
 const props = defineProps<{
   username: string
-  role: string
+  role?: string
 }>()
 
 const { t } = useI18n()

@@ -1,7 +1,7 @@
-<!-- AppSidebar — 侧栏：logo + 菜单 + 收起脚。 -->
+<!-- AppSidebar — 侧栏：logo + 菜单 + 收起脚。桌面固定 aside；移动端由 AppLayout 用 t-drawer 承载。 -->
 <template>
-  <t-aside :width="collapsed ? '64px' : '200px'" class="aside">
-    <div class="logo" @click="router.push('/dashboard')">
+  <t-aside :width="collapsed ? '64px' : '200px'" class="aside" :class="{ 'aside-hidden': isMobile }">
+    <div class="logo" @click="goHome">
       <img class="logo-badge" :src="brandLogo" :alt="branding.name" />
       <span v-if="!collapsed" class="logo-text" :class="{ custom: brandCustom }" :title="branding.name">
         <template v-if="brandCustom">{{ branding.name }}</template>
@@ -13,7 +13,7 @@
       :collapsed="collapsed"
       :width="collapsed ? '64px' : '200px'"
       class="aside-menu"
-      @change="(v: string) => router.push(v)"
+      @change="onChange"
     >
       <t-menu-item v-for="item in items" :key="item.value" :value="item.value">
         <template #icon><component :is="item.icon" /></template>{{ $t(item.label) }}
@@ -30,19 +30,30 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ChevronLeftIcon, ChevronRightIcon } from 'tdesign-icons-vue-next'
 import { branding, brandLogo, brandCustom } from '../utils/branding'
+import { useIsMobile } from '../composables'
 import type { MenuItem } from './types'
 
 defineProps<{ items: MenuItem[] }>()
 
 const route = useRoute()
 const router = useRouter()
+const { isMobile } = useIsMobile()
 
 // 收起状态持久化
 const collapsed = ref(localStorage.getItem('cph-sidebar') === 'collapsed')
+watch(collapsed, (v) => localStorage.setItem('cph-sidebar', v ? 'collapsed' : 'expanded'))
+
+function goHome() {
+  router.push('/dashboard')
+}
+
+function onChange(v: string) {
+  router.push(v)
+}
 </script>
 
 <style scoped>
@@ -52,6 +63,14 @@ const collapsed = ref(localStorage.getItem('cph-sidebar') === 'collapsed')
   flex-direction: column;
   transition: width 0.25s;
   overflow: hidden;
+}
+/* 移动端侧栏由抽屉承载，aside 不占位 */
+.aside-hidden {
+  display: none;
+}
+/* 移动端侧栏由抽屉承载，aside 不占位 */
+.aside-hidden {
+  display: none;
 }
 .logo {
   height: 64px;

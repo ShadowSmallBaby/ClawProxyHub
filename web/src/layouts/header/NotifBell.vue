@@ -29,17 +29,18 @@
     </template>
   </t-popup>
 
-  <!-- 通知详情弹窗 -->
-  <t-dialog v-model:visible="detailVisible" :header="current?.title" :footer="false" width="480px">
+  <!-- 通知详情弹窗（二次封装：移动端两侧留间距） -->
+  <c-dialog v-model:visible="detailVisible" :header="current?.title" :footer="false" width="480px">
     <div class="notif-content">{{ current?.content }}</div>
     <div v-if="current" class="notif-meta">{{ fmtTime(current.created_at) }}</div>
-  </t-dialog>
+  </c-dialog>
 </template>
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { NotificationIcon } from 'tdesign-icons-vue-next'
 import { notificationApi, type Notification } from '../../api/auth'
+import { CDialog } from '../../components/base'
 import { fmtTime } from '../../utils/format'
 
 const notifications = ref<Notification[]>([])
