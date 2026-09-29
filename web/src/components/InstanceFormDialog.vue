@@ -1,7 +1,7 @@
 <template>
   <!-- 实例新建/编辑：名称 + 地址固定，其余按插件 instance_schema 动态渲染；
        新建且传入 plugins 时在弹窗内选插件（仅多实例插件） -->
-  <t-dialog
+  <c-drawer
     :visible="visible"
     :header="instance ? $t('instances.editTitle') : $t('instances.add')"
     :confirm-btn="{ loading: saving }"
@@ -38,13 +38,14 @@
         </t-form-item>
       </template>
     </t-form>
-  </t-dialog>
+  </c-drawer>
 </template>
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
+import { CDrawer } from './base'
 import { instanceApi } from '../api/entities'
 import type { InstanceInfo, PluginInfo } from '../api/types'
 
@@ -133,6 +134,11 @@ async function submit() {
     normalizeHost()
     if (!form.host) {
       MessagePlugin.warning(t('instances.baseUrlRequired'))
+      return
+    }
+    // host 格式：域名或 IP[:port]，纯数字 1 这类非法输入拦下
+    if (!/^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?(:[0-9]{1,5})?$/.test(form.host)) {
+      MessagePlugin.warning(t('instances.baseUrlInvalid'))
       return
     }
   }

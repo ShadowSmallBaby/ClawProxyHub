@@ -1,9 +1,8 @@
 <template>
   <!-- 删除确认：先拉影响面预览，确认后执行级联删除；路由/密钥引用不自动改，删完弹窗提醒 -->
-  <t-dialog
+  <c-drawer
     :visible="visible"
     :header="header"
-    theme="warning"
     width="520px"
     :confirm-btn="{ content: t('common.delete'), theme: 'danger', loading: deleting }"
     @update:visible="(v: boolean) => emit('update:visible', v)"
@@ -25,13 +24,14 @@
         </t-alert>
       </template>
     </t-loading>
-  </t-dialog>
+  </c-drawer>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
+import { CDrawer } from './base'
 import { api } from '../api/client'
 import type { DeleteImpact } from '../api/types'
 import { notifyDeleteImpact } from '../utils/impact'

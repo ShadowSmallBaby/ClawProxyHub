@@ -1,14 +1,13 @@
 <!-- OpProgressDialog — 操作进度弹窗：安装 / 升级 / 重启 / 卸载共用。
      顶部步骤条概览（待办 → 进行中 → 完成 / 失败），下方带时间戳的日志流。 -->
 <template>
-  <c-dialog
+  <c-drawer
     :visible="visible"
     :header="header"
     width="480px"
     :close-on-overlay-click="false"
     :close-on-esc-keydown="false"
-    :close-btn="!running"
-    :footer="!running || cancelable"
+    :footer="false"
     @update:visible="(v: boolean) => emit('update:visible', v)"
   >
     <!-- 步骤条概览 -->
@@ -32,20 +31,17 @@
       </div>
     </div>
 
-    <!-- 进行中且可取消（含下载）显示取消；否则完成/失败显示关闭 -->
-    <template #footer>
-      <t-button v-if="running" theme="danger" variant="outline" :disabled="!cancelable" @click="emit('cancel')">
-        {{ t('common.cancel') }}
-      </t-button>
-      <t-button v-else theme="default" @click="emit('update:visible', false)">{{ t('common.close') }}</t-button>
-    </template>
-  </c-dialog>
+    <!-- 进行中且可取消（含下载）显示取消；完成/失败靠点遮罩关闭 -->
+    <t-button v-if="running" block theme="danger" variant="outline" :disabled="!cancelable" style="margin-top: 12px" @click="emit('cancel')">
+      {{ t('common.cancel') }}
+    </t-button>
+  </c-drawer>
 </template>
 
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { CDialog } from './base'
+import { CDrawer } from './base'
 
 // 一步：pending 待办 / active 进行中 / done 完成 / error 失败
 export interface OpStep { key: string; label: string; status: 'pending' | 'active' | 'done' | 'error' }
