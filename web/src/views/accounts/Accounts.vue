@@ -1,11 +1,16 @@
 <template>
   <div class="page">
-    <page-header>
+    <page-header v-if="!isPhone">
       <t-select v-model="instanceFilter" clearable :placeholder="$t('accounts.filterInstance')" :options="instanceFilterOptions" style="width: 240px" />
       <t-button theme="primary" :disabled="!plugins.length" @click="openAdd">{{ $t('accounts.add') }}</t-button>
     </page-header>
 
-    <c-table row-key="id" :data="filteredAccounts" :columns="columns" :loading="loading">
+    <!-- 手机端：实例筛选收进底部抽屉 -->
+    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('accounts.filterInstance')" placement="bottom" size="85%" :footer="false">
+      <t-select v-model="instanceFilter" clearable :placeholder="$t('accounts.filterInstance')" :options="instanceFilterOptions" />
+    </c-drawer>
+
+    <c-table row-key="id" :data="filteredAccounts" :columns="columns" :loading="loading" mobile-cards :phone-cols="['display_name', 'status', 'credits']">
       <template #display_name="{ row }">
         <span class="acct-name" @click="openDetail(row.id)">{{ row.display_name || `#${row.id}` }}</span>
       </template>
@@ -54,7 +59,7 @@
     </c-table>
 
     <!-- 账号详情：套餐/积分 + 任务执行情况 -->
-    <t-drawer v-model:visible="detailVisible" :header="detailHeader" size="720px">
+    <c-drawer v-model:visible="detailVisible" :header="detailHeader" :placement="isPhone ? 'bottom' : 'right'" :size="isPhone ? '85%' : '720px'" :footer="false" close-on-overlay-click>
       <t-space v-if="detail" direction="vertical" style="width: 100%" size="large">
         <t-descriptions :column="1" bordered size="small">
           <t-descriptions-item :label="$t('accounts.account')">{{ detail.display_name || `#${detail.id}` }}</t-descriptions-item>
@@ -116,10 +121,10 @@
           <t-empty v-else :description="$t('accounts.noRuns')" />
         </div>
       </t-space>
-    </t-drawer>
+    </c-drawer>
 
     <!-- 添加账号：向导（选择客户端 → 授权 → 配置） -->
-    <c-dialog v-model:visible="addVisible" :header="$t('accounts.add')" :footer="false" width="680px" :close-on-overlay-click="false">
+    <c-drawer v-model:visible="addVisible" :header="$t('accounts.add')" :footer="false" width="680px" :close-on-overlay-click="false">
 
       <!-- 第一步：选择客户端（卡片平铺，每行四个；登录要走插件进程，只列运行中的） -->
       <template v-if="wizardStep === 'select'">
@@ -264,10 +269,10 @@
         </div>
         <t-button theme="primary" block :loading="savingConfig" @click="finishWizard">{{ $t('accounts.finish') }}</t-button>
       </t-space>
-    </c-dialog>
+    </c-drawer>
 
     <!-- 编辑账号：改名 / 绑分组 / 绑代理 / 同步模型 -->
-    <c-dialog v-model:visible="editVisible" :header="$t('accounts.editTitle')" :confirm-btn="{ loading: editSaving }" width="640px" @confirm="submitEdit">
+    <c-drawer v-model:visible="editVisible" :header="$t('accounts.editTitle')" :confirm-btn="{ loading: editSaving }" width="640px" @confirm="submitEdit">
       <t-form v-if="editRow" label-width="90px">
         <t-form-item :label="$t('accounts.name')">
           <t-input v-model="editName" :placeholder="$t('accounts.namePh')" clearable />
@@ -291,10 +296,10 @@
           </div>
         </t-form-item>
       </t-form>
-    </c-dialog>
+    </c-drawer>
 
     <!-- 在线测试：选端点/模型/问题 → 响应日志 -->
-    <t-drawer v-model:visible="testVisible" :header="$t('accounts.testTitle')" size="560px" :footer="false">
+    <c-drawer v-model:visible="testVisible" :header="$t('accounts.testTitle')" :placement="isPhone ? 'bottom' : 'right'" :size="isPhone ? '85%' : '560px'" :footer="false" close-on-overlay-click>
       <t-space v-if="testRow" direction="vertical" style="width: 100%" size="large">
         <t-form label-width="80px">
           <t-form-item :label="$t('accounts.testEndpoint')">
@@ -324,7 +329,7 @@
           <t-button variant="outline" block @click="exportTest">{{ $t('accounts.testExport') }}</t-button>
         </template>
       </t-space>
-    </t-drawer>
+    </c-drawer>
 
     <delete-impact-dialog
       v-model:visible="removeVisible"
@@ -334,11 +339,20 @@
       :delete-url="`/admin/accounts/${removing?.id ?? 0}`"
       @deleted="loadAll"
     />
+
+    <mobile-fab v-if="isPhone">
+      <t-button theme="default" variant="outline" shape="circle" size="large" @click="filterOpen = true">
+        <template #icon><filter-icon /></template>
+      </t-button>
+      <t-button theme="primary" shape="circle" size="large" :disabled="!plugins.length" @click="openAdd">
+        <template #icon><add-icon /></template>
+      </t-button>
+    </mobile-fab>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CCard, CDialog, CTable, CTabs } from '../../components/base'
+import { CCard, CDrawer, CTable, CTabs, MobileFab } from '../../components/base'
 import PageHeader from '../../components/PageHeader.vue'
 import EntityIcon from '../../components/EntityIcon.vue'
 import GroupPicker from './GroupPicker.vue'
@@ -347,8 +361,10 @@ import { timeAgo, fmtNum, fmtTime, normalizeTime } from '../../utils/format'
 import { copyText } from '../../utils/common'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useIsMobile } from '../../composables'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
+import { AddIcon, FilterIcon } from 'tdesign-icons-vue-next'
 import { accountApi, groupApi, instanceApi, pluginApi, proxyApi } from '../../api/entities'
 import BindSelect from '../../components/BindSelect.vue'
 import DeleteImpactDialog from '../../components/DeleteImpactDialog.vue'
@@ -357,6 +373,8 @@ import type { Account, AccountDetail, AuthMethod, GroupInfo, InstanceInfo, Login
 import { isQrDataUrl } from '../../api/types'
 
 const { t } = useI18n()
+const { isPhone } = useIsMobile()
+const filterOpen = ref(false)
 const router = useRouter()
 
 const plugins = ref<PluginInfo[]>([])
@@ -1083,9 +1101,19 @@ onMounted(loadAll)
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
-  max-height: 420px;
-  overflow-y: auto;
   padding-right: 4px;
+}
+
+/* 手机端：客户端卡片两列排布（minmax(0,1fr) 防长名撑破网格） */
+@media (max-width: 767px) {
+  .client-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .client-card {
+    padding: 12px;
+    min-width: 0;
+  }
 }
 .client-card {
   border: 1px solid var(--td-component-border);
@@ -1103,6 +1131,7 @@ onMounted(loadAll)
   align-items: center;
   gap: 10px;
   margin-bottom: 10px;
+  min-width: 0; /* 长名 ellipsis 生效的前提 */
 }
 .client-name {
   font-weight: 600;

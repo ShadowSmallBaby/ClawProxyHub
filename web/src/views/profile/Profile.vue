@@ -17,7 +17,7 @@
     </c-card>
 
     <!-- 修改密码：弹窗确认 -->
-    <c-dialog v-model:visible="pwVisible" :header="$t('settings.changePassword')" :confirm-btn="{ loading: savingPw }" @confirm="savePw">
+    <c-drawer v-model:visible="pwVisible" :header="$t('settings.changePassword')" :confirm-btn="{ loading: savingPw }" @confirm="savePw">
       <t-form label-width="110px">
         <t-form-item :label="$t('settings.oldPassword')" mark>
           <t-input v-model="pwForm.old" type="password" />
@@ -29,12 +29,12 @@
           <t-input v-model="pwForm.confirm" type="password" />
         </t-form-item>
       </t-form>
-    </c-dialog>
+    </c-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CDialog } from '../../components/base'
+import { CDrawer } from '../../components/base'
 import { CCard, CTable } from '../../components/base'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'

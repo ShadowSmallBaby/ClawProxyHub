@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <page-header>
+    <page-header v-if="!isPhone">
       
       <t-button theme="primary" @click="openCreate">{{ $t('proxies.create') }}</t-button>
     </page-header>
-    <c-table row-key="ID" :data="proxies" :columns="columns" :loading="loading">
+    <c-table row-key="ID" :data="proxies" :columns="columns" :loading="loading" mobile-cards>
       <template #op="{ row }">
         <t-space size="small">
           <t-link theme="primary" :loading="testingId === row.ID" @click="test(row)">{{ $t('proxies.test') }}</t-link>
@@ -16,7 +16,7 @@
       </template>
     </c-table>
 
-    <c-dialog v-model:visible="createVisible" :header="editingId ? $t('proxies.edit') : $t('proxies.create')" :confirm-btn="{ loading: creating }" @confirm="submit">
+    <c-drawer v-model:visible="createVisible" :header="editingId ? $t('proxies.edit') : $t('proxies.create')" :confirm-btn="{ loading: creating }" @confirm="submit">
       <t-form label-width="80px">
         <t-form-item :label="$t('proxies.name')">
           <t-input v-model="form.name" :placeholder="$t('common.optional')" />
@@ -42,21 +42,29 @@
         </t-form-item>
         <t-alert theme="info" :message="$t('proxies.hint')" />
       </t-form>
-    </c-dialog>
+    </c-drawer>
+
+    <mobile-fab v-if="isPhone">
+      <t-button theme="primary" shape="circle" size="large" @click="openCreate">
+        <template #icon><add-icon /></template>
+      </t-button>
+    </mobile-fab>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CDialog } from '../../components/base'
-import { CCard, CTable } from '../../components/base'
+import { CDrawer } from '../../components/base'
+import { CCard, CTable, MobileFab } from '../../components/base'
 import PageHeader from '../../components/PageHeader.vue'
-import { useAsync } from '../../composables'
+import { useAsync, useIsMobile } from '../../composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { AddIcon } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { proxyApi, type Proxy } from '../../api/entities'
 
 const { t } = useI18n()
+const { isPhone } = useIsMobile()
 
 const proxies = ref<Proxy[]>([])
 const createVisible = ref(false)

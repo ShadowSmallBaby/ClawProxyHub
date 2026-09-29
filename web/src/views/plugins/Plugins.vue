@@ -1,11 +1,11 @@
 <template>
   <div class="page">
-    <page-header>
+    <page-header v-if="!isPhone">
 
       <t-space>
         <t-button variant="outline" @click="openSources">{{ $t('plugins.sources') }}</t-button>
         <t-button variant="outline" :loading="marketLoading" @click="openMarket">{{ $t('plugins.market') }}</t-button>
-        <t-button variant="outline" @click="openEditor(null)">{{ $t('plugins.editorNew') }}</t-button>
+        <t-button v-if="!isPhone" variant="outline" @click="openEditor(null)">{{ $t('plugins.editorNew') }}</t-button>
         <t-upload
           :auto-upload="false"
           :show-upload-progress="false"
@@ -51,7 +51,7 @@
           <t-space size="small" class="plugin-ops">
             <t-link theme="primary" @click="openSettings(p)">{{ $t('plugins.settings') }}</t-link>
             <t-link v-if="p.multi_instance" theme="primary" @click="openInstances(p)">{{ $t('menu.instances') }}</t-link>
-            <t-link v-if="p.editable" theme="primary" @click="openEditor(p)">{{ $t('plugins.editorEdit') }}</t-link>
+            <t-link v-if="p.editable && !isPhone" theme="primary" @click="openEditor(p)">{{ $t('plugins.editorEdit') }}</t-link>
             <t-link theme="primary" @click="restart(p)">{{ $t('plugins.restart') }}</t-link>
             <t-link theme="warning" :disabled="!p.running" @click="stop(p.name)">{{ $t('plugins.stop') }}</t-link>
             <t-link theme="danger" @click="askUninstall(p)">{{ $t('plugins.uninstall') }}</t-link>
@@ -61,7 +61,7 @@
     </div>
 
     <!-- 市场：多源时按源下拉懒加载，默认 official -->
-    <t-drawer v-model:visible="marketVisible" :header="$t('plugins.market')" size="420px">
+    <c-drawer v-model:visible="marketVisible" :header="$t('plugins.market')" :placement="isPhone ? 'bottom' : 'right'" :size="isPhone ? '85%' : '420px'" :footer="false" close-on-overlay-click>
       <t-select v-if="sources.length > 1" v-model="marketSourceName" style="width: 100%; margin-bottom: 12px" @change="loadMarket">
         <t-option v-for="s in sources.filter((x) => x.enabled)" :key="s.name" :value="s.name" :label="s.name" />
       </t-select>
@@ -92,7 +92,7 @@
           </div>
         </div>
       </t-loading>
-    </t-drawer>
+    </c-drawer>
 
     <!-- 操作进度：安装 / 升级 / 重启 / 卸载；含下载的操作可中途取消 -->
     <op-progress-dialog
@@ -106,7 +106,7 @@
     />
 
     <!-- 插件设置：schema 动态渲染 -->
-    <c-dialog
+    <c-drawer
       v-model:visible="settingsVisible"
       :header="$t('plugins.settingsHeader', { name: settingsPlugin?.label || (settingsPlugin?.name ?? '') })"
       :confirm-btn="{ loading: savingSettings }"
@@ -126,14 +126,14 @@
         </t-form-item>
       </t-form>
       <t-alert v-if="settingFields.length" theme="info" :message="$t('plugins.settingsHint')" style="margin-top: 12px" />
-    </c-dialog>
+    </c-drawer>
 
     <!-- 插件实例：多实例插件的实例列表，统一在此增改删 -->
-    <t-drawer v-model:visible="instancesVisible" :header="$t('plugins.instancesHeader', { name: instancesPlugin?.label || (instancesPlugin?.name ?? '') })" size="640px" :footer="false">
+    <c-drawer v-model:visible="instancesVisible" :header="$t('plugins.instancesHeader', { name: instancesPlugin?.label || (instancesPlugin?.name ?? '') })" :placement="isPhone ? 'bottom' : 'right'" :size="isPhone ? '85%' : '640px'" :footer="false" close-on-overlay-click>
       <div style="margin-bottom: 12px">
         <t-button theme="primary" size="small" @click="openInstanceForm(null)">{{ $t('instances.add') }}</t-button>
       </div>
-      <c-table row-key="id" :data="pluginInstances" :columns="instanceColumns" size="small">
+      <c-table row-key="id" :data="pluginInstances" :columns="instanceColumns" size="small" mobile-cards>
         <template #base_url="{ row }"><span class="mono">{{ row.base_url || '-' }}</span></template>
         <template #op="{ row }">
           <t-space size="small">
@@ -142,7 +142,7 @@
           </t-space>
         </template>
       </c-table>
-    </t-drawer>
+    </c-drawer>
     <instance-form-dialog v-model:visible="instanceFormVisible" :plugin="instancesPlugin" :instance="instanceEditing" @saved="loadPluginInstances" />
     <delete-impact-dialog
       v-model:visible="removeVisible"
@@ -155,7 +155,7 @@
     />
 
     <!-- 插件源：卡片式（首卡 = 添加） -->
-    <t-drawer v-model:visible="sourcesVisible" :header="$t('plugins.sourcesTitle')" size="760px" :footer="false">
+    <c-drawer v-model:visible="sourcesVisible" :header="$t('plugins.sourcesTitle')" :placement="isPhone ? 'bottom' : 'right'" :size="isPhone ? '85%' : '760px'" :footer="false" close-on-overlay-click>
       <div class="source-grid">
         <div class="source-card source-add" @click="openSourceForm(null)">
           <div class="source-add-plus">＋</div>
@@ -181,10 +181,10 @@
           </div>
         </div>
       </div>
-    </t-drawer>
+    </c-drawer>
 
     <!-- 源新建/编辑：英文名全局唯一；保存前探测索引可达并记录条目数 -->
-    <c-dialog v-model:visible="sourceFormVisible" :header="sourceEditing ? $t('plugins.sourceEdit') : $t('plugins.sourceAdd')" :confirm-btn="{ loading: savingSources }" @confirm="saveSourceForm">
+    <c-drawer v-model:visible="sourceFormVisible" :header="sourceEditing ? $t('plugins.sourceEdit') : $t('plugins.sourceAdd')" :confirm-btn="{ loading: savingSources }" @confirm="saveSourceForm">
       <t-form label-width="90px">
         <t-form-item :label="$t('plugins.sourceName')" required-mark>
           <t-input v-model="sourceForm.name" :disabled="sourceEditing?.name === 'official'" placeholder="my-source" />
@@ -193,19 +193,35 @@
           <t-input v-model="sourceForm.url" placeholder="https://.../index.json" />
         </t-form-item>
       </t-form>
-    </c-dialog>
+    </c-drawer>
+
+    <!-- 手机端：插件源/市场/上传 收进悬浮按钮 -->
+    <mobile-fab v-if="isPhone">
+      <t-button theme="default" variant="outline" shape="circle" size="large" @click="openSources">
+        <template #icon><app-icon /></template>
+      </t-button>
+      <t-button theme="default" variant="outline" shape="circle" size="large" :loading="marketLoading" @click="openMarket">
+        <template #icon><shop-icon /></template>
+      </t-button>
+      <t-upload :auto-upload="false" :show-upload-progress="false" accept=".cphplugin,.zip" :request-method="uploadInstall" @fail="onUploadFail">
+        <t-button theme="primary" shape="circle" size="large">
+          <template #icon><cloud-upload-icon /></template>
+        </t-button>
+      </t-upload>
+    </mobile-fab>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CCard, CDialog, CTable } from '../../components/base'
+import { CCard, CDrawer, CTable, MobileFab } from '../../components/base'
 import EntityIcon from '../../components/EntityIcon.vue'
 import PageHeader from '../../components/PageHeader.vue'
-import { useAsync } from '../../composables'
+import { useAsync, useIsMobile } from '../../composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
+import { ShopIcon, CloudUploadIcon, AppIcon } from 'tdesign-icons-vue-next'
 import type { ResponseType } from 'tdesign-vue-next'
 import { pluginApi, pluginSourceApi, instanceApi, type MarketEntry } from '../../api/entities'
 import InstanceFormDialog from '../../components/InstanceFormDialog.vue'
@@ -217,6 +233,7 @@ import type { InstanceInfo, PluginInfo, PluginSource } from '../../api/types'
 
 const { t } = useI18n()
 const router = useRouter()
+const { isPhone } = useIsMobile()
 
 const plugins = ref<PluginInfo[]>([])
 
@@ -653,6 +670,9 @@ onMounted(load)
 
 /* 插件源卡片：每行三个，首卡为添加 */
 .source-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (max-width: 767px) {
+  .source-grid { grid-template-columns: 1fr; }
+}
 .source-card {
   border: 1px solid var(--td-component-stroke); border-radius: 10px; padding: 12px;
   display: flex; flex-direction: column; gap: 6px; min-height: 120px;

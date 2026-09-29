@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <page-header>
+    <page-header v-if="!isPhone">
 
       <t-button theme="primary" @click="openCreate">{{ $t('tasks.create') }}</t-button>
       <t-button v-if="tab === 'runs'" theme="default" variant="outline" :loading="runsLoading" @click="refreshRuns">
@@ -8,9 +8,9 @@
       </t-button>
     </page-header>
 
-    <c-tabs v-model="tab" class="task-tabs">
+    <c-tabs v-model="tab" class="task-tabs phone-scroll">
       <t-tab-panel value="rules" :label="$t('tasks.tabRules')">
-        <c-table row-key="id" :data="rules" :columns="ruleColumns" height="100%">
+        <c-table row-key="id" :data="rules" :columns="ruleColumns" height="100%" mobile-cards :phone-cols="['plugin', 'capability', 'enabled']">
           <template #trigger="{ row }">
             <t-tag variant="light">{{ dict(triggerDict, row.trigger_type) }}</t-tag>
           </template>
@@ -34,7 +34,7 @@
         </c-table>
       </t-tab-panel>
       <t-tab-panel value="runs" :label="$t('tasks.tabRuns')">
-        <c-table row-key="id" :data="runs" :columns="runColumns" height="100%">
+        <c-table row-key="id" :data="runs" :columns="runColumns" height="100%" mobile-cards :phone-cols="['plugin', 'status', 'started_at']">
           <template #status="{ row }">
             <!-- 错误信息并入状态 tooltip -->
             <t-tooltip
@@ -54,18 +54,16 @@
         </c-table>
       </t-tab-panel>
     </c-tabs>
-    <t-pagination
+    <c-pagination
       class="task-pagination"
       v-model="page"
       v-model:pageSize="pageSize"
       :total="tab === 'runs' ? runTotal : ruleTotal"
-      :page-size-options="[10, 30, 50, 100, 200]"
-      show-jumper
       @change="onPageChange"
       @page-size-change="onPageChange"
     />
 
-    <c-dialog v-model:visible="createVisible" :header="editingId ? $t('tasks.editTitle') : $t('tasks.createTitle')" width="560px" :confirm-btn="{ loading: creating }" @confirm="submit">
+    <c-drawer v-model:visible="createVisible" :header="editingId ? $t('tasks.editTitle') : $t('tasks.createTitle')" width="560px" :confirm-btn="{ loading: creating }" @confirm="submit">
       <t-form label-width="90px">
         <t-alert v-if="editingAuto" theme="info" :message="$t('tasks.autoLocked')" style="margin-bottom: 12px" />
         <t-form-item :label="$t('tasks.plugin')" mark>
@@ -113,25 +111,38 @@
           </t-select>
         </t-form-item>
       </t-form>
-    </c-dialog>
+    </c-drawer>
+
+    <!-- 手机端：新建/刷新 悬浮按钮 -->
+    <mobile-fab v-if="isPhone">
+      <t-button v-if="tab === 'runs'" theme="default" variant="outline" shape="circle" size="large" :loading="runsLoading" @click="refreshRuns">
+        <template #icon><refresh-icon /></template>
+      </t-button>
+      <t-button theme="primary" shape="circle" size="large" @click="openCreate">
+        <template #icon><add-icon /></template>
+      </t-button>
+    </mobile-fab>
   </div>
 </template>
 
 <script setup lang="ts">
 import { CTabs } from '../../components/base'
-import { CDialog } from '../../components/base'
-import { CCard, CTable } from '../../components/base'
+import { CDrawer } from '../../components/base'
+import { CCard, CTable, CPagination, MobileFab } from '../../components/base'
 import PageHeader from '../../components/PageHeader.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { AddIcon, RefreshIcon } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { accountApi, pluginApi, taskApi } from '../../api/entities'
 import { pluginLabelOf } from '../../utils/lookup'
+import { useIsMobile } from '../../composables'
 import { dict, runStatusDict, triggerDict } from '../../utils/dict'
 import { fmtTime, normalizeTime } from '../../utils/format'
 import type { TaskRule, TaskRun } from '../../api/types'
 
 const { t } = useI18n()
+const { isPhone } = useIsMobile()
 
 const tab = ref('rules')
 const rules = ref<TaskRule[]>([])
@@ -388,13 +399,6 @@ onMounted(load)
 </script>
 
 <style scoped>
-.page {
-  /* 撑满内容区：页头/分页固定，表格吃掉中间剩余高度并自适应窗口 */
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
 .page-header,
 .task-pagination {
   flex-shrink: 0;

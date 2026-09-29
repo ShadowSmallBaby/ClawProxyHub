@@ -77,6 +77,7 @@ async function onSetup() {
 }
 .setup-card {
   width: 360px;
+  max-width: calc(100vw - 32px); /* 手机端不溢出 */
   padding: 32px;
   background: var(--td-bg-color-container);
   border-radius: 8px;

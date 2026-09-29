@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <page-header>
+    <page-header v-if="!isPhone">
       
       <t-button theme="primary" @click="openCreate">{{ $t('routes.create') }}</t-button>
     </page-header>
-    <c-table row-key="ID" :data="routes" :columns="columns" :loading="loading">
+    <c-table row-key="ID" :data="routes" :columns="columns" :loading="loading" mobile-cards :phone-cols="['Name', 'strategy']">
       <template #strategy="{ row }">
         <t-tag variant="light">{{ dict(strategyDict, row.Strategy) }}</t-tag>
       </template>
@@ -38,7 +38,7 @@
       </template>
     </c-table>
 
-    <c-dialog v-model:visible="dialogVisible" :header="editingID ? $t('routes.editTitle') : $t('routes.create')" width="760px" :confirm-btn="{ loading: saving }" @confirm="save">
+    <c-drawer v-model:visible="dialogVisible" :header="editingID ? $t('routes.editTitle') : $t('routes.create')" width="760px" :confirm-btn="{ loading: saving }" @confirm="save">
       <t-form label-width="90px">
         <t-form-item :label="$t('routes.name')" mark>
           <t-input v-model="form.name" :placeholder="$t('routes.namePh')" />
@@ -66,7 +66,11 @@
                 style="flex: 1"
               />
               <t-input-number v-model="e.weight" :min="0" :max="100" theme="column" style="width: 110px" :placeholder="$t('routes.weightPh')" />
-              <t-link theme="danger" @click="form.groups.splice(i, 1)">{{ $t('routes.removeEntry') }}</t-link>
+              <t-popconfirm :content="$t('routes.removeEntry')" @confirm="form.groups.splice(i, 1)">
+                <t-button theme="danger" variant="text" shape="square" size="small">
+                  <template #icon><minus-circle-icon /></template>
+                </t-button>
+              </t-popconfirm>
             </div>
             <div class="entry-foot">
               <t-link theme="primary" @click="form.groups.push({ group_id: undefined, weight: 0, model: '' })">{{ $t('routes.addGroup') }}</t-link>
@@ -104,17 +108,24 @@
           </t-form-item>
         </template>
       </t-form>
-    </c-dialog>
+    </c-drawer>
+
+    <mobile-fab v-if="isPhone">
+      <t-button theme="primary" shape="circle" size="large" @click="openCreate">
+        <template #icon><add-icon /></template>
+      </t-button>
+    </mobile-fab>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CDialog } from '../../components/base'
-import { CCard, CTable } from '../../components/base'
+import { CDrawer } from '../../components/base'
+import { CCard, CTable, MobileFab } from '../../components/base'
 import PageHeader from '../../components/PageHeader.vue'
-import { useAsync } from '../../composables'
+import { useAsync, useIsMobile } from '../../composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { AddIcon, MinusCircleIcon } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { groupApi, routeApi } from '../../api/entities'
 import BindSelect from '../../components/BindSelect.vue'
@@ -122,6 +133,7 @@ import { dict, strategyDict } from '../../utils/dict'
 import type { GroupInfo, RouteGroupEntry, RouteInfo } from '../../api/types'
 
 const { t } = useI18n()
+const { isPhone } = useIsMobile()
 
 const routes = ref<RouteInfo[]>([])
 const groups = ref<GroupInfo[]>([])
@@ -308,6 +320,21 @@ onMounted(load)
 .entries { width: 100% }
 .entry { display: flex; gap: 8px; align-items: center; margin-bottom: 8px }
 .entry-foot { display: flex; align-items: center; gap: 12px }
+
+/* 手机端：分组条目改两行网格（下拉整行 + 模型/权重一行），不再横向溢出 */
+@media (max-width: 767px) {
+  .entry {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 96px 32px;
+    gap: 8px;
+  }
+  .entry > :first-child {
+    grid-column: 1 / -1; /* 分组下拉独占一行 */
+  }
+  .entry :deep(.t-input-number) {
+    width: 100% !important;
+  }
+}
 .hint { margin-left: 8px; color: var(--td-text-color-placeholder); font-size: 12px }
 .hint.bad { color: var(--td-error-color) }
 .group-cell { display: flex; flex-direction: column; align-items: center; gap: 4px }

@@ -13,7 +13,7 @@
     <code-editor v-model="lua" height="calc(100vh - 160px)" />
 
     <!-- 保存表单：新建时填写插件名/显示名/icon，确认后创建 -->
-    <c-dialog
+    <c-drawer
       v-model:visible="formVisible"
       :header="t('plugins.editorCreate')"
       :confirm-btn="{ loading: creating }"
@@ -36,7 +36,7 @@
         </t-form-item>
       </t-form>
       <t-alert theme="info" :message="t('plugins.editorCreateHint')" style="margin-top: 12px" />
-    </c-dialog>
+    </c-drawer>
   </div>
 </template>
 
@@ -48,7 +48,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { ArrowLeftIcon } from 'tdesign-icons-vue-next'
-import { CDialog } from '../../components/base'
+import { CDrawer } from '../../components/base'
 import CodeEditor from '../../components/CodeEditor.vue'
 import { pluginApi } from '../../api/entities'
 
