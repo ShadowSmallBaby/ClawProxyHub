@@ -19,15 +19,15 @@
     <!-- 修改密码：弹窗确认 -->
     <c-drawer v-model:visible="pwVisible" :header="$t('settings.changePassword')" :confirm-btn="{ loading: savingPw }" @confirm="savePw">
       <t-form label-width="110px">
-        <t-form-item :label="$t('settings.oldPassword')" mark>
+        <form-item :label="$t('settings.oldPassword')" :mark="true">
           <t-input v-model="pwForm.old" type="password" />
-        </t-form-item>
-        <t-form-item :label="$t('settings.newPassword')" mark>
+        </form-item>
+        <form-item :label="$t('settings.newPassword')" :mark="true">
           <t-input v-model="pwForm.password" type="password" :placeholder="$t('settings.passwordPh')" />
-        </t-form-item>
-        <t-form-item :label="$t('settings.confirmPassword')" mark>
+        </form-item>
+        <form-item :label="$t('settings.confirmPassword')" :mark="true">
           <t-input v-model="pwForm.confirm" type="password" />
-        </t-form-item>
+        </form-item>
       </t-form>
     </c-drawer>
   </div>
@@ -35,6 +35,7 @@
 
 <script setup lang="ts">
 import { CDrawer } from '@/components/base'
+import FormItem from '@/components/FormItem.vue'
 import { CCard, CTable } from '@/components/base'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'

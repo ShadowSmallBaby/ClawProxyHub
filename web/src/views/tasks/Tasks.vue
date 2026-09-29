@@ -64,19 +64,19 @@
     />
 
     <c-drawer v-model:visible="createVisible" :header="editingId ? $t('tasks.editTitle') : $t('tasks.createTitle')" width="560px" :confirm-btn="{ loading: creating }" @confirm="submit">
-      <t-form label-width="90px">
+      <t-form>
         <t-alert v-if="editingAuto" theme="info" :message="$t('tasks.autoLocked')" style="margin-bottom: 12px" />
-        <t-form-item :label="$t('tasks.plugin')" mark>
+        <form-item :label="$t('tasks.plugin')" mark>
           <t-select v-model="form.plugin_id" :disabled="!!editingId" :placeholder="$t('tasks.pluginPh')" @change="onPluginChange">
             <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
           </t-select>
-        </t-form-item>
-        <t-form-item :label="$t('tasks.capability')" mark>
+        </form-item>
+        <form-item :label="$t('tasks.capability')" mark>
           <t-select v-model="form.capability_id" :disabled="editingAuto || !form.plugin_id" :loading="capsLoading" :placeholder="$t('tasks.pickPluginPh')">
             <t-option v-for="c in capabilities" :key="c.id" :value="c.id" :label="c.label" />
           </t-select>
-        </t-form-item>
-        <t-form-item :label="$t('tasks.trigger')" mark>
+        </form-item>
+        <form-item :label="$t('tasks.trigger')" mark>
           <div class="trigger-box">
             <div class="trigger-row">
               <t-select v-model="form.trigger_type" style="width: 110px" :disabled="editingAuto" :placeholder="$t('tasks.triggerPh')">
@@ -98,18 +98,18 @@
             </div>
             <div class="trigger-hint">{{ triggerHint }}</div>
           </div>
-        </t-form-item>
-        <t-form-item :label="$t('tasks.scope')">
+        </form-item>
+        <form-item :label="$t('tasks.scope')">
           <t-radio-group v-model="form.target_scope" variant="default-filled" :disabled="editingAuto">
             <t-radio-button value="all">{{ $t('tasks.scopeAll') }}</t-radio-button>
             <t-radio-button value="account_ids">{{ $t('tasks.scopeOne') }}</t-radio-button>
           </t-radio-group>
-        </t-form-item>
-        <t-form-item v-if="form.target_scope === 'account_ids'" :label="$t('tasks.account')">
+        </form-item>
+        <form-item v-if="form.target_scope === 'account_ids'" :label="$t('tasks.account')">
           <t-select v-model="form.target_account" :disabled="editingAuto" :loading="acctsLoading" :placeholder="$t('tasks.pickAccountPh')" style="width: 100%">
             <t-option v-for="a in accounts" :key="a.id" :value="a.id" :label="a.display_name || `#${a.id}`" />
           </t-select>
-        </t-form-item>
+        </form-item>
       </t-form>
     </c-drawer>
 
@@ -127,6 +127,7 @@
 
 <script setup lang="ts">
 import { CTabs } from '@/components/base'
+import { FormItem } from '@/components'
 import { CDrawer } from '@/components/base'
 import { CCard, CTable, CPagination, MobileFab } from '@/components/base'
 import PageHeader from '@/components/PageHeader.vue'

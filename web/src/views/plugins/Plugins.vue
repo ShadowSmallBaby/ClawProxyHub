@@ -116,14 +116,14 @@
     >
       <t-alert v-if="!settingFields.length" theme="info" :message="$t('plugins.noSettings')" />
       <t-form v-else label-width="140px">
-        <t-form-item v-for="f in settingFields" :key="f.key" :label="f.title" :description="f.description">
+        <form-item v-for="f in settingFields" :key="f.key" :label="f.title" :description="f.description">
           <t-switch v-if="f.type === 'boolean'" v-model="settingsValues[f.key]" />
           <t-select v-else-if="f.options?.length" v-model="settingsValues[f.key]" clearable style="width: 100%">
             <t-option v-for="o in f.options" :key="String(o)" :value="o" :label="String(o)" />
           </t-select>
           <t-input-number v-else-if="f.type === 'number'" v-model="settingsValues[f.key]" theme="column" style="width: 160px" />
           <t-input v-else v-model="settingsValues[f.key]" :placeholder="f.default ? $t('plugins.phDefault', { d: f.default }) : $t('plugins.phDefaultNone')" />
-        </t-form-item>
+        </form-item>
       </t-form>
       <t-alert v-if="settingFields.length" theme="info" :message="$t('plugins.settingsHint')" style="margin-top: 12px" />
     </c-drawer>
@@ -185,13 +185,13 @@
 
     <!-- 源新建/编辑：英文名全局唯一；保存前探测索引可达并记录条目数 -->
     <c-drawer v-model:visible="sourceFormVisible" :header="sourceEditing ? $t('plugins.sourceEdit') : $t('plugins.sourceAdd')" :confirm-btn="{ loading: savingSources }" @confirm="saveSourceForm">
-      <t-form label-width="90px">
-        <t-form-item :label="$t('plugins.sourceName')" required-mark>
+      <t-form>
+        <form-item :label="$t('plugins.sourceName')" :mark="true">
           <t-input v-model="sourceForm.name" :disabled="sourceEditing?.name === 'official'" placeholder="my-source" />
-        </t-form-item>
-        <t-form-item :label="$t('plugins.sourceUrl')" required-mark>
+        </form-item>
+        <form-item :label="$t('plugins.sourceUrl')" :mark="true">
           <t-input v-model="sourceForm.url" placeholder="https://.../index.json" />
-        </t-form-item>
+        </form-item>
       </t-form>
     </c-drawer>
 
@@ -214,6 +214,7 @@
 
 <script setup lang="ts">
 import { CCard, CDrawer, CTable, MobileFab } from '@/components/base'
+import { FormItem } from '@/components'
 import EntityIcon from '@/components/EntityIcon.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'

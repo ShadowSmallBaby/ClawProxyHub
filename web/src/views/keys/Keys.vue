@@ -37,10 +37,10 @@
 
     <!-- 创建密钥 -->
     <c-drawer v-model:visible="createVisible" :header="$t('keys.create')" :confirm-btn="{ loading: creating }" @confirm="submitCreate">
-      <t-form label-width="90px">
-        <t-form-item :label="$t('keys.name')">
+      <t-form>
+        <form-item :label="$t('keys.name')">
           <t-input v-model="createName" :placeholder="$t('keys.namePh')" clearable @enter="submitCreate" />
-        </t-form-item>
+        </form-item>
       </t-form>
     </c-drawer>
 
@@ -56,10 +56,10 @@
 
     <!-- 改名 -->
     <c-drawer v-model:visible="renameVisibleBool" :header="$t('keys.rename')" @confirm="submitRename">
-      <t-form label-width="90px">
-        <t-form-item :label="$t('keys.name')">
+      <t-form>
+        <form-item :label="$t('keys.name')">
           <t-input v-model="renameName" :placeholder="$t('keys.namePh')" clearable @enter="submitRename" />
-        </t-form-item>
+        </form-item>
       </t-form>
     </c-drawer>
 
@@ -73,6 +73,7 @@
 
 <script setup lang="ts">
 import { CDrawer } from '@/components/base'
+import { FormItem } from '@/components'
 import { CCard, CTable, MobileFab } from '@/components/base'
 import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'

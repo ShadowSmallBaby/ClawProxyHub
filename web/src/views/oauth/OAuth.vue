@@ -27,28 +27,28 @@
       :confirm-btn="{ loading: saving }"
       @confirm="submit"
     >
-      <t-form label-width="90px">
-        <t-form-item :label="$t('oauth.platform')" mark>
+      <t-form>
+        <form-item :label="$t('oauth.platform')" mark>
           <t-select v-model="form.platform" :placeholder="$t('oauth.platformPh')" style="width: 100%">
             <t-option v-for="p in platformOptions" :key="p.value" :value="p.value" :label="p.label" />
           </t-select>
-        </t-form-item>
-        <t-form-item :label="$t('oauth.accountLabel')">
+        </form-item>
+        <form-item :label="$t('oauth.accountLabel')">
           <t-input v-model="form.account_label" :placeholder="$t('oauth.accountLabelPh')" />
-        </t-form-item>
-        <t-form-item :label="$t('oauth.token')" :mark="!editingId">
+        </form-item>
+        <form-item :label="$t('oauth.token')" :mark="!editingId">
           <t-textarea
             v-model="form.token"
             :placeholder="editingId ? $t('oauth.tokenKeep') : $t('oauth.tokenPh')"
             :autosize="{ minRows: 2, maxRows: 5 }"
           />
-        </t-form-item>
-        <t-form-item :label="$t('oauth.expiresAt')">
+        </form-item>
+        <form-item :label="$t('oauth.expiresAt')">
           <t-input v-model="form.expires_at" :placeholder="$t('oauth.expiresAtPh')" />
-        </t-form-item>
-        <t-form-item :label="$t('oauth.extra')">
+        </form-item>
+        <form-item :label="$t('oauth.extra')">
           <t-textarea v-model="form.extra_json" :placeholder="$t('oauth.extraPh')" :autosize="{ minRows: 2, maxRows: 4 }" />
-        </t-form-item>
+        </form-item>
         <t-alert theme="info" :message="$t('oauth.hint')" />
       </t-form>
     </c-drawer>
@@ -63,6 +63,7 @@
 
 <script setup lang="ts">
 import { CDrawer } from '@/components/base'
+import { FormItem } from '@/components'
 import { CCard, CTable, MobileFab } from '@/components/base'
 import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'

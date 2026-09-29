@@ -39,19 +39,19 @@
     </c-table>
 
     <c-drawer v-model:visible="dialogVisible" :header="editingID ? $t('routes.editTitle') : $t('routes.create')" width="760px" :confirm-btn="{ loading: saving }" @confirm="save">
-      <t-form label-width="90px">
-        <t-form-item :label="$t('routes.name')" mark>
+      <t-form>
+        <form-item :label="$t('routes.name')" mark>
           <t-input v-model="form.name" :placeholder="$t('routes.namePh')" />
-        </t-form-item>
-        <t-form-item :label="$t('routes.strategy')">
+        </form-item>
+        <form-item :label="$t('routes.strategy')">
           <t-radio-group v-model="form.strategy" variant="default-filled">
             <t-radio-button value="round_robin">{{ dict(strategyDict, 'round_robin') }}</t-radio-button>
             <t-radio-button value="random">{{ dict(strategyDict, 'random') }}</t-radio-button>
             <t-radio-button value="least_used">{{ dict(strategyDict, 'least_used') }}</t-radio-button>
             <t-radio-button value="sticky">{{ dict(strategyDict, 'sticky') }}</t-radio-button>
           </t-radio-group>
-        </t-form-item>
-        <t-form-item :label="$t('routes.groupMapping')" mark>
+        </form-item>
+        <form-item :label="$t('routes.groupMapping')" mark>
           <div class="entries">
             <div v-for="(e, i) in form.groups" :key="i" class="entry">
               <bind-select v-model="e.group_id" :multiple="false" :options="groupOptions" :placeholder="$t('routes.groupPh')" style="width: 160px" @update:model-value="loadGroupModels(e.group_id)" />
@@ -77,35 +77,35 @@
               <span class="hint" :class="{ bad: weightSum !== 100 }">{{ $t('routes.weightSum', { n: weightSum }) }}</span>
             </div>
           </div>
-        </t-form-item>
-        <t-form-item :label="$t('routes.firstEventTimeout')">
+        </form-item>
+        <form-item :label="$t('routes.firstEventTimeout')">
           <t-input-number v-model="form.first_event_timeout_seconds" :min="0" :max="3600" theme="column" style="width: 140px" />
           <span class="hint">{{ $t('routes.timeoutHint') }}</span>
-        </t-form-item>
-        <t-form-item :label="$t('routes.firstTokenTimeout')">
+        </form-item>
+        <form-item :label="$t('routes.firstTokenTimeout')">
           <t-input-number v-model="form.first_token_timeout_seconds" :min="0" :max="3600" theme="column" style="width: 140px" />
           <span class="hint">{{ $t('routes.timeoutHint') }}</span>
-        </t-form-item>
-        <t-form-item :label="$t('routes.userAgent')" :help="$t('routes.userAgentHint')">
+        </form-item>
+        <form-item :label="$t('routes.userAgent')" :tip="$t('routes.userAgentHint')">
           <t-input v-model="form.user_agent" :placeholder="$t('routes.userAgentPh')" />
-        </t-form-item>
-        <t-form-item :label="$t('routes.failover')">
+        </form-item>
+        <form-item :label="$t('routes.failover')">
           <t-switch v-model="form.failover_enabled" />
           <span class="hint">{{ $t('routes.failoverHint') }}</span>
-        </t-form-item>
+        </form-item>
         <template v-if="form.failover_enabled">
-          <t-form-item :label="$t('routes.triggerCond')" mark>
+          <form-item :label="$t('routes.triggerCond')" mark>
             <t-checkbox-group v-model="form.failover_codes">
               <t-checkbox value="4xx">{{ $t('routes.cond4xx') }}</t-checkbox>
               <t-checkbox value="5xx">{{ $t('routes.cond5xx') }}</t-checkbox>
             </t-checkbox-group>
-          </t-form-item>
-          <t-form-item :label="$t('routes.failoverGroup')" mark>
+          </form-item>
+          <form-item :label="$t('routes.failoverGroup')" mark>
             <bind-select v-model="form.failover_group_id" :multiple="false" :options="groupOptions" :placeholder="$t('routes.pickGroup')" style="width: 240px" />
-          </t-form-item>
-          <t-form-item :label="$t('routes.failoverModel')" mark>
+          </form-item>
+          <form-item :label="$t('routes.failoverModel')" mark>
             <t-input v-model="form.failover_model" :placeholder="$t('routes.failoverModelPh')" style="width: 360px" />
-          </t-form-item>
+          </form-item>
         </template>
       </t-form>
     </c-drawer>
@@ -120,6 +120,7 @@
 
 <script setup lang="ts">
 import { CDrawer } from '@/components/base'
+import { FormItem } from '@/components'
 import { CCard, CTable, MobileFab } from '@/components/base'
 import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'

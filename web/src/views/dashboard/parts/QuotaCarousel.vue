@@ -1,4 +1,4 @@
-<!-- QuotaCarousel — 渠道积分。桌面/平板每页八个（2×4）翻页；手机端每页一个，左右滑。 -->
+<!-- QuotaCarousel — 渠道积分。PC 每页八个（2×4）翻页；手机端每页一个，左右滑。 -->
 <template>
   <div v-if="items.length" class="carousel">
     <div class="quota-grid">

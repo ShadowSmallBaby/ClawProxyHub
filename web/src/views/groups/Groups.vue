@@ -17,18 +17,18 @@
     </c-table>
 
     <c-drawer v-model:visible="createVisible" :header="$t('groups.create')" :confirm-btn="{ loading: creating }" @confirm="create">
-      <t-form label-width="90px">
-        <t-form-item :label="$t('groups.name')" mark>
+      <t-form>
+        <form-item :label="$t('groups.name')" mark>
           <t-input v-model="newName" :placeholder="$t('groups.namePh')" />
-        </t-form-item>
-        <t-form-item :label="$t('groups.plugin')" mark>
+        </form-item>
+        <form-item :label="$t('groups.plugin')" mark>
           <t-select v-model="newPlugin" :placeholder="$t('groups.pickPluginPh')" @change="onPluginChange">
             <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
           </t-select>
-        </t-form-item>
-        <t-form-item :label="$t('accounts.instance')" mark>
+        </form-item>
+        <form-item :label="$t('accounts.instance')" mark>
           <t-select v-model="newInstance" :options="instanceOptions(newPlugin)" :disabled="!selectedPlugin?.multi_instance" :placeholder="$t('groups.pickInstancePh')" />
-        </t-form-item>
+        </form-item>
         <t-alert v-if="selectedPlugin?.multi_instance && !instanceOptions(newPlugin).length" theme="warning" :message="$t('accounts.noInstance')" />
         <t-alert v-else theme="info" :message="$t('groups.hintCreate')" />
       </t-form>
@@ -36,13 +36,13 @@
 
     <!-- 编辑：改名；多实例插件且分组为空时可换实例 -->
     <c-drawer v-model:visible="editVisible" :header="$t('groups.editTitle')" :confirm-btn="{ loading: editing }" @confirm="submitEdit">
-      <t-form v-if="editRow" label-width="90px">
-        <t-form-item :label="$t('groups.name')" mark>
+      <t-form v-if="editRow">
+        <form-item :label="$t('groups.name')" mark>
           <t-input v-model="editName" />
-        </t-form-item>
-        <t-form-item :label="$t('accounts.instance')">
+        </form-item>
+        <form-item :label="$t('accounts.instance')">
           <t-select v-model="editInstance" :options="instanceOptions(editRow.plugin_id)" :disabled="!pluginOf(editRow.plugin_id)?.multi_instance || editRow.accounts > 0" />
-        </t-form-item>
+        </form-item>
         <t-alert v-if="editRow.accounts > 0" theme="info" :message="$t('groups.hintEditLocked')" />
       </t-form>
     </c-drawer>
@@ -62,6 +62,7 @@
 
 <script setup lang="ts">
 import { CDrawer } from '@/components/base'
+import { FormItem } from '@/components'
 import { CCard, CTable, MobileFab } from '@/components/base'
 import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'

@@ -20,20 +20,20 @@
       @confirm="confirmCreate"
     >
       <t-form label-width="110px">
-        <t-form-item :label="t('plugins.editorName')" required-mark>
+        <form-item :label="t('plugins.editorName')" :mark="true">
           <t-input :value="luaName" readonly :status="luaName ? undefined : 'error'" :placeholder="t('plugins.editorNameFromCode')" />
-        </t-form-item>
-        <t-form-item :label="t('plugins.editorLabel')">
+        </form-item>
+        <form-item :label="t('plugins.editorLabel')">
           <t-input :value="luaLabel" readonly :placeholder="t('plugins.editorLabelFromCode')" />
-        </t-form-item>
-        <t-form-item :label="t('plugins.editorIcon')">
+        </form-item>
+        <form-item :label="t('plugins.editorIcon')">
           <div class="icon-upload" @click="pickIcon" @dragover.prevent @drop.prevent="onDropIcon">
             <img v-if="iconUrl" :src="iconUrl" class="icon-preview" />
             <t-icon v-else name="image-add" class="icon-plus" />
             <span class="icon-hint">{{ iconFile ? iconFile.name : t('plugins.editorIconHint') }}</span>
           </div>
           <input ref="iconInputRef" type="file" accept="image/png,image/jpeg,image/webp" style="display: none" @change="onPickIcon" />
-        </t-form-item>
+        </form-item>
       </t-form>
       <t-alert theme="info" :message="t('plugins.editorCreateHint')" style="margin-top: 12px" />
     </c-drawer>
@@ -49,6 +49,7 @@ import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { ArrowLeftIcon } from 'tdesign-icons-vue-next'
 import { CDrawer } from '@/components/base'
+import FormItem from '@/components/FormItem.vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import { pluginApi } from '@/api/entities'
 

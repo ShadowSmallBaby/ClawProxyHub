@@ -17,29 +17,29 @@
     </c-table>
 
     <c-drawer v-model:visible="createVisible" :header="editingId ? $t('proxies.edit') : $t('proxies.create')" :confirm-btn="{ loading: creating }" @confirm="submit">
-      <t-form label-width="80px">
-        <t-form-item :label="$t('proxies.name')">
+      <t-form>
+        <form-item :label="$t('proxies.name')">
           <t-input v-model="form.name" :placeholder="$t('common.optional')" />
-        </t-form-item>
-        <t-form-item :label="$t('proxies.scheme')" mark>
+        </form-item>
+        <form-item :label="$t('proxies.scheme')" mark>
           <t-radio-group v-model="form.scheme" variant="default-filled">
             <t-radio-button value="http">HTTP</t-radio-button>
             <t-radio-button value="https">HTTPS</t-radio-button>
             <t-radio-button value="socks5">SOCKS5</t-radio-button>
           </t-radio-group>
-        </t-form-item>
-        <t-form-item :label="$t('proxies.host')" mark>
+        </form-item>
+        <form-item :label="$t('proxies.host')" mark>
           <t-input v-model="form.host" :placeholder="$t('proxies.hostPh')" />
-        </t-form-item>
-        <t-form-item :label="$t('proxies.port')" mark>
+        </form-item>
+        <form-item :label="$t('proxies.port')" mark>
           <t-input-number v-model="form.port" :min="1" :max="65535" theme="column" style="width: 160px" />
-        </t-form-item>
-        <t-form-item :label="$t('proxies.username')">
+        </form-item>
+        <form-item :label="$t('proxies.username')">
           <t-input v-model="form.username" :placeholder="$t('common.optional')" />
-        </t-form-item>
-        <t-form-item :label="$t('proxies.password')">
+        </form-item>
+        <form-item :label="$t('proxies.password')">
           <t-input v-model="form.password" type="password" :placeholder="editingId ? $t('proxies.pwdKeep') : $t('common.optional')" />
-        </t-form-item>
+        </form-item>
         <t-alert theme="info" :message="$t('proxies.hint')" />
       </t-form>
     </c-drawer>
@@ -54,6 +54,7 @@
 
 <script setup lang="ts">
 import { CDrawer } from '@/components/base'
+import { FormItem } from '@/components'
 import { CCard, CTable, MobileFab } from '@/components/base'
 import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'

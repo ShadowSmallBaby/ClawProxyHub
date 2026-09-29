@@ -158,17 +158,17 @@
             <t-link theme="primary" @click="router.push('/instances')">{{ $t('menu.instances') }}</t-link>
           </template>
         </t-alert>
-        <t-form v-else-if="selectedPlugin?.multi_instance" label-width="90px">
-          <t-form-item :label="$t('accounts.instance')">
+        <t-form v-else-if="selectedPlugin?.multi_instance">
+          <form-item :label="$t('accounts.instance')">
             <t-select v-model="wizardInstanceId" :options="instanceOptions(selectedPluginId)" style="width: 100%" />
-          </t-form-item>
+          </form-item>
         </t-form>
 
         <c-tabs v-if="methods.length" v-model="methodId">
           <t-tab-panel v-for="m in methods" :key="m.id" :value="m.id" :label="label(m.label, m.id)">
             <div class="tab-body">
-              <t-form v-if="currentFields?.length" label-width="90px">
-                <t-form-item v-for="f in currentFields" :key="f.name" :label="f.type === 'textarea' ? '' : label(f.label, f.name)" :label-width="f.type === 'textarea' ? 0 : 90" :mark="f.required && f.type !== 'textarea'">
+              <t-form v-if="currentFields?.length">
+                <form-item v-for="f in currentFields" :key="f.name" :label="f.type === 'textarea' ? '' : label(f.label, f.name)" :mark="f.required && f.type !== 'textarea'">
                   <div
                     v-if="f.type === 'textarea'"
                     class="drop-zone"
@@ -188,7 +188,7 @@
                     :type="f.type === 'password' ? 'password' : 'text'"
                     :placeholder="f.placeholder"
                   />
-                </t-form-item>
+                </form-item>
               </t-form>
               <t-alert v-else theme="info" :message="$t('accounts.noFieldsHint')" />
             </div>
@@ -214,8 +214,8 @@
             </div>
           </template>
         </t-alert>
-        <t-form v-if="nextStep?.action === 'input_form' && nextStep.fields?.length" label-width="90px">
-          <t-form-item v-for="f in nextStep.fields" :key="f.name" :label="label(f.label, f.name)" :mark="f.required">
+        <t-form v-if="nextStep?.action === 'input_form' && nextStep.fields?.length">
+          <form-item v-for="f in nextStep.fields" :key="f.name" :label="label(f.label, f.name)" :mark="f.required">
             <t-textarea
               v-if="f.type === 'textarea'"
               v-model="stepForm[f.name]"
@@ -224,17 +224,17 @@
               class="scroll-textarea"
             />
             <t-input v-else v-model="stepForm[f.name]" :placeholder="f.placeholder" />
-          </t-form-item>
+          </form-item>
         </t-form>
-        <t-form v-else-if="nextStep?.action === 'open_url' && nextStep.fields?.length && (!nextStep.wait || showCallbackInput)" label-width="90px">
-          <t-form-item v-for="f in nextStep.fields" :key="f.name" :label="label(f.label, f.name)" :mark="f.required">
+        <t-form v-else-if="nextStep?.action === 'open_url' && nextStep.fields?.length && (!nextStep.wait || showCallbackInput)">
+          <form-item v-for="f in nextStep.fields" :key="f.name" :label="label(f.label, f.name)" :mark="f.required">
             <t-textarea
               v-model="stepForm[f.name]"
               :placeholder="f.placeholder"
               :autosize="{ minRows: 2, maxRows: 6 }"
               class="scroll-textarea"
             />
-          </t-form-item>
+          </form-item>
         </t-form>
 
         <t-button theme="primary" block :loading="submitting" :disabled="selectedPlugin?.multi_instance && !wizardInstanceId" @click="submit">
@@ -247,10 +247,10 @@
         <t-alert theme="success" :message="$t('accounts.successHint')" />
         <div>
           <div class="section-title">{{ $t('accounts.basicInfo') }}</div>
-          <t-form label-width="90px">
-            <t-form-item :label="$t('accounts.name')">
+          <t-form>
+            <form-item :label="$t('accounts.name')">
               <t-input v-model="newAccountName" :placeholder="wizardProfileName ? $t('accounts.namePh', { name: wizardProfileName }) : $t('accounts.namePhNone')" />
-            </t-form-item>
+            </form-item>
           </t-form>
         </div>
         <div>
@@ -273,20 +273,20 @@
 
     <!-- 编辑账号：改名 / 绑分组 / 绑代理 / 同步模型 -->
     <c-drawer v-model:visible="editVisible" :header="$t('accounts.editTitle')" :confirm-btn="{ loading: editSaving }" width="640px" @confirm="submitEdit">
-      <t-form v-if="editRow" label-width="90px">
-        <t-form-item :label="$t('accounts.name')">
+      <t-form v-if="editRow">
+        <form-item :label="$t('accounts.name')">
           <t-input v-model="editName" :placeholder="$t('accounts.namePh')" clearable />
-        </t-form-item>
-        <t-form-item v-if="pluginOf(editRow.plugin_id)?.multi_instance" :label="$t('accounts.instance')">
+        </form-item>
+        <form-item v-if="pluginOf(editRow.plugin_id)?.multi_instance" :label="$t('accounts.instance')">
           <t-select v-model="editInstanceId" :options="instanceOptions(editRow.plugin_id)" style="width: 100%" />
-        </t-form-item>
-        <t-form-item :label="$t('accounts.groupsTitle')">
+        </form-item>
+        <form-item :label="$t('accounts.groupsTitle')">
           <bind-select v-model="editGroups" :options="editGroupOptions" :placeholder="$t('accounts.groupsPh')" />
-        </t-form-item>
-        <t-form-item :label="$t('accounts.proxyTitle')">
+        </form-item>
+        <form-item :label="$t('accounts.proxyTitle')">
           <bind-select v-model="editProxies" :options="proxyOptions" :placeholder="$t('accounts.proxyPh')" />
-        </t-form-item>
-        <t-form-item :label="$t('accounts.modelsTitle')">
+        </form-item>
+        <form-item :label="$t('accounts.modelsTitle')">
           <div style="width: 100%">
             <t-link theme="primary" @click="editSyncModels">{{ editSyncing ? $t('accounts.syncing') : $t('accounts.sync') }}</t-link>
             <div v-if="editModels.length" class="model-list" style="margin-top: 8px">
@@ -294,23 +294,23 @@
             </div>
             <span v-else class="hint">{{ $t('accounts.noModels') }}</span>
           </div>
-        </t-form-item>
+        </form-item>
       </t-form>
     </c-drawer>
 
     <!-- 在线测试：选端点/模型/问题 → 响应日志 -->
     <c-drawer v-model:visible="testVisible" :header="$t('accounts.testTitle')" :placement="isPhone ? 'bottom' : 'right'" :size="isPhone ? '85%' : '560px'" :footer="false" close-on-overlay-click>
       <t-space v-if="testRow" direction="vertical" style="width: 100%" size="large">
-        <t-form label-width="80px">
-          <t-form-item :label="$t('accounts.testEndpoint')">
+        <t-form>
+          <form-item :label="$t('accounts.testEndpoint')">
             <bind-select v-model="testEndpoint" :multiple="false" :options="endpointOptions" />
-          </t-form-item>
-          <t-form-item :label="$t('accounts.testModel')">
+          </form-item>
+          <form-item :label="$t('accounts.testModel')">
             <bind-select v-model="testModel" :multiple="false" :options="testModelOptions" :placeholder="$t('accounts.testModelPh')" />
-          </t-form-item>
-          <t-form-item :label="$t('accounts.testQuestion')">
+          </form-item>
+          <form-item :label="$t('accounts.testQuestion')">
             <t-input v-model="testQuestion" :placeholder="$t('accounts.testQuestionPh')" />
-          </t-form-item>
+          </form-item>
         </t-form>
         <t-button theme="primary" block :loading="testing" :disabled="!testModel" @click="runTest">{{ $t('accounts.testRun') }}</t-button>
         <div v-if="testText" class="test-answer">{{ testText }}</div>
@@ -353,6 +353,7 @@
 
 <script setup lang="ts">
 import { CCard, CDrawer, CTable, CTabs, MobileFab } from '@/components/base'
+import { FormItem } from '@/components'
 import PageHeader from '@/components/PageHeader.vue'
 import EntityIcon from '@/components/EntityIcon.vue'
 import GroupPicker from './GroupPicker.vue'
