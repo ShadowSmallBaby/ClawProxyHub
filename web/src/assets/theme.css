@@ -73,6 +73,11 @@ body,
 
 .page {
   padding: 24px 28px 32px;
+  /* 撑满内容区：页头/分页固定，列表吃掉中间剩余高度（滚动布局的前提） */
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
 }
 
 .page-header {
@@ -113,3 +118,75 @@ body,
 .t-alert .t-alert__message {
   font-size: 12px;
 }
+
+/* 移动端：内容区收窄 + 安全区 + 横向不溢出 */
+@media (max-width: 768px) {
+  .page {
+    padding: 12px 12px calc(16px + env(safe-area-inset-bottom));
+  }
+
+  .page-header {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  /* 表格允许横向滚动（卡片化之前的兜底） */
+  .t-table__content {
+    overflow-x: auto;
+  }
+
+  /* 栅格列移动端单列堆叠；统计卡除外（每行两个，由 StatCards 的 span 控制） */
+  .t-col:not(.stat-col) {
+    flex: 0 0 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* 设置页等表单：标签置顶 + 输入撑满，避免 label 140px 把内容挤出屏 */
+  .t-form__item {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+  .t-form__label {
+    width: auto !important;
+    text-align: left !important;
+    padding-right: 0 !important;
+    justify-content: flex-start !important;
+  }
+  .t-form__controls {
+    margin-left: 0 !important;
+    width: 100%;
+  }
+  /* 弹层抽屉：内容区内部滚动，底部操作钉住 */
+  .t-drawer__body {
+    overflow-y: auto;
+    min-height: 0;
+  }
+}
+
+/* 平板（768–1023）：介于手机与桌面，内容区略收但不单列 */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .page {
+    padding: 16px 16px 24px;
+  }
+}
+
+/* 手机端滚动布局：挂到 tabs 上，让内容区成为 flex 滚动容器（卡片列表内部滚动） */
+@media (max-width: 767px) {
+  .phone-scroll {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+  .phone-scroll .t-tabs__content,
+  .phone-scroll .t-tab-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    /* 透明背景：与页面底色一致，卡片间隔可分辨 */
+    background: transparent;
+  }
+}
+
