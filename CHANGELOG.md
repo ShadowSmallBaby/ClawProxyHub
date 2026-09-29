@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.5.0
+
+移动端与布局版。管理后台全面移动端适配（三端断点、PWA），桌面端布局固定 + 筛选条容器化，代码编辑器暗色观感对齐 One Dark。
+
+- Added 三端断点体系（`useIsMobile` / `useIsTablet`，767 / 1024px）：手机端侧栏收抽屉、筛选收底部抽屉 + 悬浮按钮（`MobileFab`）、表格转卡片（`mobile-cards`）、弹窗/抽屉自适应
+- Added PWA manifest（`manifest.webmanifest`，可安装到主屏）
+- Added `FilterBar` 筛选条容器：统一自动换行（窄屏折行不撑破内容区），筛选输入宽度收敛为全局工具类 `w-2xs~w-2xl`
+- Added `CPagination` 迷你折叠（页码只放前后几页中间省略，max/folded 5）、`MobileFab` 悬浮按钮、`COptions` 下拉
+- Refactor 布局固定：侧栏/Header/内容区尺寸锁死，内容区仅纵向滚动，横向溢出由筛选折行消化；`min-width: 0` 逐层压制 flex 内容撑开
+- Refactor 表单统一走 `FormItem`：抽取 `FormItem` / `SysInfoCard` 组件，业务页面散落的 label 布局全量收口；行内 `style="width: …px"` 全部收敛为工具类
+- Refactor 弹窗收尾：`CDialog` 重写为居中弹窗、`CDraw` 更名 `CDrawer` 并内置手机/桌面两态尺寸（调用方免传 placement）；二态断点样式收敛
+- Fixed 代码编辑器暗色观感：选中/光标/搜索命中/补全浮层按 One Dark 对比度补齐（此前选中色与背景几乎同色）；搜索面板浮层居右不挤占编辑区；补挂 `history()` 恢复 Ctrl+Z；统一字体度量修复长按选择错位
+
 ## v1.3.0
 
 插件创作版。新增在线 Lua 插件编辑器（自建插件零编译），luahost 补齐任务契约，作者来源统一为 manifest.json；全站时间按本地时区显示，离线市场快照全量同步至 26 条。

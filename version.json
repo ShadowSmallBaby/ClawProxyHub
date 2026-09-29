@@ -1,5 +1,5 @@
 {
-  "version": "1.3.0",
+  "version": "1.5.0",
   "release_url": "https://github.com/ShadowSmallBaby/ClawProxyHub/releases",
   "changelog": {
     "title": {
@@ -8,20 +8,16 @@
     },
     "items": [
       {
-        "zh": "新增在线 Lua 插件编辑器：自建插件零编译，保存即热更重载",
-        "en": "New in-browser Lua plugin editor: author plugins with zero compilation, hot-reload on save"
+        "zh": "管理后台全面移动端适配：手机可完整使用，可安装为 PWA",
+        "en": "The dashboard is now fully mobile-friendly and installable as a PWA"
       },
       {
-        "zh": "luahost 补齐任务契约（RunTask/ListTaskCapabilities），Lua 插件可声明并执行任务",
-        "en": "LuaHost now covers the task contract (RunTask/ListTaskCapabilities) for Lua plugins"
+        "zh": "桌面端布局固定：侧栏/头部锁定，内容区稳定滚动不漂移",
+        "en": "Desktop layout fixed: pinned sidebar/header, stable scrolling content area"
       },
       {
-        "zh": "修复全站时间 8 小时偏差：落库统一 UTC，展示按本地时区",
-        "en": "Fix the 8-hour time offset: timestamps stored in UTC, displayed in local timezone"
-      },
-      {
-        "zh": "修复 lua 插件市场误判未安装与 installed_at 落成 0001-01-01",
-        "en": "Fix Lua plugins misdetected as uninstalled and installed_at saved as 0001-01-01"
+        "zh": "在线编辑器暗色观感修复：选中/光标/补全清晰可见，恢复 Ctrl+Z",
+        "en": "Online editor dark theme fixes: visible selection/cursor/autocomplete, Ctrl+Z restored"
       }
     ]
   }
