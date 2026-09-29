@@ -128,6 +128,8 @@ onMounted(() => checkVersion()) // 首次进页自动查一次
   line-height: 1.9;
   font-size: 14px;
   color: var(--td-text-color-primary);
+  text-align: justify;
+  text-align-last: left;
 }
 .changelog-foot {
   display: flex;

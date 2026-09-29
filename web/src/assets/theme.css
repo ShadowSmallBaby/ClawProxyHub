@@ -107,8 +107,9 @@ body,
   font-weight: 600;
 }
 
-/* 顶栏：毛玻璃 + 底部细分割线 */
+/* 顶栏：毛玻璃 + 底部细分割线；固定不压缩 */
 .t-layout__header {
+  flex-shrink: 0;
   backdrop-filter: blur(8px);
   background: color-mix(in srgb, var(--td-bg-color-container) 80%, transparent);
   border-bottom: 1px solid var(--td-component-border);
@@ -161,13 +162,6 @@ body,
   .t-drawer__body {
     overflow-y: auto;
     min-height: 0;
-  }
-}
-
-/* 平板（768–1023）：介于手机与桌面，内容区略收但不单列 */
-@media (min-width: 768px) and (max-width: 1023px) {
-  .page {
-    padding: 16px 16px 24px;
   }
 }
 

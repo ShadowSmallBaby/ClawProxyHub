@@ -68,10 +68,6 @@ function onChange(v: string) {
 .aside-hidden {
   display: none;
 }
-/* 移动端侧栏由抽屉承载，aside 不占位 */
-.aside-hidden {
-  display: none;
-}
 .logo {
   height: 64px;
   min-width: 0;

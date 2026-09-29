@@ -1,8 +1,8 @@
-// 响应式断点 hook：三端统一判断（手机 <768 / 平板 768–1023 / 桌面 ≥1024）。
+// 响应式断点 hook：两态判断（手机 <768 / PC 含平板 >=768）。
 import { computed, onBeforeUnmount, ref } from 'vue'
 
+// 仅两态：手机 <768，PC（含平板）>=768
 const PHONE = '(max-width: 767px)'
-const TABLET = '(min-width: 768px) and (max-width: 1023px)'
 
 function watchQuery(query: string) {
   const matched = ref(false)
@@ -15,15 +15,9 @@ function watchQuery(query: string) {
   return matched
 }
 
-export function useBreakpoint() {
-  const isPhone = watchQuery(PHONE)
-  const isTablet = watchQuery(TABLET)
-  // 手机 + 平板 = 非桌面（抽屉导航/弹窗全屏用）
-  const isMobile = computed(() => isPhone.value || isTablet.value)
-  return { isPhone, isTablet, isMobile }
-}
-
-// 兼容旧调用：返回 isMobile（含手机与平板）
 export function useIsMobile() {
-  return useBreakpoint()
+  const isPhone = watchQuery(PHONE)
+  // PC（含平板）= 非手机
+  const isMobile = computed(() => isPhone.value)
+  return { isPhone, isMobile }
 }

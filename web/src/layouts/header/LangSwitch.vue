@@ -1,6 +1,6 @@
 <!-- LangSwitch — 头部语言切换：zh / en 下拉选择。 -->
 <template>
-  <t-popup trigger="click">
+  <t-popup v-model:visible="menuVisible" trigger="click">
     <t-button variant="text" shape="square" theme="default">
       <translate-icon />
     </t-button>
@@ -11,7 +11,7 @@
           :key="l"
           class="lang-menu-item"
           :class="{ active: locale === l }"
-          @click="setLocale(l)"
+          @click="pick(l)"
         >
           {{ $t('common.' + l) }}
           <check-icon v-if="locale === l" />
@@ -22,10 +22,17 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import { CheckIcon, TranslateIcon } from 'tdesign-icons-vue-next'
 import { useLocale, type Locale } from '@/composables'
 
 const { locale, setLocale } = useLocale()
+const menuVisible = ref(false)
+
+function pick(l: Locale) {
+  setLocale(l)
+  menuVisible.value = false
+}
 const langs: Locale[] = ['zh', 'en']
 </script>
 
