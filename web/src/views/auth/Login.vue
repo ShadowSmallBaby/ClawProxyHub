@@ -29,22 +29,22 @@
         <h2>{{ $t('login.welcome') }}</h2>
         <p class="login-sub">{{ $t('login.sub') }}</p>
         <t-form @submit="onLogin">
-          <t-form-item :label="$t('login.username')">
+          <form-item :label="$t('login.username')">
             <t-input v-model="username" :placeholder="$t('login.usernamePh')" clearable @enter="onLogin" />
-          </t-form-item>
-          <t-form-item :label="$t('login.password')">
+          </form-item>
+          <form-item :label="$t('login.password')">
             <t-input
               v-model="password"
               type="password"
               :placeholder="$t('login.passwordPh')"
               @enter="onLogin"
             />
-          </t-form-item>
-          <t-form-item>
+          </form-item>
+          <div class="login-submit">
             <t-button theme="primary" block size="large" :loading="loading" @click="onLogin">
               {{ $t('login.submit') }}
             </t-button>
-          </t-form-item>
+          </div>
         </t-form>
       </div>
     </div>
@@ -56,9 +56,9 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { setToken } from '../../api/client'
-import { authApi } from '../../api/auth'
-import { branding, brandLogo, brandCustom, ensureBranding } from '../../utils/branding'
+import { setToken } from '@/api/client'
+import { authApi } from '@/api/auth'
+import { branding, brandLogo, brandCustom, ensureBranding } from '@/utils/branding'
 
 const { t } = useI18n()
 const router = useRouter()

@@ -1,0 +1,15 @@
+{
+  "name": "ClawProxyHub",
+  "short_name": "CPH",
+  "description": "ClawProxyHub 管理控制台",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#141a2e",
+  "theme_color": "#3563e8",
+  "icons": [
+    { "src": "/favicon-32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/logo-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

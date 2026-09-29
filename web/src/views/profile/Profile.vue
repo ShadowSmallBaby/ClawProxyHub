@@ -17,32 +17,33 @@
     </c-card>
 
     <!-- 修改密码：弹窗确认 -->
-    <c-dialog v-model:visible="pwVisible" :header="$t('settings.changePassword')" :confirm-btn="{ loading: savingPw }" @confirm="savePw">
+    <c-drawer v-model:visible="pwVisible" :header="$t('settings.changePassword')" :confirm-btn="{ loading: savingPw }" @confirm="savePw">
       <t-form label-width="110px">
-        <t-form-item :label="$t('settings.oldPassword')" mark>
+        <form-item :label="$t('settings.oldPassword')" :mark="true">
           <t-input v-model="pwForm.old" type="password" />
-        </t-form-item>
-        <t-form-item :label="$t('settings.newPassword')" mark>
+        </form-item>
+        <form-item :label="$t('settings.newPassword')" :mark="true">
           <t-input v-model="pwForm.password" type="password" :placeholder="$t('settings.passwordPh')" />
-        </t-form-item>
-        <t-form-item :label="$t('settings.confirmPassword')" mark>
+        </form-item>
+        <form-item :label="$t('settings.confirmPassword')" :mark="true">
           <t-input v-model="pwForm.confirm" type="password" />
-        </t-form-item>
+        </form-item>
       </t-form>
-    </c-dialog>
+    </c-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CDialog } from '../../components/base'
-import { CCard, CTable } from '../../components/base'
+import { CDrawer } from '@/components/base'
+import FormItem from '@/components/FormItem.vue'
+import { CCard, CTable } from '@/components/base'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { clearToken } from '../../api/client'
-import { authApi, type Me } from '../../api/auth'
-import { fmtTime } from '../../utils/format'
+import { clearToken } from '@/api/client'
+import { authApi, type Me } from '@/api/auth'
+import { fmtTime } from '@/utils/format'
 
 const { t } = useI18n()
 const router = useRouter()

@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <page-header>
+    <page-header v-if="!isPhone">
       
       <t-button theme="primary" @click="createVisible = true">{{ $t('keys.create') }}</t-button>
     </page-header>
-    <c-table row-key="id" :data="keys" :columns="columns" :loading="loading">
+    <c-table row-key="id" :data="keys" :columns="columns" :loading="loading" mobile-cards :phone-cols="['name', 'enabled', 'last_used_at']">
       <template #key="{ row }">
         <span class="key-mask">
           {{ row.key_mask }}
@@ -36,51 +36,59 @@
     </c-table>
 
     <!-- 创建密钥 -->
-    <c-dialog v-model:visible="createVisible" :header="$t('keys.create')" :confirm-btn="{ loading: creating }" @confirm="submitCreate">
-      <t-form label-width="90px">
-        <t-form-item :label="$t('keys.name')">
+    <c-drawer v-model:visible="createVisible" :header="$t('keys.create')" :confirm-btn="{ loading: creating }" @confirm="submitCreate">
+      <t-form>
+        <form-item :label="$t('keys.name')">
           <t-input v-model="createName" :placeholder="$t('keys.namePh')" clearable @enter="submitCreate" />
-        </t-form-item>
+        </form-item>
       </t-form>
-    </c-dialog>
+    </c-drawer>
 
     <!-- 明文只在创建时展示一次 -->
-    <c-dialog v-model:visible="newKeyVisible" :header="$t('keys.createdTitle')" :footer="false">
+    <c-drawer v-model:visible="newKeyVisible" :header="$t('keys.createdTitle')" :footer="false">
       <div class="new-key">{{ newKey }}</div>
       <t-button block variant="outline" @click="copy">{{ $t('keys.copy') }}</t-button>
-    </c-dialog>
+    </c-drawer>
 
-    <c-dialog v-model:visible="bindVisibleBool" :header="$t('keys.bindTitle')" @confirm="bind">
+    <c-drawer v-model:visible="bindVisibleBool" :header="$t('keys.bindTitle')" @confirm="bind">
       <bind-select v-model="bindRoutes" :options="routeOptions" :placeholder="$t('keys.bindPh')" />
-    </c-dialog>
+    </c-drawer>
 
     <!-- 改名 -->
-    <c-dialog v-model:visible="renameVisibleBool" :header="$t('keys.rename')" @confirm="submitRename">
-      <t-form label-width="90px">
-        <t-form-item :label="$t('keys.name')">
+    <c-drawer v-model:visible="renameVisibleBool" :header="$t('keys.rename')" @confirm="submitRename">
+      <t-form>
+        <form-item :label="$t('keys.name')">
           <t-input v-model="renameName" :placeholder="$t('keys.namePh')" clearable @enter="submitRename" />
-        </t-form-item>
+        </form-item>
       </t-form>
-    </c-dialog>
+    </c-drawer>
+
+    <mobile-fab v-if="isPhone">
+      <t-button theme="primary" shape="circle" size="large" @click="createVisible = true">
+        <template #icon><add-icon /></template>
+      </t-button>
+    </mobile-fab>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CDialog } from '../../components/base'
-import { CCard, CTable } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
-import { useAsync } from '../../composables'
-import { useDialogVisible } from '../../composables'
+import { CDrawer } from '@/components/base'
+import { FormItem } from '@/components'
+import { CCard, CTable, MobileFab } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
+import { useAsync, useIsMobile } from '@/composables'
+import { useDialogVisible } from '@/composables'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { FileCopyIcon } from 'tdesign-icons-vue-next'
-import { keyApi, routeApi } from '../../api/entities'
-import { timeAgo, fmtTime } from '../../utils/format'
-import BindSelect from '../../components/BindSelect.vue'
-import type { KeyInfo, RouteInfo } from '../../api/types'
+import { FileCopyIcon, AddIcon } from 'tdesign-icons-vue-next'
+import { keyApi, routeApi } from '@/api/entities'
+import { timeAgo, fmtTime } from '@/utils/format'
+import BindSelect from '@/components/BindSelect.vue'
+import type { KeyInfo, RouteInfo } from '@/api/types'
 
 const { t } = useI18n()
+const { isPhone } = useIsMobile()
 
 const keys = ref<KeyInfo[]>([])
 const routes = ref<RouteInfo[]>([])

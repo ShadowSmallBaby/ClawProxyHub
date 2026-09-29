@@ -1,105 +1,106 @@
 <template>
-  <!-- 设置页：tab 切换，页面整体固定占满内容区，tab 内容各自内部滚动 -->
+  <!-- 设置页：tab 切换，页面整体固定占满内容区，tab 内容各自内部滚动（三端统一） -->
   <div class="settings-page">
+    <!-- 桌面/平板/手机：tab 切换统一 -->
     <c-tabs v-model="tab" class="settings-tabs" size="medium">
       <t-tab-panel value="gateway" :label="$t('settings.gateway')">
         <div class="panel">
-          <t-form label-width="140px">
-            <t-form-item :label="$t('settings.firstEventTimeout')" :help="$t('settings.firstEventTimeoutHelp')">
-              <t-input-number v-model="gwForm.first_event_timeout" :min="5" :max="3600" theme="column" style="width: 160px" />
-            </t-form-item>
-            <t-form-item :label="$t('settings.firstTokenTimeout')" :help="$t('settings.firstTokenTimeoutHelp')">
-              <t-input-number v-model="gwForm.first_token_timeout" :min="5" :max="3600" theme="column" style="width: 160px" />
-            </t-form-item>
-            <t-form-item :label="$t('settings.maxRetries')" :help="$t('settings.maxRetriesHelp')">
-              <t-input-number v-model="gwForm.max_retries" :min="1" :max="10" theme="column" style="width: 160px" />
-            </t-form-item>
-            <t-form-item :label="$t('settings.contextTruncate')" :help="$t('settings.contextTruncateHelp')">
+          <div class="s-form">
+            <form-item :label="$t('settings.firstEventTimeout')" :tip="$t('settings.firstEventTimeoutHelp')">
+              <t-input-number v-model="gwForm.first_event_timeout" :min="5" :max="3600" theme="column" class="w-sm" />
+            </form-item>
+            <form-item :label="$t('settings.firstTokenTimeout')" :tip="$t('settings.firstTokenTimeoutHelp')">
+              <t-input-number v-model="gwForm.first_token_timeout" :min="5" :max="3600" theme="column" class="w-sm" />
+            </form-item>
+            <form-item :label="$t('settings.maxRetries')" :tip="$t('settings.maxRetriesHelp')">
+              <t-input-number v-model="gwForm.max_retries" :min="1" :max="10" theme="column" class="w-sm" />
+            </form-item>
+            <form-item :label="$t('settings.contextTruncate')" :tip="$t('settings.contextTruncateHelp')">
               <t-switch v-model="gwForm.context_truncate_enabled" />
-            </t-form-item>
-            <t-form-item :label="$t('settings.contextTruncateRatio')" :help="$t('settings.contextTruncateRatioHelp')">
-              <t-input-number v-model="gwForm.context_truncate_ratio" :min="0.1" :max="1" :step="0.05" :decimal-places="2" theme="column" style="width: 160px" />
-            </t-form-item>
-            <t-form-item :label="$t('settings.contextBytesPerToken')" :help="$t('settings.contextBytesPerTokenHelp')">
-              <t-input-number v-model="gwForm.context_bytes_per_token" :min="1" :max="100" :step="0.5" :decimal-places="1" theme="column" style="width: 160px" />
-            </t-form-item>
-            <t-form-item :label="$t('settings.userAgent')" :help="$t('settings.userAgentHelp')">
-              <t-input v-model="gwForm.user_agent" :placeholder="$t('settings.uaPh')" style="width: 480px" />
-            </t-form-item>
-            <t-form-item :label="$t('settings.browserUserAgent')" :help="$t('settings.browserUserAgentHelp')">
-              <t-input v-model="gwForm.browser_user_agent" :placeholder="$t('settings.uaPh')" style="width: 480px" />
-            </t-form-item>
-            <t-form-item>
+            </form-item>
+            <form-item :label="$t('settings.contextTruncateRatio')" :tip="$t('settings.contextTruncateRatioHelp')">
+              <t-input-number v-model="gwForm.context_truncate_ratio" :min="0.1" :max="1" :step="0.05" :decimal-places="2" theme="column" class="w-sm" />
+            </form-item>
+            <form-item :label="$t('settings.contextBytesPerToken')" :tip="$t('settings.contextBytesPerTokenHelp')">
+              <t-input-number v-model="gwForm.context_bytes_per_token" :min="1" :max="100" :step="0.5" :decimal-places="1" theme="column" class="w-sm" />
+            </form-item>
+            <form-item :label="$t('settings.userAgent')" :tip="$t('settings.userAgentHelp')">
+              <t-input v-model="gwForm.user_agent" :placeholder="$t('settings.uaPh')" class="w-2xl" />
+            </form-item>
+            <form-item :label="$t('settings.browserUserAgent')" :tip="$t('settings.browserUserAgentHelp')">
+              <t-input v-model="gwForm.browser_user_agent" :placeholder="$t('settings.uaPh')" class="w-2xl" />
+            </form-item>
+            <div class="save-row">
               <t-button theme="primary" :loading="saving" @click="save({ first_event_timeout: gwForm.first_event_timeout, first_token_timeout: gwForm.first_token_timeout, max_retries: gwForm.max_retries, user_agent: gwForm.user_agent.trim(), browser_user_agent: gwForm.browser_user_agent.trim(), context_truncate_enabled: gwForm.context_truncate_enabled, context_truncate_ratio: gwForm.context_truncate_ratio, context_bytes_per_token: gwForm.context_bytes_per_token })">{{ $t('common.save') }}</t-button>
-            </t-form-item>
-          </t-form>
+            </div>
+          </div>
         </div>
       </t-tab-panel>
 
       <t-tab-panel value="network" :label="$t('settings.network')">
         <div class="panel">
-          <t-form label-width="140px">
-            <t-form-item :label="$t('settings.githubProxy')" :help="$t('settings.githubProxyHelp')">
-              <t-input v-model="netForm.github_proxy" placeholder="https://ghproxy.com" style="width: 360px" />
-            </t-form-item>
-            <t-form-item>
+          <div class="s-form">
+            <form-item :label="$t('settings.githubProxy')" :tip="$t('settings.githubProxyHelp')">
+              <t-input v-model="netForm.github_proxy" placeholder="https://ghproxy.com" class="w-xl" />
+            </form-item>
+            <div class="save-row">
               <t-button theme="primary" :loading="saving" @click="save({ github_proxy: netForm.github_proxy.trim() })">{{ $t('common.save') }}</t-button>
-            </t-form-item>
-          </t-form>
+            </div>
+          </div>
         </div>
       </t-tab-panel>
 
       <t-tab-panel value="logs" :label="$t('settings.logs')">
         <div class="panel">
-          <t-form label-width="140px">
-            <t-form-item :label="$t('settings.logRetention')" :help="$t('settings.logRetentionHelp')">
-              <t-select v-model="logForm.log_retention_days" style="width: 200px" @change="save({ log_retention_days: logForm.log_retention_days })">
+          <div class="s-form">
+            <form-item :label="$t('settings.logRetention')" :tip="$t('settings.logRetentionHelp')">
+              <t-select v-model="logForm.log_retention_days" class="w-sm" @change="save({ log_retention_days: logForm.log_retention_days })">
                 <t-option :value="0" :label="$t('settings.retentionForever')" />
                 <t-option v-for="d in [7, 14, 30, 60, 90, 180, 365]" :key="d" :value="d" :label="$t('settings.retentionDays', { n: d })" />
               </t-select>
-            </t-form-item>
-            <t-form-item :label="$t('settings.runLevel')" :help="$t('settings.runLevelHelp')">
-              <t-select v-model="logForm.run_level" style="width: 200px" @change="save({ run_level: logForm.run_level })">
+            </form-item>
+            <form-item :label="$t('settings.runLevel')" :tip="$t('settings.runLevelHelp')">
+              <t-select v-model="logForm.run_level" class="w-sm" @change="save({ run_level: logForm.run_level })">
                 <t-option value="error" :label="$t('settings.runLevelError')" />
                 <t-option value="warn" :label="$t('settings.runLevelWarn')" />
                 <t-option value="debug" :label="$t('settings.runLevelDebug')" />
                 <t-option value="info" :label="$t('settings.runLevelInfo')" />
               </t-select>
-            </t-form-item>
-            <t-form-item :label="$t('settings.logExport')" :help="$t('settings.logExportHelp')">
+            </form-item>
+            <form-item :label="$t('settings.logExport')" :tip="$t('settings.logExportHelp')">
               <t-button variant="outline" :loading="exporting" @click="exportLogs">
                 <template #icon><download-icon /></template>{{ $t('settings.exportBtn') }}
               </t-button>
-            </t-form-item>
-            <t-form-item :label="$t('settings.logClear')" :help="$t('settings.logClearHelp')">
+            </form-item>
+            <form-item :label="$t('settings.logClear')" :tip="$t('settings.logClearHelp')">
               <t-button theme="danger" variant="outline" @click="confirmClear">
                 <template #icon><delete-icon /></template>{{ $t('settings.clearBtn') }}
               </t-button>
-            </t-form-item>
-          </t-form>
+            </form-item>
+          </div>
         </div>
       </t-tab-panel>
 
       <t-tab-panel value="task" :label="$t('settings.task')">
         <div class="panel">
-          <t-form label-width="140px">
-            <t-form-item :label="$t('settings.taskJitter')" :help="$t('settings.taskJitterHelp')">
-              <t-input-number v-model="taskForm.task_daily_jitter" :min="0" :max="45" :suffix="$t('settings.taskJitterUnit')" theme="column" style="width: 200px" @change="save({ task_daily_jitter: taskForm.task_daily_jitter })" />
-            </t-form-item>
-          </t-form>
+          <div class="s-form">
+            <form-item :label="$t('settings.taskJitter')" :tip="$t('settings.taskJitterHelp')">
+              <t-input-number v-model="taskForm.task_daily_jitter" :min="0" :max="45" :suffix="$t('settings.taskJitterUnit')" theme="column" class="w-sm" @change="save({ task_daily_jitter: taskForm.task_daily_jitter })" />
+            </form-item>
+          </div>
         </div>
       </t-tab-panel>
 
       <t-tab-panel value="plugin" :label="$t('settings.plugin')">
         <div class="panel">
-          <t-form label-width="140px">
-            <t-form-item :label="$t('settings.luaEnabled')" :help="$t('settings.luaEnabledHelp')">
+          <div class="s-form">
+            <form-item :label="$t('settings.luaEnabled')" :tip="$t('settings.luaEnabledHelp')">
               <t-switch v-model="pluginForm.plugin_lua_enabled" @change="save({ plugin_lua_enabled: pluginForm.plugin_lua_enabled })" />
-            </t-form-item>
-            <t-form-item :label="$t('settings.luaIsolation')" :help="$t('settings.luaIsolationHelp')">
+            </form-item>
+            <form-item :label="$t('settings.luaIsolation')" :tip="$t('settings.luaIsolationHelp')">
               <t-switch v-model="pluginForm.plugin_lua_isolation" disabled />
-            </t-form-item>
-            <t-form-item :label="$t('settings.luaUpdate')" :help="$t('settings.luaUpdateHelp')">
+            </form-item>
+            <form-item :label="$t('settings.luaUpdate')" :tip="$t('settings.luaUpdateHelp')">
               <input ref="luahostEl" type="file" hidden @change="onPickLuahost" />
               <t-space>
                 <t-button variant="outline" :loading="uploadingLua" @click="luahostEl?.click()">
@@ -107,36 +108,23 @@
                 </t-button>
                 <t-button variant="outline" disabled>{{ $t('settings.luaUpdateOnline') }}</t-button>
               </t-space>
-            </t-form-item>
-          </t-form>
+            </form-item>
+          </div>
         </div>
       </t-tab-panel>
 
       <t-tab-panel value="system" :label="$t('settings.system')">
         <div class="panel">
-          <div class="section-title">{{ $t('settings.sysInfo') }}</div>
-          <t-descriptions v-if="sys" :column="2" bordered size="small" class="sys-desc">
-            <t-descriptions-item :label="$t('settings.sysVersion')">v{{ sys.version }}</t-descriptions-item>
-            <t-descriptions-item :label="$t('settings.sysProtocol')">v{{ sys.protocol_version }}</t-descriptions-item>
-            <t-descriptions-item :label="$t('settings.sysRuntime')">{{ sys.go_version }} · {{ sys.os }}/{{ sys.arch }}</t-descriptions-item>
-            <t-descriptions-item :label="$t('settings.sysStarted')">{{ sys.started_at.replace('T', ' ').slice(0, 19) }}</t-descriptions-item>
-            <t-descriptions-item :label="$t('settings.sysUptime')">{{ uptime }}</t-descriptions-item>
-            <t-descriptions-item :label="$t('settings.sysDataDir')"><code>{{ sys.data_dir }}</code></t-descriptions-item>
-            <t-descriptions-item :label="$t('settings.sysDbSize')">{{ fmtBytes(sys.db_size_bytes) }}</t-descriptions-item>
-            <t-descriptions-item :label="$t('settings.sysMigration')">{{ sys.migration_version }}</t-descriptions-item>
-            <t-descriptions-item :label="$t('settings.sysMem')">{{ fmtBytes(sys.mem_alloc_bytes) }} · {{ sys.goroutines }} goroutines</t-descriptions-item>
-            <t-descriptions-item :label="$t('settings.sysCounts')">
-              <span class="counts">
-                <span v-for="c in countItems" :key="c.key"><b>{{ sys.counts[c.key] ?? 0 }}</b> {{ $t(c.label) }}</span>
-              </span>
-            </t-descriptions-item>
-          </t-descriptions>
-          <t-alert v-if="sys?.pending_restore" theme="warning" class="restore-alert" :message="$t('settings.pendingRestore')" />
+          <!-- 系统信息：手机端走独立抽屉，仅 PC 展示 -->
+          <template v-if="!isPhone">
+            <div class="section-title">{{ $t('settings.sysInfo') }}</div>
+            <sys-info-card :sys="sys" :column="2" />
+          </template>
 
           <!-- 站点品牌：logo / 名称 / 缩写；留空恢复默认 -->
           <div class="section-title">{{ $t('settings.siteBrand') }}</div>
-          <t-form label-width="140px" class="sys-form">
-            <t-form-item :label="$t('settings.siteLogo')" :help="$t('settings.siteLogoHelp')">
+          <div class="s-form sys-form">
+            <form-item :label="$t('settings.siteLogo')" :tip="$t('settings.siteLogoHelp')">
               <div class="logo-row">
                 <img class="logo-preview" :src="siteForm.site_logo || '/logo.png'" alt="logo" />
                 <input ref="logoEl" type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden @change="onPickLogo" />
@@ -145,51 +133,121 @@
                 </t-button>
                 <t-button v-if="siteForm.site_logo" variant="text" theme="default" @click="siteForm.site_logo = ''">{{ $t('settings.siteLogoReset') }}</t-button>
               </div>
-            </t-form-item>
-            <t-form-item :label="$t('settings.siteName')" :help="$t('settings.siteNameHelp')">
-              <t-input v-model="siteForm.site_name" :maxlength="32" placeholder="ClawProxyHub" clearable style="width: 280px" />
-            </t-form-item>
-            <t-form-item :label="$t('settings.siteAbbr')" :help="$t('settings.siteAbbrHelp')">
-              <t-input v-model="siteForm.site_abbr" :maxlength="8" placeholder="CPH" clearable style="width: 160px" />
-            </t-form-item>
-            <t-form-item>
+            </form-item>
+            <form-item :label="$t('settings.siteName')" :tip="$t('settings.siteNameHelp')">
+              <t-input v-model="siteForm.site_name" :maxlength="32" placeholder="ClawProxyHub" clearable class="w-md" />
+            </form-item>
+            <form-item :label="$t('settings.siteAbbr')" :tip="$t('settings.siteAbbrHelp')">
+              <t-input v-model="siteForm.site_abbr" :maxlength="8" placeholder="CPH" clearable class="w-sm" />
+            </form-item>
+            <div class="save-row">
               <t-button theme="primary" :loading="saving" @click="saveSite">{{ $t('common.save') }}</t-button>
-            </t-form-item>
-          </t-form>
+            </div>
+          </div>
 
           <div class="section-title">{{ $t('settings.backupTitle') }}</div>
-          <t-form label-width="140px" class="sys-form">
-            <t-form-item :label="$t('settings.backupExport')" :help="$t('settings.backupExportHelp')">
+          <div class="s-form sys-form">
+            <form-item :label="$t('settings.backupExport')" :tip="$t('settings.backupExportHelp')">
               <t-button variant="outline" :loading="backingUp" @click="exportBackup">
                 <template #icon><download-icon /></template>{{ $t('settings.backupBtn') }}
               </t-button>
-            </t-form-item>
-            <t-form-item :label="$t('settings.backupImport')" :help="$t('settings.backupImportHelp')">
+            </form-item>
+            <form-item :label="$t('settings.backupImport')" :tip="$t('settings.backupImportHelp')">
               <input ref="fileEl" type="file" accept=".zip" hidden @change="onPickBackup" />
               <t-button variant="outline" :loading="restoring" @click="fileEl?.click()">
                 <template #icon><upload-icon /></template>{{ $t('settings.restoreBtn') }}
               </t-button>
-            </t-form-item>
-          </t-form>
+            </form-item>
+          </div>
         </div>
       </t-tab-panel>
     </c-tabs>
+
+    <!-- 手机端：分区标题 + 悬浮按钮切分区/保存/系统信息 -->
+    <div v-if="isPhone" class="phone-tab">{{ currentTabLabel }}</div>
+    <mobile-fab v-if="isPhone">
+      <t-popup v-model:visible="menuOpen" placement="top-right" trigger="click">
+        <t-button theme="primary" shape="circle" size="large">
+          <template #icon><setting-icon /></template>
+        </t-button>
+        <template #content>
+          <div class="phone-menu">
+            <div
+              v-for="o in tabOptions"
+              :key="o.value"
+              class="phone-menu-item"
+              :class="{ on: tab === o.value }"
+              @click="pickTab(o.value)"
+            >
+              {{ o.label }}
+            </div>
+          </div>
+        </template>
+      </t-popup>
+      <t-button theme="default" shape="circle" size="large" @click="openSys">
+        <template #icon><desktop-icon /></template>
+      </t-button>
+      <t-button v-if="['gateway', 'network', 'system'].includes(tab)" theme="success" shape="circle" size="large" :loading="saving" @click="saveCurrent">
+        <template #icon><save-icon /></template>
+      </t-button>
+    </mobile-fab>
+
+    <!-- 手机端系统信息抽屉：一列展示 -->
+    <c-drawer v-if="isPhone" v-model:visible="sysOpen" :header="$t('settings.sysInfo')" :footer="false">
+      <sys-info-card :sys="sys" />
+    </c-drawer>
+
   </div>
 </template>
 
 <script setup lang="ts">
-import { CTabs } from '../../components/base'
+import { CTabs, MobileFab } from '@/components/base'
+import { FormItem, SysInfoCard } from '@/components'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
-import { DeleteIcon, DownloadIcon, UploadIcon } from 'tdesign-icons-vue-next'
-import { settingsApi, systemApi, uploadLuahost, type SysInfo } from '../../api/settings'
-import { logsApi } from '../../api/logs'
-import { refreshBranding } from '../../utils/branding'
+import { DeleteIcon, DownloadIcon, UploadIcon, SettingIcon, SaveIcon, DesktopIcon } from 'tdesign-icons-vue-next'
+import { settingsApi, systemApi, uploadLuahost, type SysInfo } from '@/api/settings'
+import { logsApi } from '@/api/logs'
+import { refreshBranding } from '@/utils/branding'
+import { useIsMobile } from '@/composables'
 
 const { t } = useI18n()
+const { isPhone } = useIsMobile()
+
+const tabOptions = computed(() => [
+  { value: 'gateway', label: t('settings.gateway') },
+  { value: 'network', label: t('settings.network') },
+  { value: 'logs', label: t('settings.logs') },
+  { value: 'task', label: t('settings.task') },
+  { value: 'plugin', label: t('settings.plugin') },
+  { value: 'system', label: t('settings.system') },
+])
 
 const tab = ref('gateway')
+const sysOpen = ref(false)
+const menuOpen = ref(false)
+
+// 悬浮菜单切分区：选完自动收起；system 进入时加载系统信息
+function pickTab(v: string) {
+  menuOpen.value = false
+  tab.value = v
+  if (v === 'system') loadSys()
+}
+
+// 系统信息抽屉（独立悬浮按钮）
+function openSys() {
+  sysOpen.value = true
+  loadSys()
+}
+const currentTabLabel = computed(() => tabOptions.value.find((o) => o.value === tab.value)?.label ?? '')
+
+// 手机端悬浮保存：按 tab 分块提交当前块
+function saveCurrent() {
+  if (tab.value === 'gateway') save({ first_event_timeout: gwForm.first_event_timeout, first_token_timeout: gwForm.first_token_timeout, max_retries: gwForm.max_retries, user_agent: gwForm.user_agent.trim(), browser_user_agent: gwForm.browser_user_agent.trim(), context_truncate_enabled: gwForm.context_truncate_enabled, context_truncate_ratio: gwForm.context_truncate_ratio, context_bytes_per_token: gwForm.context_bytes_per_token })
+  else if (tab.value === 'network') save({ github_proxy: netForm.github_proxy.trim() })
+  else if (tab.value === 'system') saveSite()
+}
 const gwForm = reactive({ first_event_timeout: 60, first_token_timeout: 120, max_retries: 3, user_agent: '', browser_user_agent: '', context_truncate_enabled: true, context_truncate_ratio: 0.9, context_bytes_per_token: 3.5 })
 const netForm = reactive({ github_proxy: '' })
 const logForm = reactive({ log_retention_days: 0, run_level: 'error' })
@@ -206,16 +264,6 @@ const luahostEl = ref<HTMLInputElement>()
 const uploadingLua = ref(false)
 
 const sys = ref<SysInfo | null>(null)
-const countItems = [
-  { key: 'plugins', label: 'settings.countPlugins' }, { key: 'instances', label: 'settings.countInstances' },
-  { key: 'accounts', label: 'settings.countAccounts' }, { key: 'groups', label: 'settings.countGroups' },
-  { key: 'routes', label: 'settings.countRoutes' }, { key: 'keys', label: 'settings.countKeys' },
-  { key: 'request_logs', label: 'settings.countLogs' }, { key: 'task_runs', label: 'settings.countRuns' },
-]
-const uptime = computed(() => {
-  const s = sys.value?.uptime_seconds ?? 0
-  return t('settings.uptimeFmt', { d: Math.floor(s / 86400), h: Math.floor((s % 86400) / 3600), m: Math.floor((s % 3600) / 60) })
-})
 
 async function load() {
   const r = await settingsApi.get()
@@ -333,13 +381,8 @@ function onPickBackup(ev: Event) {
   })
 }
 
-function fmtBytes(n: number): string {
-  if (n >= 1 << 30) return (n / (1 << 30)).toFixed(2) + ' GB'
-  if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + ' MB'
-  if (n >= 1024) return (n / 1024).toFixed(1) + ' KB'
-  return n + ' B'
-}
-
+// PC system tab 切入时加载系统信息（手机端走抽屉 pickTab）
+// PC tab 切入 system 时加载（手机端走 pickTab/openSys）
 watch(tab, (v) => { if (v === 'system') loadSys() })
 onMounted(load)
 </script>
@@ -368,13 +411,28 @@ onMounted(load)
   flex-shrink: 0;
   padding: 0 12px;
 }
+.panel {
+  padding: 24px 28px 32px;
+}
+@media (max-width: 767px) {
+  .settings-page {
+    padding: 0;
+  }
+  .panel {
+    padding: 16px 12px 24px;
+  }
+}
 .settings-tabs :deep(.t-tabs__content) {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
 }
-.panel {
-  padding: 24px 28px 32px;
+/* panel 撑满滚动容器（三端统一固定高度，内容滚动） */
+.settings-tabs :deep(.t-tab-panel) {
+  flex: 1;
+  min-height: 0;
 }
 .section-title {
   font-size: 14px;
@@ -417,5 +475,50 @@ onMounted(load)
   border-radius: 10px;
   border: 1px solid var(--td-component-border);
   object-fit: cover;
+}
+.save-row {
+  padding: 16px 0 0;
+}
+/* 手机端：保存走悬浮按钮，隐藏 PC 行内保存 */
+@media (max-width: 767px) {
+  .save-row {
+    display: none;
+  }
+}
+
+/* 手机端：分区标题 + 悬浮菜单样式 */
+.phone-tab {
+  position: fixed;
+  top: 60px;
+  left: 12px;
+  z-index: 90;
+  font-size: 15px;
+  font-weight: 700;
+  pointer-events: none;
+}
+.phone-menu {
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+}
+.phone-menu-item {
+  padding: 10px 16px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.phone-menu-item.on {
+  color: var(--td-brand-color);
+  background: var(--td-brand-color-light);
+  font-weight: 600;
+}
+
+/* 手机端：tab 头隐藏（悬浮菜单替代），系统信息 tab 整个隐藏（抽屉承载） */
+@media (max-width: 767px) {
+  .settings-tabs :deep(.t-tabs__header) {
+    display: none;
+  }
+  .settings-page {
+    padding-top: 40px;
+  }
 }
 </style>

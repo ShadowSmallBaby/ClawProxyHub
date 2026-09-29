@@ -1,6 +1,6 @@
 <template>
   <div class="page">
-    <page-header>
+    <page-header v-if="!isPhone">
 
       <t-button theme="primary" @click="openCreate">{{ $t('tasks.create') }}</t-button>
       <t-button v-if="tab === 'runs'" theme="default" variant="outline" :loading="runsLoading" @click="refreshRuns">
@@ -8,9 +8,9 @@
       </t-button>
     </page-header>
 
-    <c-tabs v-model="tab" class="task-tabs">
+    <c-tabs v-model="tab" class="task-tabs phone-scroll">
       <t-tab-panel value="rules" :label="$t('tasks.tabRules')">
-        <c-table row-key="id" :data="rules" :columns="ruleColumns" height="100%">
+        <c-table row-key="id" :data="rules" :columns="ruleColumns" height="100%" mobile-cards :phone-cols="['plugin', 'capability', 'enabled']">
           <template #trigger="{ row }">
             <t-tag variant="light">{{ dict(triggerDict, row.trigger_type) }}</t-tag>
           </template>
@@ -34,7 +34,7 @@
         </c-table>
       </t-tab-panel>
       <t-tab-panel value="runs" :label="$t('tasks.tabRuns')">
-        <c-table row-key="id" :data="runs" :columns="runColumns" height="100%">
+        <c-table row-key="id" :data="runs" :columns="runColumns" height="100%" mobile-cards :phone-cols="['plugin', 'status', 'started_at']">
           <template #status="{ row }">
             <!-- 错误信息并入状态 tooltip -->
             <t-tooltip
@@ -54,34 +54,32 @@
         </c-table>
       </t-tab-panel>
     </c-tabs>
-    <t-pagination
+    <c-pagination
       class="task-pagination"
       v-model="page"
       v-model:pageSize="pageSize"
       :total="tab === 'runs' ? runTotal : ruleTotal"
-      :page-size-options="[10, 30, 50, 100, 200]"
-      show-jumper
       @change="onPageChange"
       @page-size-change="onPageChange"
     />
 
-    <c-dialog v-model:visible="createVisible" :header="editingId ? $t('tasks.editTitle') : $t('tasks.createTitle')" width="560px" :confirm-btn="{ loading: creating }" @confirm="submit">
-      <t-form label-width="90px">
+    <c-drawer v-model:visible="createVisible" :header="editingId ? $t('tasks.editTitle') : $t('tasks.createTitle')" width="560px" :confirm-btn="{ loading: creating }" @confirm="submit">
+      <t-form>
         <t-alert v-if="editingAuto" theme="info" :message="$t('tasks.autoLocked')" style="margin-bottom: 12px" />
-        <t-form-item :label="$t('tasks.plugin')" mark>
+        <form-item :label="$t('tasks.plugin')" mark>
           <t-select v-model="form.plugin_id" :disabled="!!editingId" :placeholder="$t('tasks.pluginPh')" @change="onPluginChange">
             <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
           </t-select>
-        </t-form-item>
-        <t-form-item :label="$t('tasks.capability')" mark>
+        </form-item>
+        <form-item :label="$t('tasks.capability')" mark>
           <t-select v-model="form.capability_id" :disabled="editingAuto || !form.plugin_id" :loading="capsLoading" :placeholder="$t('tasks.pickPluginPh')">
             <t-option v-for="c in capabilities" :key="c.id" :value="c.id" :label="c.label" />
           </t-select>
-        </t-form-item>
-        <t-form-item :label="$t('tasks.trigger')" mark>
+        </form-item>
+        <form-item :label="$t('tasks.trigger')" mark>
           <div class="trigger-box">
             <div class="trigger-row">
-              <t-select v-model="form.trigger_type" style="width: 110px" :disabled="editingAuto" :placeholder="$t('tasks.triggerPh')">
+              <t-select v-model="form.trigger_type" class="w-2xs" :disabled="editingAuto" :placeholder="$t('tasks.triggerPh')">
                 <t-option value="interval" :label="$t('tasks.triggerInterval')" />
                 <t-option value="daily" :label="$t('tasks.triggerDaily')" />
                 <t-option value="once" :label="$t('tasks.triggerOnce')" />
@@ -100,37 +98,52 @@
             </div>
             <div class="trigger-hint">{{ triggerHint }}</div>
           </div>
-        </t-form-item>
-        <t-form-item :label="$t('tasks.scope')">
+        </form-item>
+        <form-item :label="$t('tasks.scope')">
           <t-radio-group v-model="form.target_scope" variant="default-filled" :disabled="editingAuto">
             <t-radio-button value="all">{{ $t('tasks.scopeAll') }}</t-radio-button>
             <t-radio-button value="account_ids">{{ $t('tasks.scopeOne') }}</t-radio-button>
           </t-radio-group>
-        </t-form-item>
-        <t-form-item v-if="form.target_scope === 'account_ids'" :label="$t('tasks.account')">
+        </form-item>
+        <form-item v-if="form.target_scope === 'account_ids'" :label="$t('tasks.account')">
           <t-select v-model="form.target_account" :disabled="editingAuto" :loading="acctsLoading" :placeholder="$t('tasks.pickAccountPh')" style="width: 100%">
             <t-option v-for="a in accounts" :key="a.id" :value="a.id" :label="a.display_name || `#${a.id}`" />
           </t-select>
-        </t-form-item>
+        </form-item>
       </t-form>
-    </c-dialog>
+    </c-drawer>
+
+    <!-- 手机端：新建/刷新 悬浮按钮 -->
+    <mobile-fab v-if="isPhone">
+      <t-button v-if="tab === 'runs'" theme="default" variant="outline" shape="circle" size="large" :loading="runsLoading" @click="refreshRuns">
+        <template #icon><refresh-icon /></template>
+      </t-button>
+      <t-button theme="primary" shape="circle" size="large" @click="openCreate">
+        <template #icon><add-icon /></template>
+      </t-button>
+    </mobile-fab>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CTabs } from '../../components/base'
-import { CDialog } from '../../components/base'
-import { CCard, CTable } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
+import { CTabs } from '@/components/base'
+import { FormItem } from '@/components'
+import { CDrawer } from '@/components/base'
+import { CCard, CTable, CPagination, MobileFab } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { AddIcon, RefreshIcon } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { accountApi, pluginApi, taskApi } from '../../api/entities'
-import { pluginLabelOf } from '../../utils/lookup'
-import { dict, runStatusDict, triggerDict } from '../../utils/dict'
-import type { TaskRule, TaskRun } from '../../api/types'
+import { accountApi, pluginApi, taskApi } from '@/api/entities'
+import { pluginLabelOf } from '@/utils/lookup'
+import { useIsMobile } from '@/composables'
+import { dict, runStatusDict, triggerDict } from '@/utils/dict'
+import { fmtTime, normalizeTime } from '@/utils/format'
+import type { TaskRule, TaskRun } from '@/api/types'
 
 const { t } = useI18n()
+const { isPhone } = useIsMobile()
 
 const tab = ref('rules')
 const rules = ref<TaskRule[]>([])
@@ -261,7 +274,7 @@ const runColumns = computed(() => [
   { colKey: 'account', title: t('tasks.colAccount'), width: 140, cell: (_h: any, { row }: any) => row.account || '-', align: 'center' },
   { colKey: 'status', title: t('tasks.colResult'), width: 90, align: 'center' },
   { colKey: 'summary', title: t('tasks.colSummary'), ellipsis: true, align: 'center' },
-  { colKey: 'started_at', title: t('common.colTime'), width: 190, cell: (_h: any, { row }: any) => row.started_at?.replace('T', ' ').slice(0, 19) ?? '-', align: 'center' },
+  { colKey: 'started_at', title: t('common.colTime'), width: 190, cell: (_h: any, { row }: any) => fmtTime(row.started_at), align: 'center' },
 ])
 
 // 触发值输入框 placeholder（短示例）；once 走日期时间选择器，格式说明在行下方
@@ -289,7 +302,7 @@ function onceToRFC3339(v: string): string {
 // 列表展示：once 的 RFC3339 转回本地 "YYYY-MM-DD HH:mm"
 function fmtTriggerValue(row: TaskRule): string {
   if (row.trigger_type !== 'once') return row.trigger_value
-  const d = new Date(row.trigger_value)
+  const d = new Date(normalizeTime(row.trigger_value))
   if (isNaN(d.getTime())) return row.trigger_value
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
@@ -387,13 +400,6 @@ onMounted(load)
 </script>
 
 <style scoped>
-.page {
-  /* 撑满内容区：页头/分页固定，表格吃掉中间剩余高度并自适应窗口 */
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
 .page-header,
 .task-pagination {
   flex-shrink: 0;

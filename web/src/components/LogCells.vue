@@ -42,8 +42,8 @@
 
 <script setup lang="ts">
 import { ArrowDownIcon, ArrowUpIcon, DataBaseIcon, LayersIcon } from 'tdesign-icons-vue-next'
-import type { RequestLog } from '../api/types'
-import { fmtMs, fmtTokens, sumTokens } from '../utils/logfmt'
+import type { RequestLog } from '@/api/types'
+import { fmtMs, fmtTokens, sumTokens } from '@/utils/logfmt'
 
 defineProps<{ kind: 'tokens' | 'latency'; row: RequestLog }>()
 </script>

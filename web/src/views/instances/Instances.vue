@@ -1,13 +1,22 @@
 <template>
   <div class="page">
-    <page-header>
-      <t-select v-model="filterPlugin" clearable :placeholder="$t('instances.filterPlugin')" style="width: 200px" @change="load">
-        <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
-      </t-select>
-      <t-button theme="primary" :disabled="!multiPlugins.length" @click="openCreate">{{ $t('instances.add') }}</t-button>
+    <page-header v-if="!isPhone">
+      <filter-bar>
+        <t-select v-model="filterPlugin" clearable :placeholder="$t('instances.filterPlugin')" class="w-md" @change="load">
+          <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
+        </t-select>
+        <t-button theme="primary" :disabled="!multiPlugins.length" @click="openCreate">{{ $t('instances.add') }}</t-button>
+      </filter-bar>
     </page-header>
 
-    <c-table row-key="id" :data="list" :columns="columns" :loading="loading">
+    <!-- 手机端：插件筛选收进底部抽屉 -->
+    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('instances.filterPlugin')" :footer="false">
+      <t-select v-model="filterPlugin" clearable :placeholder="$t('instances.filterPlugin')" @change="load">
+        <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
+      </t-select>
+    </c-drawer>
+
+    <c-table row-key="id" :data="list" :columns="columns" :loading="loading" mobile-cards>
       <template #base_url="{ row }">
         <span class="mono">{{ row.base_url || '-' }}</span>
       </template>
@@ -28,22 +37,34 @@
       :delete-url="`/admin/instances/${removing?.id ?? 0}`"
       @deleted="load"
     />
+
+    <mobile-fab v-if="isPhone">
+      <t-button theme="default" variant="outline" shape="circle" size="large" @click="filterOpen = true">
+        <template #icon><filter-icon /></template>
+      </t-button>
+      <t-button theme="primary" shape="circle" size="large" :disabled="!multiPlugins.length" @click="openCreate">
+        <template #icon><add-icon /></template>
+      </t-button>
+    </mobile-fab>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CCard, CTable } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
-import { useAsync } from '../../composables'
-import { pluginLabelOf } from '../../utils/lookup'
+import { CCard, CTable, MobileFab , CDrawer, FilterBar } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
+import { useAsync, useIsMobile } from '@/composables'
+import { pluginLabelOf } from '@/utils/lookup'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { pluginApi, instanceApi } from '../../api/entities'
-import InstanceFormDialog from '../../components/InstanceFormDialog.vue'
-import DeleteImpactDialog from '../../components/DeleteImpactDialog.vue'
-import type { InstanceInfo, PluginInfo } from '../../api/types'
+import { AddIcon, FilterIcon } from 'tdesign-icons-vue-next'
+import { pluginApi, instanceApi } from '@/api/entities'
+import InstanceFormDialog from '@/components/InstanceFormDialog.vue'
+import DeleteImpactDialog from '@/components/DeleteImpactDialog.vue'
+import type { InstanceInfo, PluginInfo } from '@/api/types'
 
 const { t } = useI18n()
+const { isPhone } = useIsMobile()
+const filterOpen = ref(false)
 
 const plugins = ref<PluginInfo[]>([])
 const list = ref<InstanceInfo[]>([])

@@ -1,4 +1,5 @@
 import { writeFileSync } from 'node:fs'
+import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
@@ -12,6 +13,10 @@ function manualChunks(id: string): string | undefined {
 }
 
 export default defineConfig({
+  resolve: {
+    // @/ -> src/（与 tsconfig paths 对齐）
+    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+  },
   plugins: [
     vue(),
     // dist/.gitkeep 入库占位，让 go:embed 在未构建时也能编译；构建会清空 dist，这里补回

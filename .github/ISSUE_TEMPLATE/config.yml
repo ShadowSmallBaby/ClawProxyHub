@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 插件仓库
+    url: https://github.com/ShadowSmallBaby/ClawProxyHubPlugins/issues
+    about: 某个插件自身的问题（登录、上游协议、模型列表）请到插件仓库反馈

@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <page-header>
+    <page-header v-if="!isPhone">
       
       <t-button theme="primary" @click="openCreate">{{ $t('proxies.create') }}</t-button>
     </page-header>
-    <c-table row-key="ID" :data="proxies" :columns="columns" :loading="loading">
+    <c-table row-key="ID" :data="proxies" :columns="columns" :loading="loading" mobile-cards>
       <template #op="{ row }">
         <t-space size="small">
           <t-link theme="primary" :loading="testingId === row.ID" @click="test(row)">{{ $t('proxies.test') }}</t-link>
@@ -16,47 +16,56 @@
       </template>
     </c-table>
 
-    <c-dialog v-model:visible="createVisible" :header="editingId ? $t('proxies.edit') : $t('proxies.create')" :confirm-btn="{ loading: creating }" @confirm="submit">
-      <t-form label-width="80px">
-        <t-form-item :label="$t('proxies.name')">
+    <c-drawer v-model:visible="createVisible" :header="editingId ? $t('proxies.edit') : $t('proxies.create')" :confirm-btn="{ loading: creating }" @confirm="submit">
+      <t-form>
+        <form-item :label="$t('proxies.name')">
           <t-input v-model="form.name" :placeholder="$t('common.optional')" />
-        </t-form-item>
-        <t-form-item :label="$t('proxies.scheme')" mark>
+        </form-item>
+        <form-item :label="$t('proxies.scheme')" mark>
           <t-radio-group v-model="form.scheme" variant="default-filled">
             <t-radio-button value="http">HTTP</t-radio-button>
             <t-radio-button value="https">HTTPS</t-radio-button>
             <t-radio-button value="socks5">SOCKS5</t-radio-button>
           </t-radio-group>
-        </t-form-item>
-        <t-form-item :label="$t('proxies.host')" mark>
+        </form-item>
+        <form-item :label="$t('proxies.host')" mark>
           <t-input v-model="form.host" :placeholder="$t('proxies.hostPh')" />
-        </t-form-item>
-        <t-form-item :label="$t('proxies.port')" mark>
-          <t-input-number v-model="form.port" :min="1" :max="65535" theme="column" style="width: 160px" />
-        </t-form-item>
-        <t-form-item :label="$t('proxies.username')">
+        </form-item>
+        <form-item :label="$t('proxies.port')" mark>
+          <t-input-number v-model="form.port" :min="1" :max="65535" theme="column" class="w-sm" />
+        </form-item>
+        <form-item :label="$t('proxies.username')">
           <t-input v-model="form.username" :placeholder="$t('common.optional')" />
-        </t-form-item>
-        <t-form-item :label="$t('proxies.password')">
+        </form-item>
+        <form-item :label="$t('proxies.password')">
           <t-input v-model="form.password" type="password" :placeholder="editingId ? $t('proxies.pwdKeep') : $t('common.optional')" />
-        </t-form-item>
+        </form-item>
         <t-alert theme="info" :message="$t('proxies.hint')" />
       </t-form>
-    </c-dialog>
+    </c-drawer>
+
+    <mobile-fab v-if="isPhone">
+      <t-button theme="primary" shape="circle" size="large" @click="openCreate">
+        <template #icon><add-icon /></template>
+      </t-button>
+    </mobile-fab>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CDialog } from '../../components/base'
-import { CCard, CTable } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
-import { useAsync } from '../../composables'
+import { CDrawer } from '@/components/base'
+import { FormItem } from '@/components'
+import { CCard, CTable, MobileFab } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
+import { useAsync, useIsMobile } from '@/composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { AddIcon } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { proxyApi, type Proxy } from '../../api/entities'
+import { proxyApi, type Proxy } from '@/api/entities'
 
 const { t } = useI18n()
+const { isPhone } = useIsMobile()
 
 const proxies = ref<Proxy[]>([])
 const createVisible = ref(false)

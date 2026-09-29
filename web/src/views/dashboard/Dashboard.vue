@@ -3,21 +3,7 @@
     
 
     <!-- 统计卡片 -->
-    <t-row :gutter="[16, 16]">
-      <t-col v-for="c in cards" :key="c.label" :span="2">
-        <c-card :bordered="false" class="stat-card">
-          <div class="stat-inner">
-            <div class="stat-icon" :style="{ background: c.bg, color: c.fg }">
-              <component :is="c.icon" />
-            </div>
-            <div class="stat-meta">
-              <div class="stat-value">{{ c.value }}</div>
-              <div class="stat-label">{{ c.label }}</div>
-            </div>
-          </div>
-        </c-card>
-      </t-col>
-    </t-row>
+    <stat-cards :cards="cards" />
 
     <!-- 趋势 + 模型分布 -->
     <t-row :gutter="[16, 16]" class="block">
@@ -49,27 +35,7 @@
     <t-row :gutter="[16, 16]" class="block">
       <t-col :span="12">
         <c-card :header="$t('dashboard.channelTitle')" :bordered="false">
-          <div v-if="quotaPlugins.length" class="quota-grid">
-            <div v-for="p in quotaPlugins" :key="p.plugin + '/' + p.instance" class="quota-card">
-              <div class="quota-head">
-                <span class="quota-plugin">{{ p.label || p.plugin }}</span>
-                <span class="quota-accounts">{{ $t('dashboard.accountsN', { n: p.accounts }) }}</span>
-              </div>
-              <div class="quota-row">
-                <span class="quota-key">{{ $t('dashboard.usedCredits') }}</span>
-                <span class="quota-value">{{ fmtThousands(p.quota.used_credits) }}</span>
-              </div>
-              <div class="quota-row">
-                <span class="quota-key">{{ $t('dashboard.remainingCredits') }}</span>
-                <span class="quota-value">{{ fmtThousands(p.quota.credits) }}</span>
-              </div>
-              <div class="quota-row">
-                <span class="quota-key">{{ $t('dashboard.totalCredits') }}</span>
-                <span class="quota-value">{{ fmtThousands(p.quota.total_credits) }}</span>
-              </div>
-            </div>
-          </div>
-          <t-empty v-else :description="$t('dashboard.noQuotaData')" />
+          <quota-carousel :items="quotaPlugins" :fmt="fmtThousands" />
         </c-card>
       </t-col>
     </t-row>
@@ -78,7 +44,7 @@
     <t-row :gutter="[16, 16]" class="block">
       <t-col :span="12">
         <c-card :header="$t('dashboard.recentTitle')" :bordered="false">
-          <c-table row-key="ID" size="small" :data="recent" :columns="recentColumns" max-height="45vh">
+          <c-table row-key="ID" size="small" :data="recent" :columns="recentColumns" max-height="45vh" mobile-cards :phone-cols="['model', 'status', 'CreatedAt']">
             <template #model="{ row }">
               <span :title="modelLabel(row)">{{ modelLabel(row) }}</span>
             </template>
@@ -105,7 +71,9 @@
 </template>
 
 <script setup lang="ts">
-import { CCard, CTable } from '../../components/base'
+import { CCard, CTable } from '@/components/base'
+import StatCards from './parts/StatCards.vue'
+import QuotaCarousel from './parts/QuotaCarousel.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import * as echarts from 'echarts/core'
@@ -115,12 +83,13 @@ import { CanvasRenderer } from 'echarts/renderers'
 import {
   DashboardIcon, CheckCircleIcon, ChartBarIcon, UserIcon, AppIcon, LockOnIcon,
 } from 'tdesign-icons-vue-next'
-import { statsApi, type QuotaPlugin, type TrendPoint } from '../../api/stats'
-import { useChart } from '../../composables'
-import LogCells from '../../components/LogCells.vue'
-import { dict, protocolDict } from '../../utils/dict'
-import { modelLabel } from '../../utils/logfmt'
-import type { RequestLog, Stats } from '../../api/types'
+import { statsApi, type QuotaPlugin, type TrendPoint } from '@/api/stats'
+import { useChart } from '@/composables'
+import LogCells from '@/components/LogCells.vue'
+import { dict, protocolDict } from '@/utils/dict'
+import { modelLabel } from '@/utils/logfmt'
+import { fmtTime } from '@/utils/format'
+import type { RequestLog, Stats } from '@/api/types'
 
 const { t } = useI18n()
 
@@ -150,7 +119,7 @@ const recentColumns = computed(() => [
   { colKey: 'tokens', title: 'Token', width: 190, align: 'center' },
   { colKey: 'latency', title: t('dashboard.latency'), width: 130, align: 'center' },
   { colKey: 'ua', title: t('logs.client'), width: 140, align: 'center' },
-  { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => row.CreatedAt?.replace('T', ' ').slice(0, 19) ?? '-', align: 'center' },
+  { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => fmtTime(row.CreatedAt), align: 'center' },
 ])
 
 // 模型调用分布（最近 200 条聚合）
@@ -220,32 +189,6 @@ onMounted(async () => {
 .block {
   margin-top: 16px;
 }
-.stat-inner {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-.stat-icon {
-  width: 46px;
-  height: 46px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 22px;
-  flex-shrink: 0;
-}
-.stat-value {
-  font-size: 26px;
-  font-weight: 700;
-  line-height: 1.2;
-  font-variant-numeric: tabular-nums;
-}
-.stat-label {
-  margin-top: 3px;
-  color: var(--td-text-color-secondary);
-  font-size: 13px;
-}
 .chart {
   height: 280px;
   width: 100%;
@@ -257,6 +200,7 @@ onMounted(async () => {
   gap: 10px;
   height: 280px;
   overflow-y: auto;
+  padding-bottom: 2px; /* 最后一行不被 overflow 裁切 */
 }
 .model-empty {
   height: 280px;
@@ -296,48 +240,21 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--td-text-color-secondary);
 }
-.quota-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-}
-@media (max-width: 1200px) {
-  .quota-grid {
-    grid-template-columns: repeat(2, 1fr);
+.ellipsis { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+
+/* 手机端：图表压低高度，模型分布不固定高（跟随卡片流式排布） */
+@media (max-width: 767px) {
+  .chart {
+    height: 200px;
+  }
+  .model-list,
+  .model-empty {
+    height: auto;
+    max-height: 200px;
+  }
+  .model-list {
+    overflow-y: auto;
+    padding-bottom: 2px;
   }
 }
-.quota-card {
-  border: 1px solid var(--td-component-stroke);
-  border-radius: 10px;
-  padding: 12px 14px;
-}
-.quota-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-.quota-plugin {
-  font-weight: 600;
-  font-size: 14px;
-}
-.quota-accounts {
-  font-size: 12px;
-  color: var(--td-text-color-secondary);
-}
-.quota-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 3px 0;
-  font-size: 13px;
-}
-.quota-key {
-  color: var(--td-text-color-secondary);
-}
-.quota-value {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-}
-.ellipsis { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 </style>

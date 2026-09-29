@@ -1,10 +1,10 @@
 <template>
   <div class="page">
-    <page-header>
+    <page-header v-if="!isPhone">
       
       <t-button theme="primary" @click="createVisible = true">{{ $t('groups.create') }}</t-button>
     </page-header>
-    <c-table row-key="id" :data="groups" :columns="columns" :loading="loading">
+    <c-table row-key="id" :data="groups" :columns="columns" :loading="loading" mobile-cards>
       <template #op="{ row }">
         <t-space size="small">
           <t-link theme="primary" @click="openEdit(row)">{{ $t('common.edit') }}</t-link>
@@ -16,58 +16,67 @@
       </template>
     </c-table>
 
-    <c-dialog v-model:visible="createVisible" :header="$t('groups.create')" :confirm-btn="{ loading: creating }" @confirm="create">
-      <t-form label-width="90px">
-        <t-form-item :label="$t('groups.name')" mark>
+    <c-drawer v-model:visible="createVisible" :header="$t('groups.create')" :confirm-btn="{ loading: creating }" @confirm="create">
+      <t-form>
+        <form-item :label="$t('groups.name')" mark>
           <t-input v-model="newName" :placeholder="$t('groups.namePh')" />
-        </t-form-item>
-        <t-form-item :label="$t('groups.plugin')" mark>
+        </form-item>
+        <form-item :label="$t('groups.plugin')" mark>
           <t-select v-model="newPlugin" :placeholder="$t('groups.pickPluginPh')" @change="onPluginChange">
             <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
           </t-select>
-        </t-form-item>
-        <t-form-item :label="$t('accounts.instance')" mark>
+        </form-item>
+        <form-item :label="$t('accounts.instance')" mark>
           <t-select v-model="newInstance" :options="instanceOptions(newPlugin)" :disabled="!selectedPlugin?.multi_instance" :placeholder="$t('groups.pickInstancePh')" />
-        </t-form-item>
+        </form-item>
         <t-alert v-if="selectedPlugin?.multi_instance && !instanceOptions(newPlugin).length" theme="warning" :message="$t('accounts.noInstance')" />
         <t-alert v-else theme="info" :message="$t('groups.hintCreate')" />
       </t-form>
-    </c-dialog>
+    </c-drawer>
 
     <!-- 编辑：改名；多实例插件且分组为空时可换实例 -->
-    <c-dialog v-model:visible="editVisible" :header="$t('groups.editTitle')" :confirm-btn="{ loading: editing }" @confirm="submitEdit">
-      <t-form v-if="editRow" label-width="90px">
-        <t-form-item :label="$t('groups.name')" mark>
+    <c-drawer v-model:visible="editVisible" :header="$t('groups.editTitle')" :confirm-btn="{ loading: editing }" @confirm="submitEdit">
+      <t-form v-if="editRow">
+        <form-item :label="$t('groups.name')" mark>
           <t-input v-model="editName" />
-        </t-form-item>
-        <t-form-item :label="$t('accounts.instance')">
+        </form-item>
+        <form-item :label="$t('accounts.instance')">
           <t-select v-model="editInstance" :options="instanceOptions(editRow.plugin_id)" :disabled="!pluginOf(editRow.plugin_id)?.multi_instance || editRow.accounts > 0" />
-        </t-form-item>
+        </form-item>
         <t-alert v-if="editRow.accounts > 0" theme="info" :message="$t('groups.hintEditLocked')" />
       </t-form>
-    </c-dialog>
+    </c-drawer>
 
-    <c-dialog v-model:visible="bindVisible" :header="$t('groups.bindHeader', { name: bindGroup?.name })" @confirm="bind">
+    <c-drawer v-model:visible="bindVisible" :header="$t('groups.bindHeader', { name: bindGroup?.name })" @confirm="bind">
       <bind-select v-model="bindProxyIds" :options="proxyOptions" :placeholder="$t('groups.bindPh')" />
       <t-alert style="margin-top: 12px" theme="info" :message="$t('groups.hintBind')" />
-    </c-dialog>
+    </c-drawer>
+
+    <mobile-fab v-if="isPhone">
+      <t-button theme="primary" shape="circle" size="large" @click="createVisible = true">
+        <template #icon><add-icon /></template>
+      </t-button>
+    </mobile-fab>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CDialog } from '../../components/base'
-import { CCard, CTable } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
-import { useAsync } from '../../composables'
+import { CDrawer } from '@/components/base'
+import { FormItem } from '@/components'
+import { CCard, CTable, MobileFab } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
+import { useAsync, useIsMobile } from '@/composables'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { AddIcon } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { groupApi, instanceApi, pluginApi, proxyApi, type Proxy } from '../../api/entities'
-import { instanceOptionsOf, instanceNameOf, proxyOptionsOf } from '../../utils/lookup'
-import BindSelect from '../../components/BindSelect.vue'
-import type { GroupInfo, InstanceInfo, PluginInfo } from '../../api/types'
+import { groupApi, instanceApi, pluginApi, proxyApi, type Proxy } from '@/api/entities'
+import { instanceOptionsOf, instanceNameOf, proxyOptionsOf } from '@/utils/lookup'
+import BindSelect from '@/components/BindSelect.vue'
+import type { GroupInfo, InstanceInfo, PluginInfo } from '@/api/types'
 
 const { t } = useI18n()
+const { isPhone } = useIsMobile()
 
 const groups = ref<GroupInfo[]>([])
 const plugins = ref<PluginInfo[]>([])

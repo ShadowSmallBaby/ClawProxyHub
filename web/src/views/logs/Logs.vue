@@ -1,19 +1,19 @@
 <template>
   <div class="page">
-    <page-header>
+    <page-header v-if="!isPhone">
       <template v-if="tab === 'requests'">
         <!-- 过滤栏：模糊搜索 + 下拉 + 时间区间，窄屏自动换行 -->
-        <div class="filters">
-          <t-input v-model="filters.key" :placeholder="$t('logs.searchKey')" clearable style="width: 280px" @enter="search" />
-          <t-input v-model="filters.model" :placeholder="$t('logs.searchModel')" clearable style="width: 280px" @enter="search" />
-          <t-input v-model="filters.route" :placeholder="$t('logs.searchRoute')" clearable style="width: 280px" @enter="search" />
-          <t-select v-model="filters.plugin_id" :placeholder="$t('logs.pluginAll')" clearable style="width: 130px">
+        <filter-bar>
+          <t-input v-model="filters.key" :placeholder="$t('logs.searchKey')" clearable class="w-md" @enter="search" />
+          <t-input v-model="filters.model" :placeholder="$t('logs.searchModel')" clearable class="w-md" @enter="search" />
+          <t-input v-model="filters.route" :placeholder="$t('logs.searchRoute')" clearable class="w-md" @enter="search" />
+          <t-select v-model="filters.plugin_id" :placeholder="$t('logs.pluginAll')" clearable class="w-xs">
             <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
           </t-select>
-          <t-select v-model="filters.protocol" :placeholder="$t('logs.protocolAll')" clearable style="width: 160px">
+          <t-select v-model="filters.protocol" :placeholder="$t('logs.protocolAll')" clearable class="w-sm">
             <t-option v-for="(v, k) in protocolDict" :key="k" :value="k" :label="dict(protocolDict, k)" />
           </t-select>
-          <t-select v-model="filters.status_class" :placeholder="$t('logs.statusAll')" clearable style="width: 120px">
+          <t-select v-model="filters.status_class" :placeholder="$t('logs.statusAll')" clearable class="w-xs">
             <t-option value="success" :label="$t('logs.statusSuccess')" />
             <t-option value="client_error" :label="$t('logs.statusClientErr')" />
             <t-option value="server_error" :label="$t('logs.statusServerErr')" />
@@ -25,29 +25,65 @@
             :presets="presets"
             presets-placement="bottom"
             :placeholder="[$t('logs.timeFrom'), $t('logs.timeTo')]"
-            style="width: 300px"
+            class="w-lg"
           />
           <t-button theme="primary" @click="search">{{ $t('logs.search') }}</t-button>
           <t-button variant="outline" @click="reset">{{ $t('logs.reset') }}</t-button>
-        </div>
+        </filter-bar>
       </template>
       <template v-else>
-        <div class="filters">
-          <t-select v-model="runFilters.level" :placeholder="$t('logs.runLevelAll')" clearable style="width: 130px">
+        <filter-bar>
+          <t-select v-model="runFilters.level" :placeholder="$t('logs.runLevelAll')" clearable class="w-xs">
             <t-option value="error" :label="$t('settings.runLevelError')" />
             <t-option value="warn" :label="$t('settings.runLevelWarn')" />
             <t-option value="debug" :label="$t('settings.runLevelDebug')" />
             <t-option value="info" :label="$t('settings.runLevelInfo')" />
           </t-select>
-          <t-input v-model="runFilters.module" :placeholder="$t('logs.runModulePh')" clearable style="width: 160px" @enter="searchRun" />
-          <t-input v-model="runFilters.keyword" :placeholder="$t('logs.runKeywordPh')" clearable style="width: 280px" @enter="searchRun" />
+          <t-input v-model="runFilters.module" :placeholder="$t('logs.runModulePh')" clearable class="w-sm" @enter="searchRun" />
+          <t-input v-model="runFilters.keyword" :placeholder="$t('logs.runKeywordPh')" clearable class="w-md" @enter="searchRun" />
           <t-button theme="primary" @click="searchRun">{{ $t('logs.search') }}</t-button>
           <t-button variant="outline" @click="resetRun">{{ $t('logs.reset') }}</t-button>
-        </div>
+        </filter-bar>
       </template>
     </page-header>
 
-    <c-tabs v-model="tab" size="medium" class="log-tabs">
+    <!-- 手机端：筛选收进底部抽屉，页头隐藏 -->
+    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('logs.search')" :footer="false">
+      <div class="filters">
+        <template v-if="tab === 'requests'">
+          <t-input v-model="filters.key" :placeholder="$t('logs.searchKey')" clearable @enter="search" />
+          <t-input v-model="filters.model" :placeholder="$t('logs.searchModel')" clearable @enter="search" />
+          <t-input v-model="filters.route" :placeholder="$t('logs.searchRoute')" clearable @enter="search" />
+          <t-select v-model="filters.plugin_id" :placeholder="$t('logs.pluginAll')" clearable>
+            <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
+          </t-select>
+          <t-select v-model="filters.protocol" :placeholder="$t('logs.protocolAll')" clearable>
+            <t-option v-for="(v, k) in protocolDict" :key="k" :value="k" :label="dict(protocolDict, k)" />
+          </t-select>
+          <t-select v-model="filters.status_class" :placeholder="$t('logs.statusAll')" clearable>
+            <t-option value="success" :label="$t('logs.statusSuccess')" />
+            <t-option value="client_error" :label="$t('logs.statusClientErr')" />
+            <t-option value="server_error" :label="$t('logs.statusServerErr')" />
+          </t-select>
+          <t-button theme="primary" block @click="search(); filterOpen = false">{{ $t('logs.search') }}</t-button>
+          <t-button variant="outline" block @click="reset(); filterOpen = false">{{ $t('logs.reset') }}</t-button>
+        </template>
+        <template v-else>
+          <t-select v-model="runFilters.level" :placeholder="$t('logs.runLevelAll')" clearable>
+            <t-option value="error" :label="$t('settings.runLevelError')" />
+            <t-option value="warn" :label="$t('settings.runLevelWarn')" />
+            <t-option value="debug" :label="$t('settings.runLevelDebug')" />
+            <t-option value="info" :label="$t('settings.runLevelInfo')" />
+          </t-select>
+          <t-input v-model="runFilters.module" :placeholder="$t('logs.runModulePh')" clearable @enter="searchRun" />
+          <t-input v-model="runFilters.keyword" :placeholder="$t('logs.runKeywordPh')" clearable @enter="searchRun" />
+          <t-button theme="primary" block @click="searchRun(); filterOpen = false">{{ $t('logs.search') }}</t-button>
+          <t-button variant="outline" block @click="resetRun(); filterOpen = false">{{ $t('logs.reset') }}</t-button>
+        </template>
+      </div>
+    </c-drawer>
+
+    <c-tabs v-model="tab" size="medium" class="log-tabs phone-scroll">
       <!-- 调用日志 -->
       <t-tab-panel value="requests" :label="$t('logs.reqTab')">
         <c-table
@@ -57,6 +93,8 @@
           :loading="loading"
           height="100%"
           resizable
+          mobile-cards
+          :phone-cols="['model', 'status', 'CreatedAt']"
         >
           <template #key="{ row }">
             <span v-if="row.key_name">{{ row.key_name }}</span>
@@ -99,6 +137,8 @@
           :columns="runColumns"
           :loading="runLoading"
           height="100%"
+          mobile-cards
+          :phone-cols="['level', 'Action', 'CreatedAt']"
           @row-click="openRun"
         >
           <template #level="{ row }">
@@ -109,65 +149,69 @@
     </c-tabs>
 
     <!-- 分页（任务页同款：外置于 tabs 下方，按当前 tab 切换数据源） -->
-    <t-pagination
+    <c-pagination
       class="log-pagination"
       v-if="tab === 'requests'"
       v-model="page"
       v-model:pageSize="pageSize"
       :total="total"
-      :page-size-options="[10, 30, 50, 100, 200]"
-      show-jumper
       @change="load"
     />
-    <t-pagination
+    <c-pagination
       class="log-pagination"
       v-else
       v-model="runPage"
       v-model:pageSize="runPageSize"
       :total="runTotal"
-      :page-size-options="[10, 30, 50, 100, 200]"
-      show-jumper
       @change="loadRun"
     />
 
     <!-- 运行日志明细抽屉 -->
-    <t-drawer v-model:visible="runVisible" :header="$t('logs.runDetail')" size="560px">
-      <template #footer>
-        <t-button theme="primary" :disabled="!runRow" @click="exportRunJson">
-          <template #icon><download-icon /></template>{{ $t('logs.exportJson') }}
-        </t-button>
-      </template>
+    <c-drawer v-model:visible="runVisible" :header="$t('logs.runDetail')" :footer="false" width="560px" close-on-overlay-click>
       <div v-if="runRow" class="run-detail">
         <div class="run-meta">
           <t-tag :theme="levelTheme(runRow.Level)" variant="light">{{ levelText(runRow.Level) }}</t-tag>
-          <span class="dim">{{ runRow.CreatedAt?.replace('T', ' ').slice(0, 19) }}</span>
+          <span class="dim">{{ fmtTime(runRow.CreatedAt) }}</span>
         </div>
         <div class="run-line"><b>{{ $t('logs.runModule') }}:</b> {{ runRow.Module }}</div>
         <div class="run-line"><b>{{ $t('logs.runAction') }}:</b> {{ runRow.Action }}</div>
         <div class="run-line"><b>{{ $t('logs.runMessage') }}:</b> {{ runRow.Message }}</div>
         <pre v-if="runRow.Detail" class="run-raw">{{ runRow.Detail }}</pre>
+        <t-button theme="primary" block style="margin-top: 12px" @click="exportRunJson">
+          <template #icon><download-icon /></template>{{ $t('logs.exportJson') }}
+        </t-button>
       </div>
-    </t-drawer>
+    </c-drawer>
+
+    <!-- 手机端：筛选悬浮按钮 -->
+    <mobile-fab v-if="isPhone">
+      <t-button theme="primary" shape="circle" size="large" @click="filterOpen = true">
+        <template #icon><filter-icon /></template>
+      </t-button>
+    </mobile-fab>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CTable, CTabs } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
+import { CTable, CTabs, CPagination, MobileFab , CDrawer, FilterBar } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { DownloadIcon } from 'tdesign-icons-vue-next'
-import { logsApi, runLogsApi } from '../../api/logs'
-import { pluginApi } from '../../api/entities'
-import LogCells from '../../components/LogCells.vue'
-import EllipsisCell from '../../components/EllipsisCell.vue'
-import { pluginLabelOf } from '../../utils/lookup'
-import { usePagination } from '../../composables'
-import { dict, protocolDict } from '../../utils/dict'
-import { modelLabel } from '../../utils/logfmt'
-import type { RequestLog, RunLog } from '../../api/types'
+import { DownloadIcon, FilterIcon } from 'tdesign-icons-vue-next'
+import { logsApi, runLogsApi } from '@/api/logs'
+import { pluginApi } from '@/api/entities'
+import LogCells from '@/components/LogCells.vue'
+import EllipsisCell from '@/components/EllipsisCell.vue'
+import { pluginLabelOf } from '@/utils/lookup'
+import { usePagination, useIsMobile } from '@/composables'
+import { dict, protocolDict } from '@/utils/dict'
+import { modelLabel } from '@/utils/logfmt'
+import { fmtTime } from '@/utils/format'
+import type { RequestLog, RunLog } from '@/api/types'
 
 const { t } = useI18n()
+const { isPhone } = useIsMobile()
+const filterOpen = ref(false)
 const tab = ref('requests')
 
 // 时间快捷区间：原生 Date 计算，只到日期（不含时间），返回 [起, 止]（避免引入 dayjs）
@@ -226,7 +270,7 @@ const columns = computed(() => [
   { colKey: 'latency', title: t('logs.latency'), width: 130, align: 'center' },
   { colKey: 'ClientIP', title: 'IP', width: 120, align: 'center' },
   { colKey: 'ua', title: t('logs.client'), width: 140, align: 'center' },
-  { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => row.CreatedAt?.replace('T', ' ').slice(0, 19) ?? '-', align: 'center' },
+  { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => fmtTime(row.CreatedAt), align: 'center' },
 ])
 
 async function load() {
@@ -292,7 +336,7 @@ const runColumns = computed(() => [
   { colKey: 'Module', title: t('logs.runModule'), width: 100, ellipsis: true, align: 'center' },
   { colKey: 'Action', title: t('logs.runAction'), width: 120, ellipsis: true, align: 'center' },
   { colKey: 'Message', title: t('logs.runMessage'), ellipsis: true },
-  { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => row.CreatedAt?.replace('T', ' ').slice(0, 19) ?? '-', align: 'center' },
+  { colKey: 'CreatedAt', title: t('common.colTime'), width: 170, cell: (_h: any, { row }: any) => fmtTime(row.CreatedAt), align: 'center' },
 ])
 
 async function loadRun() {
@@ -346,12 +390,12 @@ watch(tab, (v) => {
   margin-bottom: 12px;
   align-items: center;
 }
-.page {
-  /* 撑满内容区：页头/分页固定，表格吃掉中间剩余高度并自适应窗口 */
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+/* 手机端筛选项撑满整行，不再用写死宽度横向溢出 */
+@media (max-width: 767px) {
+  .filters > * {
+    width: 100% !important;
+    flex: 1 1 100%;
+  }
 }
 .page-header,
 .log-pagination {

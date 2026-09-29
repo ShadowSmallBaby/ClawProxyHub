@@ -4,15 +4,15 @@
       <h2>{{ $t('setup.title') }}</h2>
       <p class="hint">{{ $t('setup.hint') }}</p>
       <t-form @submit="onSetup">
-        <t-form-item :label="$t('setup.username')">
+        <form-item :label="$t('setup.username')">
           <t-input v-model="username" :placeholder="$t('setup.usernamePh')" @enter="onSetup" />
-        </t-form-item>
-        <t-form-item :label="$t('setup.password')">
+        </form-item>
+        <form-item :label="$t('setup.password')">
           <t-input v-model="password" type="password" :placeholder="$t('setup.passwordPh')" @enter="onSetup" />
-        </t-form-item>
-        <t-form-item :label="$t('setup.confirm')">
+        </form-item>
+        <form-item :label="$t('setup.confirm')">
           <t-input v-model="confirm" type="password" @enter="onSetup" />
-        </t-form-item>
+        </form-item>
         <t-button theme="primary" block :loading="loading" @click="onSetup">{{ $t('setup.submit') }}</t-button>
       </t-form>
     </div>
@@ -24,8 +24,9 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { setToken } from '../../api/client'
-import { authApi } from '../../api/auth'
+import { setToken } from '@/api/client'
+import FormItem from '@/components/FormItem.vue'
+import { authApi } from '@/api/auth'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -77,6 +78,7 @@ async function onSetup() {
 }
 .setup-card {
   width: 360px;
+  max-width: calc(100vw - 32px); /* 手机端不溢出 */
   padding: 32px;
   background: var(--td-bg-color-container);
   border-radius: 8px;

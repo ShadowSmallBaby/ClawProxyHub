@@ -1,7 +1,7 @@
 <template>
   <!-- 实例新建/编辑：名称 + 地址固定，其余按插件 instance_schema 动态渲染；
        新建且传入 plugins 时在弹窗内选插件（仅多实例插件） -->
-  <t-dialog
+  <c-drawer
     :visible="visible"
     :header="instance ? $t('instances.editTitle') : $t('instances.add')"
     :confirm-btn="{ loading: saving }"
@@ -9,44 +9,46 @@
     @update:visible="(v: boolean) => emit('update:visible', v)"
     @confirm="submit"
   >
-    <t-form label-width="110px">
-      <t-form-item :label="$t('instances.colPlugin')" required-mark>
+    <t-form>
+      <form-item :label="$t('instances.colPlugin')" :mark="true">
         <t-select v-if="!instance && plugins?.length" v-model="pluginId" :placeholder="$t('instances.pickPlugin')" style="width: 100%">
           <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
         </t-select>
         <t-input v-else :value="current?.label || current?.name || ''" disabled />
-      </t-form-item>
-      <t-form-item v-if="!isDefaultInstance" :label="$t('instances.colName')" required-mark>
+      </form-item>
+      <form-item v-if="!isDefaultInstance" :label="$t('instances.colName')" :mark="true">
         <t-input v-model="form.name" :placeholder="$t('instances.namePh')" />
-      </t-form-item>
-      <t-form-item v-if="!isDefaultInstance" :label="$t('instances.colBaseUrl')" required-mark>
+      </form-item>
+      <form-item v-if="!isDefaultInstance" :label="$t('instances.colBaseUrl')" :mark="true">
         <t-input-adornment class="url-adornment">
           <template #prepend>
             <t-select v-model="form.scheme" auto-width :options="[{ value: 'https://', label: 'https://' }, { value: 'http://', label: 'http://' }]" />
           </template>
           <t-input v-model="form.host" placeholder="api.example.com" @blur="normalizeHost" />
         </t-input-adornment>
-      </t-form-item>
+      </form-item>
       <template v-for="f in schemaFields" :key="f.key">
-        <t-form-item v-if="fieldVisible(f)" :label="f.title">
+        <form-item v-if="fieldVisible(f)" :label="f.title">
           <t-switch v-if="f.type === 'boolean'" v-model="form.settings[f.key]" />
           <t-select v-else-if="f.options?.length" v-model="form.settings[f.key]" clearable :placeholder="f.description" style="width: 100%">
             <t-option v-for="o in f.options" :key="String(o.value)" :value="o.value" :label="o.label" />
           </t-select>
           <t-input-number v-else-if="f.type === 'number'" v-model="form.settings[f.key]" theme="column" :placeholder="f.description" style="width: 100%" />
           <t-input v-else v-model="form.settings[f.key]" :placeholder="f.description || (f.default ? $t('plugins.phDefault', { d: f.default }) : '')" />
-        </t-form-item>
+        </form-item>
       </template>
     </t-form>
-  </t-dialog>
+  </c-drawer>
 </template>
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { instanceApi } from '../api/entities'
-import type { InstanceInfo, PluginInfo } from '../api/types'
+import { CDrawer } from './base'
+import FormItem from './FormItem.vue'
+import { instanceApi } from '@/api/entities'
+import type { InstanceInfo, PluginInfo } from '@/api/types'
 
 const props = defineProps<{
   visible: boolean
@@ -133,6 +135,17 @@ async function submit() {
     normalizeHost()
     if (!form.host) {
       MessagePlugin.warning(t('instances.baseUrlRequired'))
+      return
+    }
+    // host 格式：域名（含 .）或 IP[:port]（含 . 或为 localhost）；纯数字/单词字母拦下
+    const h = form.host
+    const hasPort = /:[0-9]{1,5}$/.test(h)
+    const hostPart = hasPort ? h.slice(0, h.lastIndexOf(':')) : h
+    const isDomain = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/.test(hostPart)
+    const isIPv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostPart)
+    const isLocalhost = hostPart === 'localhost'
+    if (!isDomain && !isIPv4 && !isLocalhost) {
+      MessagePlugin.warning(t('instances.baseUrlInvalid'))
       return
     }
   }

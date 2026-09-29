@@ -1,9 +1,9 @@
 <template>
   <div class="page">
-    <page-header>
+    <page-header v-if="!isPhone">
       <t-button theme="primary" @click="openCreate">{{ $t('oauth.create') }}</t-button>
     </page-header>
-    <c-table row-key="id" :data="creds" :columns="columns" :loading="loading">
+    <c-table row-key="id" :data="creds" :columns="columns" :loading="loading" mobile-cards>
       <template #has_token="{ row }">
         <t-tag v-if="row.has_token" theme="success" variant="light" size="small">{{ $t('oauth.tokenSet') }}</t-tag>
         <t-tag v-else theme="warning" variant="light" size="small">{{ $t('oauth.tokenEmpty') }}</t-tag>
@@ -21,52 +21,61 @@
       </template>
     </c-table>
 
-    <c-dialog
+    <c-drawer
       v-model:visible="dialogVisible"
       :header="editingId ? $t('oauth.edit') : $t('oauth.create')"
       :confirm-btn="{ loading: saving }"
       @confirm="submit"
     >
-      <t-form label-width="90px">
-        <t-form-item :label="$t('oauth.platform')" mark>
+      <t-form>
+        <form-item :label="$t('oauth.platform')" mark>
           <t-select v-model="form.platform" :placeholder="$t('oauth.platformPh')" style="width: 100%">
             <t-option v-for="p in platformOptions" :key="p.value" :value="p.value" :label="p.label" />
           </t-select>
-        </t-form-item>
-        <t-form-item :label="$t('oauth.accountLabel')">
+        </form-item>
+        <form-item :label="$t('oauth.accountLabel')">
           <t-input v-model="form.account_label" :placeholder="$t('oauth.accountLabelPh')" />
-        </t-form-item>
-        <t-form-item :label="$t('oauth.token')" :mark="!editingId">
+        </form-item>
+        <form-item :label="$t('oauth.token')" :mark="!editingId">
           <t-textarea
             v-model="form.token"
             :placeholder="editingId ? $t('oauth.tokenKeep') : $t('oauth.tokenPh')"
             :autosize="{ minRows: 2, maxRows: 5 }"
           />
-        </t-form-item>
-        <t-form-item :label="$t('oauth.expiresAt')">
+        </form-item>
+        <form-item :label="$t('oauth.expiresAt')">
           <t-input v-model="form.expires_at" :placeholder="$t('oauth.expiresAtPh')" />
-        </t-form-item>
-        <t-form-item :label="$t('oauth.extra')">
+        </form-item>
+        <form-item :label="$t('oauth.extra')">
           <t-textarea v-model="form.extra_json" :placeholder="$t('oauth.extraPh')" :autosize="{ minRows: 2, maxRows: 4 }" />
-        </t-form-item>
+        </form-item>
         <t-alert theme="info" :message="$t('oauth.hint')" />
       </t-form>
-    </c-dialog>
+    </c-drawer>
+
+    <mobile-fab v-if="isPhone">
+      <t-button theme="primary" shape="circle" size="large" @click="openCreate">
+        <template #icon><add-icon /></template>
+      </t-button>
+    </mobile-fab>
   </div>
 </template>
 
 <script setup lang="ts">
-import { CDialog } from '../../components/base'
-import { CCard, CTable } from '../../components/base'
-import PageHeader from '../../components/PageHeader.vue'
-import { useAsync } from '../../composables'
+import { CDrawer } from '@/components/base'
+import { FormItem } from '@/components'
+import { CCard, CTable, MobileFab } from '@/components/base'
+import PageHeader from '@/components/PageHeader.vue'
+import { useAsync, useIsMobile } from '@/composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { AddIcon } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { oauthApi, type OAuthCred } from '../../api/entities'
-import { fmtTime } from '../../utils/format'
+import { oauthApi, type OAuthCred } from '@/api/entities'
+import { fmtTime } from '@/utils/format'
 
 const { t } = useI18n()
+const { isPhone } = useIsMobile()
 
 // 固定支持的第三方平台（value 落库，label 展示）
 const platformOptions = [

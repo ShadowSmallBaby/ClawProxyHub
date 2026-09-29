@@ -1,6 +1,6 @@
 <!-- UserMenu — 个人头像 + 下拉（用户信息 / 个人中心 / 设置 / 退出）。 -->
 <template>
-  <t-popup trigger="click">
+  <t-popup v-model:visible="menuVisible" trigger="click">
     <div class="user-chip">
       <t-avatar size="26px" theme="light" class="user-avatar">
         <template #icon><user-icon /></template>
@@ -33,32 +33,36 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { PoweroffIcon, SettingIcon, UserIcon } from 'tdesign-icons-vue-next'
-import i18n from '../../i18n'
-import { clearToken } from '../../api/client'
-import { useAsync } from '../../composables'
+import i18n from '@/i18n'
+import { clearToken } from '@/api/client'
+import { useAsync } from '@/composables'
 
 const props = defineProps<{
   username: string
-  role: string
+  role?: string
 }>()
 
 const { t } = useI18n()
 const router = useRouter()
 const { run } = useAsync()
 
+const menuVisible = ref(false)
+
 const roleLabel = computed(() =>
   i18n.global.t(props.role === 'guest' ? 'common.guest' : 'common.admin'),
 )
 
 function go(path: string) {
+  menuVisible.value = false
   router.push(path)
 }
 
 function logout() {
+  menuVisible.value = false
   clearToken()
   router.push('/login')
 }
