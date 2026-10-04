@@ -27,7 +27,9 @@ func newStreamTable(L *lua.LState, srv pb.ClawPlugin_ChatServer) *lua.LTable {
 	})
 	set("content_delta", func(L *lua.LState) int {
 		send(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{ContentDelta: &pb.ContentDelta{
-			Text: strField(L.CheckTable(1), "text"),
+			Text:        strField(L.CheckTable(1), "text"),
+			Refusal:     lua.LVAsBool(L.CheckTable(1).RawGetString("refusal")),
+			Annotations: strField(L.CheckTable(1), "annotations"), Source: strField(L.CheckTable(1), "source"), BlockId: strField(L.CheckTable(1), "block_id"),
 		}}})
 		return 0
 	})

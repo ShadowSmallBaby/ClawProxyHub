@@ -8,6 +8,17 @@ import (
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
+func TestChatBodyFilteredToolResult(t *testing.T) {
+	body := ChatBody(&pb.ChatRequest{Messages: []*pb.EnvelopeMessage{{Role: "tool", ToolCallId: "call_1", Parts: []*pb.ContentPart{{Type: "responses_reasoning", Signature: "opaque"}}}}})
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"content":[]`) {
+		t.Fatalf("empty tool result invalid: %s", b)
+	}
+}
+
 func TestChatBody(t *testing.T) {
 	req := &pb.ChatRequest{
 		Model: "kimi-k3",

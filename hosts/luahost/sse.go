@@ -2,8 +2,8 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/openaiup"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 	lua "github.com/yuin/gopher-lua"
@@ -35,14 +35,5 @@ func streamOpenAISSE(L *lua.LState, streamTbl *lua.LTable, body io.Reader) {
 			}
 		}
 	})
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 4096), 1<<20)
-	for scanner.Scan() {
-		parser.Feed(scanner.Text())
-	}
-	if err := scanner.Err(); err != nil {
-		parser.FinishWithError(502, err.Error())
-		return
-	}
-	parser.Finish()
+	_ = sdk.ScanSSE(body, parser)
 }

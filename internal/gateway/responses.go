@@ -4,6 +4,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/requestutil"
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/streamutil"
 
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
@@ -11,6 +12,9 @@ import (
 
 // parseResponsesRequest 把 /v1/responses 请求体转成统一信封。
 func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
+	if err := validateRequestContent(body, "responses"); err != nil {
+		return nil, err
+	}
 	var raw struct {
 		PreviousResponseID json.RawMessage `json:"previous_response_id"`
 		Conversation       json.RawMessage `json:"conversation"`
@@ -46,6 +50,7 @@ func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
 		Extra:       map[string]string{},
 	}
 	setTemperature(req, raw.Temperature)
+	requestutil.CaptureNative(req, body, "responses")
 	if raw.TopP != nil {
 		req.Extra["top_p"] = fmt.Sprintf("%g", *raw.TopP)
 	}
@@ -149,6 +154,7 @@ func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
 	}
 
 	for _, t := range raw.Tools {
+		requestutil.SetToolStrict(req, t.Name, t.Strict)
 		if t.Type != "function" || t.Name == "" {
 			return nil, fmt.Errorf("unsupported tool type: %s", t.Type)
 		}
@@ -164,13 +170,13 @@ func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
 		return nil, err
 	}
 	req.ToolChoice = tc
-	return req, nil
+	return req, validateToolHistory(req)
 }
 
 // convertResponsesToolChoice Responses tool_choice → 信封 ToolChoice。
 // 字符串：auto / none / required；对象：{"type":"function","name":"x"}。
 func convertResponsesToolChoice(raw json.RawMessage) (*pb.ToolChoice, error) {
-	if len(raw) == 0 {
+	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
 	var s string
@@ -190,7 +196,7 @@ func convertResponsesToolChoice(raw json.RawMessage) (*pb.ToolChoice, error) {
 	if err := json.Unmarshal(raw, &tc); err != nil {
 		return nil, err
 	}
-	if tc.Type == "function" {
+	if tc.Type == "function" && tc.Name != "" {
 		return &pb.ToolChoice{Type: "tool", ToolName: tc.Name}, nil
 	}
 	return nil, fmt.Errorf("unsupported tool_choice: %s", tc.Type)
@@ -201,6 +207,7 @@ type respTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Parameters  json.RawMessage `json:"parameters"`
+	Strict      *bool           `json:"strict"`
 }
 
 // responsesParts Responses message content（string 或 items）→ 内容块：
@@ -214,9 +221,12 @@ func responsesParts(raw json.RawMessage) []*pb.ContentPart {
 		return []*pb.ContentPart{{Type: "text", Text: s}}
 	}
 	var items []struct {
-		Type     string `json:"type"`
-		Text     string `json:"text"`
-		ImageURL string `json:"image_url"`
+		Type        string          `json:"type"`
+		Text        string          `json:"text"`
+		ImageURL    string          `json:"image_url"`
+		Detail      string          `json:"detail"`
+		Annotations json.RawMessage `json:"annotations"`
+		Refusal     string          `json:"refusal"`
 	}
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil
@@ -225,10 +235,14 @@ func responsesParts(raw json.RawMessage) []*pb.ContentPart {
 	for _, it := range items {
 		switch it.Type {
 		case "input_text", "output_text", "text":
-			parts = append(parts, &pb.ContentPart{Type: "text", Text: it.Text})
+			parts = append(parts, &pb.ContentPart{Type: "text", Text: it.Text, Annotations: string(it.Annotations), Source: "responses"})
+		case "refusal":
+			parts = append(parts, &pb.ContentPart{Type: "refusal", Text: it.Refusal})
 		case "input_image":
 			if it.ImageURL != "" {
-				parts = append(parts, imagePart(it.ImageURL))
+				part := imagePart(it.ImageURL)
+				part.ImageDetail = it.Detail
+				parts = append(parts, part)
 			}
 		}
 	}
@@ -238,6 +252,7 @@ func responsesParts(raw json.RawMessage) []*pb.ContentPart {
 // ---------- 信封事件 → Responses SSE ----------
 
 type responsesSSEState struct {
+	content    outputContent
 	model      string
 	respID     string
 	reasonItem string // reasoning output_item 的 item_id；空未开
@@ -307,23 +322,36 @@ func (s *responsesSSEState) convertEvent(ev *pb.StreamEvent) string {
 		return out
 
 	case *pb.StreamEvent_ContentDelta:
+		if e.ContentDelta.Text == "" && !e.ContentDelta.Refusal && (e.ContentDelta.Source != "responses" || e.ContentDelta.Annotations == "") {
+			return ""
+		}
 		var out string
 		if s.textItem == "" {
 			s.textItem = fmt.Sprintf("item_%d", s.nextItem)
 			s.textIdx = s.nextItem
 			s.nextItem++
-			out += respEvent("response.output_item.added", map[string]interface{}{
-				"output_index": s.textIdx, "item": map[string]interface{}{
-					"type": "message", "id": s.textItem, "role": "assistant", "status": "in_progress",
-					"content": []interface{}{map[string]interface{}{"type": "output_text", "text": ""}},
-				},
-			})
+			out += respEvent("response.output_item.added", map[string]interface{}{"output_index": s.textIdx, "item": map[string]interface{}{"type": "message", "id": s.textItem, "role": "assistant", "status": "in_progress", "content": []interface{}{}}})
 		}
-		s.text += e.ContentDelta.Text
-		out += respEvent("response.output_text.delta", map[string]interface{}{
-			"item_id": s.textItem, "output_index": s.textIdx, "content_index": 0,
-			"delta": e.ContentDelta.Text,
-		})
+		idx, added := s.content.add(e.ContentDelta, "responses")
+		part := s.content.parts[idx]
+		if added {
+			empty := (&outputPart{refusal: part.refusal}).response()
+			out += respEvent("response.content_part.added", map[string]interface{}{"item_id": s.textItem, "output_index": s.textIdx, "content_index": idx, "part": empty})
+		}
+		kind := "output_text"
+		if part.refusal {
+			kind = "refusal"
+		}
+		if e.ContentDelta.Text != "" {
+			out += respEvent("response."+kind+".delta", map[string]interface{}{"item_id": s.textItem, "output_index": s.textIdx, "content_index": idx, "delta": e.ContentDelta.Text})
+		}
+		if e.ContentDelta.Source == "responses" && e.ContentDelta.Annotations != "" {
+			var values []json.RawMessage
+			_ = json.Unmarshal([]byte(e.ContentDelta.Annotations), &values)
+			for i, value := range values {
+				out += respEvent("response.output_text.annotation.added", map[string]interface{}{"item_id": s.textItem, "output_index": s.textIdx, "content_index": idx, "annotation_index": len(part.annotations) - len(values) + i, "annotation": value})
+			}
+		}
 		return out
 
 	case *pb.StreamEvent_ToolCallDelta:
@@ -398,18 +426,19 @@ func (s *responsesSSEState) convertEvent(ev *pb.StreamEvent) string {
 		}
 		// 文本 item 收尾：output_text.done 带完整文本，output_item.done 带完整 content。
 		if s.textItem != "" {
-			out += respEvent("response.output_text.done", map[string]interface{}{
-				"item_id": s.textItem, "output_index": s.textIdx, "content_index": 0, "text": s.text,
-			})
-			item := map[string]interface{}{
-				"type": "message", "id": s.textItem, "role": "assistant", "status": status,
-				"content": []interface{}{map[string]interface{}{"type": "output_text", "text": s.text}},
+			for i, p := range s.content.parts {
+				kind, field := "output_text", "text"
+				if p.refusal {
+					kind, field = "refusal", "refusal"
+				}
+				out += respEvent("response."+kind+".done", map[string]interface{}{"item_id": s.textItem, "output_index": s.textIdx, "content_index": i, field: p.text})
+				out += respEvent("response.content_part.done", map[string]interface{}{"item_id": s.textItem, "output_index": s.textIdx, "content_index": i, "part": p.response()})
 			}
-			out += respEvent("response.output_item.done", map[string]interface{}{
-				"output_index": s.textIdx, "item": item,
-			})
+			item := map[string]interface{}{"type": "message", "id": s.textItem, "role": "assistant", "status": status, "content": s.content.responses()}
+			out += respEvent("response.output_item.done", map[string]interface{}{"output_index": s.textIdx, "item": item})
 			output = append(output, item)
 		}
+
 		// 工具调用 item 收尾：补 arguments.done 与 output_item.done，否则 Codex 不执行。
 		for _, id := range s.fnOrder {
 			fc := s.fnCalls[id]
@@ -451,6 +480,7 @@ func respEvent(eventType string, payload map[string]interface{}) string {
 
 // responsesAggregate Responses 非流式聚合。
 type responsesAggregate struct {
+	content   outputContent
 	model     string
 	signature string
 	reasoning string
@@ -471,6 +501,7 @@ func (a *responsesAggregate) feed(ev *pb.StreamEvent) {
 		}
 	case *pb.StreamEvent_ContentDelta:
 		a.text += e.ContentDelta.Text
+		a.content.add(e.ContentDelta, "responses")
 	case *pb.StreamEvent_ToolCallDelta:
 		if a.tools == nil {
 			a.tools = map[string]*aggrTool{}
@@ -496,10 +527,10 @@ func (a *responsesAggregate) result() map[string]interface{} {
 			"encrypted_content": a.signature, "summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": a.reasoning}},
 		})
 	}
-	if a.text != "" {
+	if len(a.content.parts) > 0 {
 		output = append(output, map[string]interface{}{
 			"type": "message", "id": "item_1", "role": "assistant", "status": status,
-			"content": []interface{}{map[string]interface{}{"type": "output_text", "text": a.text}},
+			"content": a.content.responses(),
 		})
 	}
 	for _, id := range sortedKeys(a.tools) {

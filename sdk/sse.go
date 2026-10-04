@@ -109,28 +109,102 @@ func (c *capWriter) Write(p []byte) (int, error) {
 // 供已自行发起请求的调用方复用；新代码优先用 StreamSSE（带统一日志）。
 func ScanSSE(body io.Reader, parser SSEParser) error { return scanSSELines(body, parser) }
 
-// 扫描器不复制原始流；终态合法性由各协议 parser 的 Finish 检查。
+// ScanSSEWithLimit 为已约定较大帧的上游保留独立事件上限。
+func ScanSSEWithLimit(body io.Reader, parser SSEParser, maxEventBytes int) error {
+	if maxEventBytes <= 0 {
+		maxEventBytes = 1 << 20
+	}
+	return scanSSELimit(body, parser, maxEventBytes)
+}
+
+// 按事件组装 data，终态合法性由各协议 parser 的 Finish 检查。
 func scanSSELines(body io.Reader, parser SSEParser) error {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 64*1024), 1<<20)
-	sawEvent := false
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "data:") {
-			sawEvent = true
-		}
-		parser.Feed(line)
-	}
-	if err := scanner.Err(); err != nil {
-		parser.FinishWithError(502, "upstream stream broken")
-		return err
-	}
-	if !sawEvent {
-		err := fmt.Errorf("upstream returned an empty stream")
+	return scanSSELimit(body, parser, 1<<20)
+}
+
+func scanSSELimit(body io.Reader, parser SSEParser, maxEventBytes int) error {
+	err := ReadSSE(body, maxEventBytes, func(line string) error { parser.Feed(line); return nil })
+	if err != nil {
 		parser.FinishWithError(502, err.Error())
 		return err
 	}
 	parser.Finish()
+	return nil
+}
+
+// ReadSSE 合并多行 data；回调返回 io.EOF 可正常提前结束。
+func ReadSSE(body io.Reader, maxEventBytes int, emit func(string) error) error {
+	if maxEventBytes <= 0 {
+		maxEventBytes = 1 << 20
+	}
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, min(64*1024, maxEventBytes)), maxEventBytes)
+	sawEvent := false
+	var data []string
+	size := 0
+	flush := func() error {
+		if len(data) > 0 {
+			if err := emit("data: " + strings.Join(data, "\n")); err != nil {
+				return err
+			}
+			sawEvent = true
+		}
+		if err := emit(""); err != nil {
+			return err
+		}
+		data, size = nil, 0
+		return nil
+	}
+	first := true
+	for scanner.Scan() {
+		line := scanner.Text()
+		if first {
+			line = strings.TrimPrefix(line, "\ufeff")
+			first = false
+		}
+		if line == "" {
+			if err := flush(); err != nil {
+				if err == io.EOF {
+					return nil
+				}
+				return err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "data:") || line == "data" {
+			value := strings.TrimPrefix(strings.TrimPrefix(line, "data"), ":")
+			value = strings.TrimPrefix(value, " ")
+			size += len(value) + 1
+			if size > maxEventBytes {
+				err := fmt.Errorf("upstream SSE event exceeds %d bytes", maxEventBytes)
+				return err
+			}
+			data = append(data, value)
+			continue
+		}
+		if err := emit(line); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	// 兼容缺少末尾空行的上游；读取失败时不补发残缺事件。
+	if len(data) > 0 {
+		if err := flush(); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+	if !sawEvent {
+		err := fmt.Errorf("upstream returned an empty stream")
+		return err
+	}
 	return nil
 }
 

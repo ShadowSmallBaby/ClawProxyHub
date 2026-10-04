@@ -4,6 +4,8 @@ package responsesup
 
 import (
 	"encoding/json"
+	"fmt"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/requestutil"
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/streamutil"
 	"strings"
 
@@ -38,12 +40,26 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 				}
 			}
 
-			if m.Text != "" {
-				input = append(input, map[string]interface{}{
-					"role":    "assistant",
-					"content": []map[string]interface{}{{"type": "output_text", "text": m.Text}},
-				})
+			var content []map[string]interface{}
+			for _, part := range m.Parts {
+				switch part.Type {
+				case "text":
+					item := map[string]interface{}{"type": "output_text", "text": part.Text}
+					if part.Source == "responses" && part.Annotations != "" {
+						item["annotations"] = json.RawMessage(part.Annotations)
+					}
+					content = append(content, item)
+				case "refusal":
+					content = append(content, map[string]interface{}{"type": "refusal", "refusal": part.Text})
+				}
 			}
+			if len(content) == 0 && m.Text != "" {
+				content = append(content, map[string]interface{}{"type": "output_text", "text": m.Text})
+			}
+			if len(content) > 0 {
+				input = append(input, map[string]interface{}{"role": "assistant", "content": content})
+			}
+
 			for _, tc := range m.ToolCalls {
 				input = append(input, map[string]interface{}{
 					"type": "function_call", "call_id": tc.Id, "name": tc.Name, "arguments": tc.Arguments,
@@ -60,10 +76,12 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 	if len(req.Tools) > 0 {
 		var tools []interface{}
 		for _, t := range req.Tools {
-			tools = append(tools, map[string]interface{}{
+			tool := map[string]interface{}{
 				"type": "function", "name": t.Name, "description": t.Description,
 				"parameters": rawJSON(orDefault(t.ParametersSchema, `{"type":"object"}`)), "strict": false,
-			})
+			}
+			requestutil.ApplyToolStrict(req, t.Name, tool)
+			tools = append(tools, tool)
 		}
 		body["tools"] = tools
 		if tc := req.ToolChoice; tc != nil {
@@ -90,7 +108,7 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 	if v := req.Extra["top_p"]; v != "" {
 		body["top_p"] = rawJSON(v)
 	}
-	if v := req.Extra["reasoning_effort"]; v != "" {
+	if v := requestutil.ReasoningEffort(req.Extra); v != "" {
 		body["reasoning"] = map[string]interface{}{"effort": v}
 	}
 	if v := req.Extra["parallel_tool_calls"]; v != "" {
@@ -99,12 +117,13 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 	if v := req.Extra["responses_reasoning"]; v != "" {
 		body["reasoning"] = rawJSON(v)
 	}
-	if v := req.Extra["responses_text"]; v != "" {
-		body["text"] = rawJSON(v)
+	if v := requestutil.ResponsesText(req.Extra); v != nil {
+		body["text"] = v
 	}
 	if v := req.Extra["user"]; v != "" {
 		body["user"] = v
 	}
+	requestutil.ApplyNative(req, body, "responses")
 	return body
 }
 
@@ -123,7 +142,11 @@ func inputParts(m *pb.EnvelopeMessage) []map[string]interface{} {
 			if url == "" {
 				url = "data:" + p.MediaType + ";base64," + p.Data
 			}
-			items = append(items, map[string]interface{}{"type": "input_image", "image_url": url})
+			image := map[string]interface{}{"type": "input_image", "image_url": url}
+			if p.ImageDetail != "" {
+				image["detail"] = p.ImageDetail
+			}
+			items = append(items, image)
 		}
 	}
 	return items
@@ -132,45 +155,75 @@ func inputParts(m *pb.EnvelopeMessage) []map[string]interface{} {
 // Parser 把上游 Responses SSE 行解析为信封事件（data 自带 type，不依赖 event 行）。
 // 用法：每读一行调 Feed；流结束时调 Finish 兜底收尾。
 type Parser struct {
-	emit       func(*pb.StreamEvent)
-	usage      *pb.Usage
-	sawTool    bool
-	toolIDs    map[string]string
-	argSeen    map[string]bool // item_id → 已收到 arguments 增量（done 时不再补发全量）
-	stop       string
-	sentFinish bool
+	emit        func(*pb.StreamEvent)
+	usage       *pb.Usage
+	sawTool     bool
+	toolIDs     map[string]string
+	callItems   map[string]string // call_id → item_id，防止不同输出项混入同一次调用
+	argSeen     map[string]bool   // item_id → 已收到 arguments 增量（done 时不再补发全量）
+	toolArgs    map[string]string
+	toolNames   map[string]string
+	text        map[string]string
+	signatures  map[string]string
+	stop        string
+	annotations streamutil.AnnotationSet
+	sentFinish  bool
 }
 
 func NewParser(emit func(*pb.StreamEvent)) *Parser {
-	return &Parser{emit: emit, argSeen: map[string]bool{}, toolIDs: map[string]string{}}
+	return &Parser{emit: emit, argSeen: map[string]bool{}, toolIDs: map[string]string{}, callItems: map[string]string{}, toolArgs: map[string]string{}, toolNames: map[string]string{}, text: map[string]string{}, signatures: map[string]string{}}
 }
 
 // event 上游事件的公共字段（按 type 取用）。
 type event struct {
-	Type      string `json:"type"`
-	Delta     string `json:"delta"`
-	ItemID    string `json:"item_id"`
-	Arguments string `json:"arguments"`
-	Item      struct {
-		EncryptedContent string `json:"encrypted_content"`
-		ID               string `json:"id"`
-		Type             string `json:"type"`
-		CallID           string `json:"call_id"`
-		Name             string `json:"name"`
-		Arguments        string `json:"arguments"`
-	} `json:"item"`
-	Response struct {
+	Code         string            `json:"code"`
+	Message      string            `json:"message"`
+	Status       int32             `json:"status"`
+	Type         string            `json:"type"`
+	Delta        string            `json:"delta"`
+	ItemID       string            `json:"item_id"`
+	Arguments    string            `json:"arguments"`
+	Text         string            `json:"text"`
+	Refusal      string            `json:"refusal"`
+	Annotation   json.RawMessage   `json:"annotation"`
+	Annotations  []json.RawMessage `json:"annotations"`
+	ContentIndex int               `json:"content_index"`
+	SummaryIndex int               `json:"summary_index"`
+	Item         responseItem      `json:"item"`
+	Response     struct {
+		Output            []responseItem `json:"output"`
 		Usage             *responseUsage `json:"usage"`
 		IncompleteDetails struct {
 			Reason string `json:"reason"`
 		} `json:"incomplete_details"`
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
+		Error responseError `json:"error"`
 	} `json:"response"`
-	Error struct {
-		Message string `json:"message"`
-	} `json:"error"`
+	Error responseError `json:"error"`
+}
+
+type responsePart struct {
+	Type        string            `json:"type"`
+	Text        string            `json:"text"`
+	Refusal     string            `json:"refusal"`
+	Annotations []json.RawMessage `json:"annotations"`
+}
+
+type responseItem struct {
+	ID               string         `json:"id"`
+	Type             string         `json:"type"`
+	CallID           string         `json:"call_id"`
+	Name             string         `json:"name"`
+	Arguments        string         `json:"arguments"`
+	EncryptedContent string         `json:"encrypted_content"`
+	Content          []responsePart `json:"content"`
+	Summary          []responsePart `json:"summary"`
+}
+
+type responseError struct {
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Status  int32  `json:"status"`
 }
 
 // responseUsage Responses 的 usage：input_tokens 含缓存读；缓存与推理明细在 *_details。
@@ -217,21 +270,31 @@ func (p *Parser) Feed(line string) {
 		return
 	}
 	switch ev.Type {
+	case "response.refusal.delta":
+		p.emitText(ev.ItemID, ev.ContentIndex, "refusal", ev.Delta, false)
 	case "response.output_text.delta":
-		p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{
-			ContentDelta: &pb.ContentDelta{Text: ev.Delta},
-		}})
-	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-		p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ReasoningDelta{
-			ReasoningDelta: &pb.ReasoningDelta{Text: ev.Delta},
-		}})
+		p.emitText(ev.ItemID, ev.ContentIndex, "text", ev.Delta, false)
+	case "response.output_text.annotation.added":
+		p.emitAnnotations(ev.ItemID, ev.ContentIndex, []json.RawMessage{ev.Annotation})
+	case "response.output_text.done":
+		p.emitText(ev.ItemID, ev.ContentIndex, "text", ev.Text, true)
+		p.emitAnnotations(ev.ItemID, ev.ContentIndex, ev.Annotations)
+	case "response.refusal.done":
+		p.emitText(ev.ItemID, ev.ContentIndex, "refusal", ev.Refusal, true)
+	case "response.reasoning_summary_text.delta":
+		p.emitText(ev.ItemID, ev.SummaryIndex, "reasoning_summary", ev.Delta, false)
+	case "response.reasoning_summary_text.done":
+		p.emitText(ev.ItemID, ev.SummaryIndex, "reasoning_summary", ev.Text, true)
+	case "response.reasoning_text.delta":
+		p.emitText(ev.ItemID, ev.ContentIndex, "reasoning", ev.Delta, false)
+	case "response.reasoning_text.done":
+		p.emitText(ev.ItemID, ev.ContentIndex, "reasoning", ev.Text, true)
 	case "response.output_item.added":
 		if ev.Item.Type == "function_call" {
-			p.sawTool = true
-			p.toolIDs[ev.Item.ID] = ev.Item.CallID
-			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{
-				ToolCallDelta: &pb.ToolCallDelta{Id: ev.Item.CallID, Name: ev.Item.Name},
-			}})
+			p.registerTool(ev.Item)
+			if ev.Item.Arguments != "" {
+				p.toolArgsDone(ev.Item.ID, ev.Item.Arguments)
+			}
 		}
 	case "response.function_call_arguments.delta":
 		if p.toolIDs[ev.ItemID] == "" {
@@ -239,56 +302,171 @@ func (p *Parser) Feed(line string) {
 			return
 		}
 		p.argSeen[ev.ItemID] = true
+		p.toolArgs[ev.ItemID] += ev.Delta
 		p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{
 			ToolCallDelta: &pb.ToolCallDelta{Id: p.toolIDs[ev.ItemID], ArgumentsDelta: ev.Delta},
 		}})
 	case "response.function_call_arguments.done":
 		p.toolArgsDone(ev.ItemID, ev.Arguments)
 	case "response.output_item.done":
-		if ev.Item.Type == "reasoning" && ev.Item.EncryptedContent != "" {
-			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ReasoningDelta{ReasoningDelta: &pb.ReasoningDelta{Signature: streamutil.ResponsesSignature(ev.Item.EncryptedContent)}}})
-		}
-		if ev.Item.Type == "function_call" {
-			if p.toolIDs[ev.Item.ID] == "" {
-				p.toolIDs[ev.Item.ID] = ev.Item.CallID
-				p.sawTool = true
-				p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{ToolCallDelta: &pb.ToolCallDelta{Id: ev.Item.CallID, Name: ev.Item.Name}}})
-			}
-			p.toolArgsDone(ev.Item.ID, ev.Item.Arguments)
-		}
+		p.completeItem(ev.Item)
 	case "response.completed", "response.incomplete":
+		for _, item := range ev.Response.Output {
+			p.completeItem(item)
+			if p.sentFinish {
+				return
+			}
+		}
 		if u := ev.Response.Usage; u != nil {
 			p.usage = u.toEnvelope()
 		}
-		if ev.Type == "response.incomplete" && ev.Response.IncompleteDetails.Reason == "max_output_tokens" {
-			p.stop = "length"
-		} else if ev.Type == "response.incomplete" {
-			p.stop = "content_filter"
+		if ev.Type == "response.incomplete" {
+			switch ev.Response.IncompleteDetails.Reason {
+			case "max_output_tokens":
+				p.stop = "length"
+			case "content_filter":
+				p.stop = "content_filter"
+			default:
+				p.FinishWithError(502, "upstream response incomplete: "+ev.Response.IncompleteDetails.Reason)
+				return
+			}
 		}
 		p.finish()
 	case "response.failed":
-		p.FinishWithError(502, orDefault(ev.Response.Error.Message, "upstream response failed"))
+		e := ev.Response.Error
+		p.FinishWithError(streamutil.ErrorCode(orDefault(e.Code, e.Type), e.Status), orDefault(e.Message, "upstream response failed"))
 	case "error":
-		p.FinishWithError(502, orDefault(ev.Error.Message, "upstream error"))
+		e := ev.Error
+		if ev.Message != "" || ev.Code != "" {
+			e = responseError{Code: ev.Code, Message: ev.Message, Status: ev.Status}
+		}
+		p.FinishWithError(streamutil.ErrorCode(orDefault(e.Code, e.Type), e.Status), orDefault(e.Message, "upstream error"))
 	}
 }
 
 // toolArgsDone 上游只在 done 给全量参数时补发一次（已走增量则跳过）。
 func (p *Parser) toolArgsDone(itemID, args string) {
-	if p.argSeen[itemID] {
+	if p.sentFinish {
 		return
 	}
 	if p.toolIDs[itemID] == "" {
 		p.FinishWithError(502, "tool completion has no call identity")
 		return
 	}
+	if args == "" && p.argSeen[itemID] {
+		return
+	}
 	if args == "" {
 		args = "{}"
 	}
+	previous := p.toolArgs[itemID]
+	if !strings.HasPrefix(args, previous) {
+		p.FinishWithError(502, "conflicting final tool arguments")
+		return
+	}
+	p.toolArgs[itemID] = args
 	p.argSeen[itemID] = true
+	args = strings.TrimPrefix(args, previous)
+	if args == "" {
+		return
+	}
 	p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{
 		ToolCallDelta: &pb.ToolCallDelta{Id: p.toolIDs[itemID], ArgumentsDelta: args},
 	}})
+}
+
+// emitText 按内容块合并增量与快照，仅补发尚未收到的后缀。
+func (p *Parser) emitText(id string, index int, kind, value string, complete bool) {
+	if p.sentFinish {
+		return
+	}
+	key := fmt.Sprintf("%s/%d/%s", id, index, kind)
+	previous := p.text[key]
+	if complete {
+		if !strings.HasPrefix(value, previous) {
+			p.FinishWithError(502, "conflicting final response content")
+			return
+		}
+		value = strings.TrimPrefix(value, previous)
+	}
+	p.text[key] += value
+	if kind == "refusal" {
+		p.stop = "content_filter"
+	}
+	if value == "" {
+		return
+	}
+	if kind == "reasoning" || kind == "reasoning_summary" {
+		p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ReasoningDelta{ReasoningDelta: &pb.ReasoningDelta{Text: value}}})
+	} else {
+		p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{ContentDelta: &pb.ContentDelta{Text: value, Refusal: kind == "refusal", Source: "responses", BlockId: fmt.Sprintf("%s/%d/%s", id, index, kind)}}})
+	}
+}
+
+func (p *Parser) registerTool(item responseItem) {
+	if p.sentFinish {
+		return
+	}
+	if item.ID == "" || item.CallID == "" {
+		p.FinishWithError(502, "tool item has no call identity")
+		return
+	}
+	oldID, oldName := p.toolIDs[item.ID], p.toolNames[item.ID]
+	if otherItem := p.callItems[item.CallID]; otherItem != "" && otherItem != item.ID {
+		p.FinishWithError(502, "duplicate tool call identity")
+		return
+	}
+	if (oldID != "" && oldID != item.CallID) || (oldName != "" && item.Name != "" && oldName != item.Name) {
+		p.FinishWithError(502, "conflicting tool identity")
+		return
+	}
+	p.sawTool = true
+	p.toolIDs[item.ID] = item.CallID
+	p.callItems[item.CallID] = item.ID
+	if oldID == "" || (oldName == "" && item.Name != "") {
+		p.toolNames[item.ID] = item.Name
+		p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{ToolCallDelta: &pb.ToolCallDelta{Id: item.CallID, Name: item.Name}}})
+	}
+}
+
+func (p *Parser) completeItem(item responseItem) {
+	if p.sentFinish {
+		return
+	}
+	switch item.Type {
+	case "function_call":
+		p.registerTool(item)
+		p.toolArgsDone(item.ID, item.Arguments)
+	case "message":
+		for i, part := range item.Content {
+			switch part.Type {
+			case "output_text":
+				p.emitText(item.ID, i, "text", part.Text, true)
+				p.emitAnnotations(item.ID, i, part.Annotations)
+			case "refusal":
+				p.emitText(item.ID, i, "refusal", part.Refusal, true)
+			default:
+				p.FinishWithError(502, "unsupported response content: "+part.Type)
+			}
+		}
+	case "reasoning":
+		for i, part := range item.Summary {
+			p.emitText(item.ID, i, "reasoning_summary", part.Text, true)
+		}
+		for i, part := range item.Content {
+			if part.Type != "reasoning_text" {
+				p.FinishWithError(502, "unsupported reasoning content: "+part.Type)
+				return
+			}
+			p.emitText(item.ID, i, "reasoning", part.Text, true)
+		}
+		if item.EncryptedContent != "" && p.signatures[item.ID] != item.EncryptedContent && !p.sentFinish {
+			p.signatures[item.ID] = item.EncryptedContent
+			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ReasoningDelta{ReasoningDelta: &pb.ReasoningDelta{Signature: streamutil.ResponsesSignature(item.EncryptedContent)}}})
+		}
+	default:
+		p.FinishWithError(502, "unsupported response item: "+item.Type)
+	}
 }
 
 // Finish 流结束：缺少终止事件时报告失败。
@@ -312,6 +490,12 @@ func (p *Parser) FinishWithError(code int32, message string) {
 func (p *Parser) finish() {
 	if p.sentFinish {
 		return
+	}
+	for itemID := range p.toolIDs {
+		if strings.TrimSpace(p.toolNames[itemID]) == "" {
+			p.FinishWithError(502, "completed tool call has no name")
+			return
+		}
 	}
 	p.sentFinish = true
 	reason := p.stop
@@ -341,4 +525,14 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+func (p *Parser) emitAnnotations(id string, index int, values []json.RawMessage) {
+	if p.sentFinish {
+		return
+	}
+	key := fmt.Sprintf("%s/%d/text", id, index)
+	if raw := p.annotations.Add(key, values); raw != "" {
+		p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{ContentDelta: &pb.ContentDelta{Annotations: raw, Source: "responses", BlockId: key}}})
+	}
 }

@@ -219,6 +219,7 @@ func normalizeEvents(ctx context.Context, events <-chan *pb.StreamEvent, model s
 		started := false
 		args := map[string]string{}
 		names := map[string]string{}
+		pending := map[string]string{}
 		currentToolID := ""
 		size := 0
 		for {
@@ -261,13 +262,18 @@ func normalizeEvents(ctx context.Context, events <-chan *pb.StreamEvent, model s
 					}
 					currentToolID = t.Id
 					args[t.Id] += t.ArgumentsDelta
+					pending[t.Id] += t.ArgumentsDelta
 					if t.Name != "" {
+						if names[t.Id] != "" && names[t.Id] != t.Name {
+							send(failureEvent(502, "tool name changed during stream"))
+							return
+						}
 						names[t.Id] = t.Name
 					}
 					size += len(t.ArgumentsDelta) + len(t.Name) + len(t.Id)
 				}
 				if d := ev.GetContentDelta(); d != nil {
-					size += len(d.Text)
+					size += len(d.Text) + len(d.Annotations) + len(d.BlockId) + len(d.Source)
 				}
 				if d := ev.GetReasoningDelta(); d != nil {
 					size += len(d.Text) + len(d.Signature)
@@ -275,6 +281,14 @@ func normalizeEvents(ctx context.Context, events <-chan *pb.StreamEvent, model s
 				if size > 32<<20 {
 					send(failureEvent(502, "upstream response exceeds 32 MiB"))
 					return
+				}
+				if t := ev.GetToolCallDelta(); t != nil {
+					if names[t.Id] == "" {
+						continue
+					}
+					ev = proto.Clone(ev).(*pb.StreamEvent)
+					ev.GetToolCallDelta().ArgumentsDelta = pending[t.Id]
+					delete(pending, t.Id)
 				}
 				if f := ev.GetMessageFinish(); f != nil {
 					switch f.FinishReason {

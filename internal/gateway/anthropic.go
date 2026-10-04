@@ -4,6 +4,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/requestutil"
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/streamutil"
 
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
@@ -11,6 +12,9 @@ import (
 
 // parseAnthropicRequest 把 /v1/messages 请求体转成统一信封。
 func parseAnthropicRequest(body []byte) (*pb.ChatRequest, error) {
+	if err := validateRequestContent(body, "anthropic"); err != nil {
+		return nil, err
+	}
 	var raw struct {
 		Model         string          `json:"model"`
 		System        json.RawMessage `json:"system"`
@@ -24,6 +28,7 @@ func parseAnthropicRequest(body []byte) (*pb.ChatRequest, error) {
 		ToolChoice    json.RawMessage `json:"tool_choice"`
 		Stream        bool            `json:"stream"`
 		Thinking      json.RawMessage `json:"thinking"`
+		OutputConfig  json.RawMessage `json:"output_config"`
 		Metadata      struct {
 			UserID string `json:"user_id"`
 		} `json:"metadata"`
@@ -43,6 +48,7 @@ func parseAnthropicRequest(body []byte) (*pb.ChatRequest, error) {
 		Extra:       map[string]string{},
 	}
 	setTemperature(req, raw.Temperature)
+	requestutil.CaptureNative(req, body, "anthropic")
 
 	// system 可能是 string 或 blocks；blocks 带 cache_control 时保留 parts（提示缓存断点）
 	if parts := anthParts(raw.System); len(parts) > 0 {
@@ -56,6 +62,7 @@ func parseAnthropicRequest(body []byte) (*pb.ChatRequest, error) {
 	}
 
 	for _, t := range raw.Tools {
+		requestutil.SetToolStrict(req, t.Name, t.Strict)
 		req.Tools = append(req.Tools, &pb.ToolDefinition{
 			Name:             t.Name,
 			Description:      t.Description,
@@ -63,9 +70,11 @@ func parseAnthropicRequest(body []byte) (*pb.ChatRequest, error) {
 			CacheControl:     string(t.CacheControl),
 		})
 	}
-	if tc, err := convertAnthToolChoice(raw.ToolChoice); err == nil && tc != nil {
-		req.ToolChoice = tc
+	tc, err := convertAnthToolChoice(raw.ToolChoice)
+	if err != nil {
+		return nil, err
 	}
+	req.ToolChoice = tc
 	if len(raw.ToolChoice) > 0 {
 		var dp struct {
 			DisableParallel bool `json:"disable_parallel_tool_use"`
@@ -90,11 +99,14 @@ func parseAnthropicRequest(body []byte) (*pb.ChatRequest, error) {
 	if len(raw.Thinking) > 0 {
 		req.Extra["thinking"] = string(raw.Thinking)
 	}
+	if len(raw.OutputConfig) > 0 && string(raw.OutputConfig) != "null" {
+		req.Extra["anthropic_output_config"] = string(raw.OutputConfig)
+	}
 	if raw.Metadata.UserID != "" {
 		req.Extra["user"] = raw.Metadata.UserID
 	}
 
-	return req, nil
+	return req, validateToolHistory(req)
 }
 
 type anthMessage struct {
@@ -107,6 +119,8 @@ type anthTool struct {
 	Description  string          `json:"description"`
 	InputSchema  json.RawMessage `json:"input_schema"`
 	CacheControl json.RawMessage `json:"cache_control"`
+	Citations    json.RawMessage `json:"citations"`
+	Strict       *bool           `json:"strict"`
 }
 
 // convertAnthMessage 单条 Anthropic 消息 → 一到多条信封消息
@@ -134,6 +148,7 @@ func convertAnthMessage(m *anthMessage) []*pb.EnvelopeMessage {
 		Signature    string          `json:"signature"`
 		Data         string          `json:"data"` // redacted_thinking
 		CacheControl json.RawMessage `json:"cache_control"`
+		Citations    json.RawMessage `json:"citations"`
 		Source       struct {
 			Type      string `json:"type"` // base64 / url
 			MediaType string `json:"media_type"`
@@ -149,7 +164,7 @@ func convertAnthMessage(m *anthMessage) []*pb.EnvelopeMessage {
 		cc := string(b.CacheControl)
 		switch b.Type {
 		case "text":
-			parts = append(parts, &pb.ContentPart{Type: "text", Text: b.Text, CacheControl: cc})
+			parts = append(parts, &pb.ContentPart{Type: "text", Text: b.Text, CacheControl: cc, Annotations: string(b.Citations), Source: "anthropic"})
 		case "image":
 			if b.Source.Type == "url" {
 				parts = append(parts, &pb.ContentPart{Type: "image", Url: b.Source.URL, CacheControl: cc})
@@ -208,6 +223,7 @@ func anthParts(raw json.RawMessage) []*pb.ContentPart {
 		Type         string          `json:"type"`
 		Text         string          `json:"text"`
 		CacheControl json.RawMessage `json:"cache_control"`
+		Citations    json.RawMessage `json:"citations"`
 		Source       struct {
 			Type      string `json:"type"`
 			MediaType string `json:"media_type"`
@@ -223,7 +239,7 @@ func anthParts(raw json.RawMessage) []*pb.ContentPart {
 		cc := string(b.CacheControl)
 		switch b.Type {
 		case "text":
-			parts = append(parts, &pb.ContentPart{Type: "text", Text: b.Text, CacheControl: cc})
+			parts = append(parts, &pb.ContentPart{Type: "text", Text: b.Text, CacheControl: cc, Annotations: string(b.Citations), Source: "anthropic"})
 		case "image":
 			if b.Source.Type == "url" {
 				parts = append(parts, &pb.ContentPart{Type: "image", Url: b.Source.URL, CacheControl: cc})
@@ -237,14 +253,14 @@ func anthParts(raw json.RawMessage) []*pb.ContentPart {
 
 // convertAnthToolChoice Anthropic tool_choice → 信封 ToolChoice。
 func convertAnthToolChoice(raw json.RawMessage) (*pb.ToolChoice, error) {
-	if len(raw) == 0 {
+	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
 		switch s {
-		case "auto":
-			return &pb.ToolChoice{Type: "auto"}, nil
+		case "auto", "none":
+			return &pb.ToolChoice{Type: s}, nil
 		case "any", "required":
 			return &pb.ToolChoice{Type: "tool"}, nil
 		}
@@ -260,19 +276,27 @@ func convertAnthToolChoice(raw json.RawMessage) (*pb.ToolChoice, error) {
 	if tc.Type == "auto" || tc.Type == "none" {
 		return &pb.ToolChoice{Type: tc.Type}, nil
 	}
-	return &pb.ToolChoice{Type: "tool", ToolName: tc.Name}, nil
+	if tc.Type == "any" {
+		return &pb.ToolChoice{Type: "tool"}, nil
+	}
+	if tc.Type == "tool" && tc.Name != "" {
+		return &pb.ToolChoice{Type: "tool", ToolName: tc.Name}, nil
+	}
+	return nil, fmt.Errorf("unsupported tool_choice or missing tool name: %s", tc.Type)
 }
 
 // ---------- 信封事件 → Anthropic SSE ----------
 
 type anthSSEState struct {
-	model      string
-	msgID      string
-	thinkBlock int // 当前 thinking 块 index；-1 未开 / 已关
-	textBlock  int // 当前文本块 index；-1 未开
-	nextBlock  int
-	toolBlocks map[string]int // tool_call id → block index
-	stopReason string
+	content       outputContent
+	contentBlocks map[int]int
+	model         string
+	msgID         string
+	thinkBlock    int // 当前 thinking 块 index；-1 未开 / 已关
+	textBlock     int // 当前文本块 index；-1 未开
+	nextBlock     int
+	toolBlocks    map[string]int // tool_call id → block index
+	stopReason    string
 }
 
 func newAnthSSEState(model string) *anthSSEState {
@@ -340,19 +364,34 @@ func (s *anthSSEState) convertEvent(ev *pb.StreamEvent) string {
 		return out
 
 	case *pb.StreamEvent_ContentDelta:
-		out := s.closeThinking()
-		if s.textBlock < 0 {
-			s.textBlock = s.nextBlock
-			s.nextBlock++
-			out += anthEvent("content_block_start", map[string]interface{}{
-				"type": "content_block_start", "index": s.textBlock,
-				"content_block": map[string]interface{}{"type": "text", "text": ""},
-			})
+		if e.ContentDelta.Text == "" && !e.ContentDelta.Refusal && (e.ContentDelta.Source != "anthropic" || e.ContentDelta.Annotations == "") {
+			return ""
 		}
-		out += anthEvent("content_block_delta", map[string]interface{}{
-			"type": "content_block_delta", "index": s.textBlock,
-			"delta": map[string]interface{}{"type": "text_delta", "text": e.ContentDelta.Text},
-		})
+		out := s.closeThinking()
+		index, added := s.content.add(e.ContentDelta, "anthropic")
+		if s.contentBlocks == nil {
+			s.contentBlocks = map[int]int{}
+		}
+		if added {
+			if s.textBlock >= 0 {
+				out += anthEvent("content_block_stop", map[string]interface{}{"index": s.textBlock})
+			}
+			s.contentBlocks[index] = s.nextBlock
+			s.nextBlock++
+			out += anthEvent("content_block_start", map[string]interface{}{"index": s.contentBlocks[index], "content_block": map[string]interface{}{"type": "text", "text": ""}})
+		}
+		block := s.contentBlocks[index]
+		s.textBlock = block
+		if e.ContentDelta.Text != "" {
+			out += anthEvent("content_block_delta", map[string]interface{}{"index": block, "delta": map[string]interface{}{"type": "text_delta", "text": e.ContentDelta.Text}})
+		}
+		if e.ContentDelta.Source == "anthropic" && e.ContentDelta.Annotations != "" {
+			var values []json.RawMessage
+			_ = json.Unmarshal([]byte(e.ContentDelta.Annotations), &values)
+			for _, value := range values {
+				out += anthEvent("content_block_delta", map[string]interface{}{"index": block, "delta": map[string]interface{}{"type": "citations_delta", "citation": value}})
+			}
+		}
 		return out
 
 	case *pb.StreamEvent_ToolCallDelta:
@@ -449,6 +488,7 @@ func anthEvent(eventType string, payload map[string]interface{}) string {
 
 // anthAggregate 聚合信封事件为完整 Message 响应对象。
 type anthAggregate struct {
+	content   outputContent
 	model     string
 	thinking  string
 	signature string
@@ -476,6 +516,7 @@ func (a *anthAggregate) feed(ev *pb.StreamEvent) {
 		}
 	case *pb.StreamEvent_ContentDelta:
 		a.text += e.ContentDelta.Text
+		a.content.add(e.ContentDelta, "anthropic")
 	case *pb.StreamEvent_ToolCallDelta:
 		t, ok := a.tools[e.ToolCallDelta.Id]
 		if !ok {
@@ -501,9 +542,7 @@ func (a *anthAggregate) result() map[string]interface{} {
 			"type": "thinking", "thinking": a.thinking, "signature": a.signature,
 		})
 	}
-	if a.text != "" {
-		content = append(content, map[string]interface{}{"type": "text", "text": a.text})
-	}
+	content = append(content, a.content.anthropic()...)
 	for _, id := range sortedKeys(a.tools) {
 		t := a.tools[id]
 		content = append(content, map[string]interface{}{

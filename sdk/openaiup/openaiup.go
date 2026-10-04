@@ -4,7 +4,10 @@ package openaiup
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
+
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/requestutil"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/streamutil"
 
@@ -58,6 +61,29 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 		if m.ToolCallId != "" {
 			msg["tool_call_id"] = m.ToolCallId
 		}
+		if m.Role == "assistant" {
+			var refusal string
+			var annotations []json.RawMessage
+			for _, p := range m.Parts {
+				if p.Type == "refusal" {
+					refusal += p.Text
+				}
+				if p.Source == "chat" && p.Annotations != "" {
+					var values []json.RawMessage
+					_ = json.Unmarshal([]byte(p.Annotations), &values)
+					annotations = append(annotations, values...)
+				}
+			}
+			if refusal != "" {
+				msg["refusal"] = refusal
+				if m.Text == "" {
+					msg["content"] = nil
+				}
+			}
+			if len(annotations) > 0 {
+				msg["annotations"] = annotations
+			}
+		}
 		messages = append(messages, msg)
 	}
 	flushImages()
@@ -70,12 +96,14 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 	if len(req.Tools) > 0 {
 		var tools []map[string]interface{}
 		for _, t := range req.Tools {
+			function := map[string]interface{}{
+				"name": t.Name, "description": t.Description,
+				"parameters": rawJSON(t.ParametersSchema),
+			}
+			requestutil.ApplyToolStrict(req, t.Name, function)
 			tools = append(tools, map[string]interface{}{
-				"type": "function",
-				"function": map[string]interface{}{
-					"name": t.Name, "description": t.Description,
-					"parameters": rawJSON(t.ParametersSchema),
-				},
+				"type":     "function",
+				"function": function,
 			})
 		}
 		body["tools"] = tools
@@ -95,7 +123,11 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 		}
 	}
 	if req.MaxTokens > 0 {
-		body["max_tokens"] = req.MaxTokens
+		if req.Extra["openai_max_completion_tokens"] == "true" {
+			body["max_completion_tokens"] = req.MaxTokens
+		} else {
+			body["max_tokens"] = req.MaxTokens
+		}
 	}
 	if v, ok := req.Extra["temperature"]; ok && v != "" {
 		body["temperature"] = jsonNumber(v) // 显式给出（含 0）
@@ -108,7 +140,7 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 	if v, ok := req.Extra["stop"]; ok && v != "" {
 		body["stop"] = rawJSON(v)
 	}
-	if v, ok := req.Extra["reasoning_effort"]; ok && v != "" {
+	if v := requestutil.ReasoningEffort(req.Extra); v != "" {
 		body["reasoning_effort"] = v
 	} else if v := req.Extra["thinking"]; v != "" {
 		// Anthropic 客户端的 thinking budget → reasoning_effort
@@ -117,14 +149,18 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 		}
 	}
 	// OpenAI 系专有参数：原样透传（JSON 值）
-	for _, k := range []string{"frequency_penalty", "presence_penalty", "seed", "parallel_tool_calls", "response_format"} {
+	for _, k := range []string{"frequency_penalty", "presence_penalty", "seed", "parallel_tool_calls"} {
 		if v := req.Extra[k]; v != "" {
 			body[k] = rawJSON(v)
 		}
 	}
+	if format := requestutil.ChatResponseFormat(req.Extra); format != nil {
+		body["response_format"] = format
+	}
 	if v := req.Extra["user"]; v != "" {
 		body["user"] = v
 	}
+	requestutil.ApplyNative(req, body, "chat")
 	return body
 }
 
@@ -181,9 +217,11 @@ func imageItem(p *pb.ContentPart) map[string]interface{} {
 	if url == "" {
 		url = "data:" + p.MediaType + ";base64," + p.Data
 	}
-	return map[string]interface{}{
-		"type": "image_url", "image_url": map[string]interface{}{"url": url},
+	image := map[string]interface{}{"url": url}
+	if p.ImageDetail != "" {
+		image["detail"] = p.ImageDetail
 	}
+	return map[string]interface{}{"type": "image_url", "image_url": image}
 }
 
 // Parser 把上游 OpenAI SSE 行解析为信封事件。
@@ -191,14 +229,22 @@ func imageItem(p *pb.ContentPart) map[string]interface{} {
 type Parser struct {
 	emit        func(*pb.StreamEvent)
 	pendingStop string
-	toolIDs     map[int]string // tool_calls index → 是否已发过 name
-	usage       *pb.Usage      // 跨块合并的用量（部分上游每块都带累计 usage）
+	toolIDs     map[int]string // tool_calls index → 调用身份
+	tools       map[int]*pendingTool
+	usage       *pb.Usage // 跨块合并的用量（部分上游每块都带累计 usage）
 	sentFinish  bool
 	sawDone     bool
+	annotations streamutil.AnnotationSet
+	refused     bool
 }
 
 func NewParser(emit func(*pb.StreamEvent)) *Parser {
-	return &Parser{emit: emit, toolIDs: map[int]string{}}
+	return &Parser{emit: emit, toolIDs: map[int]string{}, tools: map[int]*pendingTool{}}
+}
+
+type pendingTool struct {
+	id, name, args string
+	emitted        bool
 }
 
 // chunkUsage OpenAI 方言的 usage 块：prompt_tokens 含缓存读写；缓存明细在
@@ -260,10 +306,12 @@ func (p *Parser) Feed(line string) {
 		} `json:"error"`
 		Choices []struct {
 			Delta struct {
-				Role             string `json:"role"`
-				Content          string `json:"content"`
-				ReasoningContent string `json:"reasoning_content"` // DeepSeek / New API
-				Reasoning        string `json:"reasoning"`         // OpenRouter
+				Role             string            `json:"role"`
+				Content          string            `json:"content"`
+				Refusal          string            `json:"refusal"`
+				Annotations      []json.RawMessage `json:"annotations"`
+				ReasoningContent string            `json:"reasoning_content"` // DeepSeek / New API
+				Reasoning        string            `json:"reasoning"`         // OpenRouter
 				ToolCalls        []struct {
 					Index    int    `json:"index"`
 					ID       string `json:"id"`
@@ -286,6 +334,13 @@ func (p *Parser) Feed(line string) {
 		return
 	}
 	for _, c := range chunk.Choices {
+		if raw := p.annotations.Add("text", c.Delta.Annotations); raw != "" {
+			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{ContentDelta: &pb.ContentDelta{Annotations: raw, Source: "chat"}}})
+		}
+		if c.Delta.Refusal != "" {
+			p.refused = true
+			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{ContentDelta: &pb.ContentDelta{Text: c.Delta.Refusal, Refusal: true, Source: "chat"}}})
+		}
 		if r := orDefault(c.Delta.ReasoningContent, c.Delta.Reasoning); r != "" {
 			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ReasoningDelta{
 				ReasoningDelta: &pb.ReasoningDelta{Text: r},
@@ -293,24 +348,50 @@ func (p *Parser) Feed(line string) {
 		}
 		if c.Delta.Content != "" {
 			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{
-				ContentDelta: &pb.ContentDelta{Text: c.Delta.Content},
+				ContentDelta: &pb.ContentDelta{Text: c.Delta.Content, Source: "chat"},
 			}})
 		}
 		for _, tc := range c.Delta.ToolCalls {
-			ev := &pb.ToolCallDelta{
-				Id:             tc.ID,
-				Name:           tc.Function.Name,
-				ArgumentsDelta: tc.Function.Arguments,
+			tool := p.tools[tc.Index]
+			if tool == nil {
+				tool = &pendingTool{}
+				p.tools[tc.Index] = tool
+			}
+			if tc.ID != "" && tool.id != "" && tool.id != tc.ID {
+				p.FinishWithError(502, "conflicting tool call identity")
+				return
 			}
 			if tc.ID != "" {
+				for index, id := range p.toolIDs {
+					if index != tc.Index && id == tc.ID {
+						p.FinishWithError(502, "duplicate tool call identity")
+						return
+					}
+				}
 				p.toolIDs[tc.Index] = tc.ID
+				tool.id = tc.ID
 			}
-			ev.Id = p.toolIDs[tc.Index]
-			if ev.Id == "" {
+			if tool.id == "" {
 				p.FinishWithError(502, "tool continuation has no call identity")
 				return
 			}
-			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{ToolCallDelta: ev}})
+			if tc.Function.Name != "" {
+				if tool.emitted && tc.Function.Name != tool.name {
+					p.FinishWithError(502, "tool name changed after arguments started")
+					return
+				}
+				if !tool.emitted {
+					tool.name += tc.Function.Name
+				}
+			}
+			tool.args += tc.Function.Arguments
+			if len(tool.args)+len(tool.name) > 32<<20 {
+				p.FinishWithError(502, "tool call exceeds 32 MiB")
+				return
+			}
+			if tool.name != "" && tool.args != "" {
+				p.flushTool(tool)
+			}
 		}
 		if c.FinishReason != nil && *c.FinishReason != "" {
 			p.pendingStop = *c.FinishReason
@@ -319,11 +400,7 @@ func (p *Parser) Feed(line string) {
 	if chunk.Usage != nil {
 		p.usage = mergeUsage(p.usage, chunk.Usage.toEnvelope())
 	}
-	// usage 通常随终止块或其后的 usage 块到达；两者齐了才收尾，
-	// 早于 finish_reason 的逐块累计 usage 只合并不收尾。
-	if p.pendingStop != "" && p.usage != nil {
-		p.finish()
-	}
+	// 等待 [DONE] 或 EOF，避免早先的累计 usage 遮蔽 finish_reason 之后的最终用量。
 }
 
 // Finish 流结束：把挂起的 finish_reason 落地（从未发过时按已合并的 usage 收尾）。
@@ -353,13 +430,43 @@ func (p *Parser) finish() {
 	if p.sentFinish {
 		return
 	}
+	indices := make([]int, 0, len(p.tools))
+	for index := range p.tools {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	for _, index := range indices {
+		tool := p.tools[index]
+		if tool.name == "" {
+			p.FinishWithError(502, "tool call has no name")
+			return
+		}
+		if !tool.emitted && tool.args == "" {
+			tool.args = "{}"
+		}
+		if !tool.emitted || tool.args != "" {
+			p.flushTool(tool)
+		}
+	}
 	p.sentFinish = true
+	if p.refused && (p.pendingStop == "" || p.pendingStop == "stop") {
+		p.pendingStop = "content_filter"
+	}
 	p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_MessageFinish{
 		MessageFinish: &pb.MessageFinish{
 			FinishReason: orDefault(p.pendingStop, "stop"),
 			Usage:        p.usage,
 		},
 	}})
+}
+
+func (p *Parser) flushTool(tool *pendingTool) {
+	name := ""
+	if !tool.emitted {
+		name = tool.name
+	}
+	p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{ToolCallDelta: &pb.ToolCallDelta{Id: tool.id, Name: name, ArgumentsDelta: tool.args}}})
+	tool.emitted, tool.args = true, ""
 }
 
 // mergeUsage 后到的非零字段覆盖，零值不擦除已有计数。
