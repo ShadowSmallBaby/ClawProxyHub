@@ -1,86 +1,48 @@
-// sse.go — OpenAI 兼容 SSE 解析：逐 data: 帧解出增量，驱动 stream 对象的 typed 方法。
+// sse.go — 复用 SDK 解析器，保留工具身份、用量和失败终态。
 package main
 
 import (
 	"bufio"
 	"encoding/json"
-	"io"
-	"strings"
-
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/openaiup"
+	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 	lua "github.com/yuin/gopher-lua"
+	"google.golang.org/protobuf/encoding/protojson"
+	"io"
 )
 
-// openAIChunk OpenAI chat.completions 流式分片的关注字段。
-type openAIChunk struct {
-	Choices []struct {
-		Delta struct {
-			Content          string `json:"content"`
-			ReasoningContent string `json:"reasoning_content"`
-			ToolCalls        []struct {
-				Id       string `json:"id"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			} `json:"tool_calls"`
-		} `json:"delta"`
-		FinishReason string `json:"finish_reason"`
-	} `json:"choices"`
-}
-
-// streamOpenAISSE 读 SSE 并驱动 stream 方法；结束时补一次 message_finish。
 func streamOpenAISSE(L *lua.LState, streamTbl *lua.LTable, body io.Reader) {
-	call := func(method string, arg *lua.LTable) {
-		fn := L.GetField(streamTbl, method)
-		if fn == lua.LNil {
-			return
+	parser := openaiup.NewParser(func(ev *pb.StreamEvent) {
+		data, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(ev)
+		if err != nil {
+			L.RaiseError("stream: %v", err)
 		}
-		L.Push(fn)
-		L.Push(arg)
-		_ = L.PCall(1, 0, nil)
+		var fields map[string]interface{}
+		if err = json.Unmarshal(data, &fields); err != nil {
+			L.RaiseError("stream: %v", err)
+		}
+		for method, value := range fields {
+			if method == "task_failed" {
+				method = "failed"
+				value = value.(map[string]interface{})["error"]
+			}
+			fn := L.GetField(streamTbl, method)
+			if fn == lua.LNil {
+				continue
+			}
+			if err := L.CallByParam(lua.P{Fn: fn, NRet: 0, Protect: true}, goToLua(L, value)); err != nil {
+				L.RaiseError("stream: %v", err)
+			}
+		}
+	})
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+	for scanner.Scan() {
+		parser.Feed(scanner.Text())
 	}
-	sc := bufio.NewScanner(body)
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	finish := ""
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "[DONE]" {
-			break
-		}
-		var chunk openAIChunk
-		if json.Unmarshal([]byte(data), &chunk) != nil || len(chunk.Choices) == 0 {
-			continue
-		}
-		ch := chunk.Choices[0]
-		if ch.Delta.Content != "" {
-			t := L.NewTable()
-			t.RawSetString("text", lua.LString(ch.Delta.Content))
-			call("content_delta", t)
-		}
-		if ch.Delta.ReasoningContent != "" {
-			t := L.NewTable()
-			t.RawSetString("text", lua.LString(ch.Delta.ReasoningContent))
-			call("reasoning_delta", t)
-		}
-		for _, tc := range ch.Delta.ToolCalls {
-			t := L.NewTable()
-			t.RawSetString("id", lua.LString(tc.Id))
-			t.RawSetString("name", lua.LString(tc.Function.Name))
-			t.RawSetString("arguments_delta", lua.LString(tc.Function.Arguments))
-			call("tool_call_delta", t)
-		}
-		if ch.FinishReason != "" {
-			finish = ch.FinishReason
-		}
+	if err := scanner.Err(); err != nil {
+		parser.FinishWithError(502, err.Error())
+		return
 	}
-	if finish == "" {
-		finish = "stop"
-	}
-	ft := L.NewTable()
-	ft.RawSetString("finish_reason", lua.LString(finish))
-	call("message_finish", ft)
+	parser.Finish()
 }

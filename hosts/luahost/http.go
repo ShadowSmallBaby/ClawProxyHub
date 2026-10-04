@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
+	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 	"io"
 	"net/http"
 	"strings"
@@ -15,8 +17,21 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
-// httpClient 复用连接池；单请求超时给足够大兜底，流程控制交给脚本。
-var httpClient = &http.Client{Timeout: 10 * time.Minute}
+type credentialContextKey struct{}
+
+func luaContext(L *lua.LState) context.Context {
+	if ctx := L.Context(); ctx != nil {
+		return ctx
+	}
+	return context.Background()
+}
+func bindCredential(L *lua.LState, c *pb.CredentialBlob) {
+	L.SetContext(context.WithValue(luaContext(L), credentialContextKey{}, c))
+}
+func luaHTTPClient(L *lua.LState) *http.Client {
+	cred, _ := luaContext(L).Value(credentialContextKey{}).(*pb.CredentialBlob)
+	return sdk.UpstreamClient(sdk.ProxyURL(cred.GetProxy()))
+}
 
 func nowMillis() int64 { return time.Now().UnixMilli() }
 
@@ -71,17 +86,26 @@ func cphHTTPRequest(L *lua.LState) int {
 	if err != nil {
 		L.RaiseError("http.request: %v", err)
 	}
+	req = req.WithContext(luaContext(L))
 	if ms := int(numField(opts, "timeout")); ms > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(ms)*time.Millisecond)
+		ctx, cancel := context.WithTimeout(luaContext(L), time.Duration(ms)*time.Millisecond)
 		defer cancel()
 		req = req.WithContext(ctx)
 	}
-	resp, err := httpClient.Do(req)
+	if req.Context() == context.Background() {
+		req = req.WithContext(luaContext(L))
+	}
+	client := luaHTTPClient(L)
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(req)
 	if err != nil {
 		L.RaiseError("http.request: %v", err)
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, (32<<20)+1))
+	if err != nil || len(data) > 32<<20 {
+		L.RaiseError("http.request: unreadable or oversized response")
+	}
 	t := L.NewTable()
 	t.RawSetString("body", lua.LString(string(data)))
 	t.RawSetString("status", lua.LNumber(resp.StatusCode))
@@ -104,7 +128,12 @@ func cphHTTPStream(L *lua.LState) int {
 		L.Push(lua.LString(err.Error()))
 		return 2
 	}
-	resp, err := httpClient.Do(req)
+	if req.Context() == context.Background() {
+		req = req.WithContext(luaContext(L))
+	}
+	client := luaHTTPClient(L)
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(req)
 	if err != nil {
 		L.Push(lua.LFalse)
 		L.Push(lua.LString(err.Error()))
@@ -128,6 +157,12 @@ func cphHTTPStream(L *lua.LState) int {
 
 // cphTimeSleep(ms) 阻塞当前 VM 指定毫秒（脚本重试退避用）。
 func cphTimeSleep(L *lua.LState) int {
-	time.Sleep(time.Duration(L.CheckInt(1)) * time.Millisecond)
+	timer := time.NewTimer(time.Duration(L.CheckInt(1)) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-luaContext(L).Done():
+		L.RaiseError("sleep canceled")
+	}
 	return 0
 }

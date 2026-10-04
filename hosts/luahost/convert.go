@@ -11,7 +11,7 @@ import (
 func goToLua(L *lua.LState, v interface{}) lua.LValue {
 	switch x := v.(type) {
 	case nil:
-		return lua.LNil
+		return &lua.LUserData{Value: jsonNull{}}
 	case bool:
 		return lua.LBool(x)
 	case float64:
@@ -20,6 +20,9 @@ func goToLua(L *lua.LState, v interface{}) lua.LValue {
 		return lua.LString(x)
 	case []interface{}:
 		t := L.NewTable()
+		mt := L.NewTable()
+		mt.RawSetString("__json_array", lua.LTrue)
+		L.SetMetatable(t, mt)
 		for _, e := range x {
 			t.Append(goToLua(L, e))
 		}
@@ -45,7 +48,11 @@ func luaToGo(v lua.LValue) interface{} {
 	case lua.LString:
 		return string(x)
 	case *lua.LTable:
-		if n := x.Len(); n > 0 {
+		array := false
+		if mt, ok := x.Metatable.(*lua.LTable); ok {
+			array = mt.RawGetString("__json_array") == lua.LTrue
+		}
+		if n := x.Len(); n > 0 || array {
 			arr := make([]interface{}, 0, n)
 			for i := 1; i <= n; i++ {
 				arr = append(arr, luaToGo(x.RawGetInt(i)))
@@ -97,3 +104,5 @@ func usageFromField(t *lua.LTable, k string) *pb.Usage {
 		ReasoningTokens:     int64(numField(u, "reasoning_tokens")),
 	}
 }
+
+type jsonNull struct{}

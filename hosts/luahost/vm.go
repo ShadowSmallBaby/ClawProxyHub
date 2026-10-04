@@ -4,10 +4,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	lua "github.com/yuin/gopher-lua"
 
@@ -29,13 +31,25 @@ func (v *luaVM) fn(name string) lua.LValue {
 }
 
 // newVM 创建沙箱 VM，执行 main.lua 并捕获返回的 module table。
-func newVM(dir string, host *sdk.Host) (*luaVM, error) {
-	L := lua.NewState(lua.Options{SkipOpenLibs: true})
+func newVM(dir string, host *sdk.Host, contexts ...context.Context) (*luaVM, error) {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
+	initCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	L := lua.NewState(lua.Options{SkipOpenLibs: true, CallStackSize: 256, RegistrySize: 1024, RegistryMaxSize: 32768})
+	L.SetContext(initCtx)
 	openSafeLibs(L)
 	stripDangerous(L)
 	registerCPH(L, host, dir)
 	installSafeRequire(L, dir)
 
+	info, err := os.Stat(filepath.Join(dir, "main.lua"))
+	if err != nil || info.Size() > 4<<20 {
+		L.Close()
+		return nil, fmt.Errorf("main.lua missing or exceeds 4 MiB")
+	}
 	src, err := os.ReadFile(filepath.Join(dir, "main.lua"))
 	if err != nil {
 		L.Close()
@@ -58,35 +72,56 @@ func newVM(dir string, host *sdk.Host) (*luaVM, error) {
 		L.Close()
 		return nil, fmt.Errorf("main.lua must `return M` (a table), got %s", ret.Type())
 	}
+	L.SetContext(ctx)
 	return &luaVM{L: L, mod: mod}, nil
 }
 
 // vmPool 复用已加载脚本的 VM。空闲时懒建；用完放回。
 type vmPool struct {
-	dir  string
-	host *sdk.Host
-	mu   sync.Mutex
-	free []*luaVM
+	dir   string
+	host  *sdk.Host
+	mu    sync.Mutex
+	free  []*luaVM
+	slots chan struct{}
 }
 
 func newVMPool(dir string, host *sdk.Host) *vmPool {
-	return &vmPool{dir: dir, host: host}
+	return &vmPool{dir: dir, host: host, slots: make(chan struct{}, 8)}
 }
 
-func (p *vmPool) get() (*luaVM, error) {
+func (p *vmPool) get(contexts ...context.Context) (*luaVM, error) {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
+	select {
+	case p.slots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	p.mu.Lock()
 	if n := len(p.free); n > 0 {
 		v := p.free[n-1]
 		p.free = p.free[:n-1]
 		p.mu.Unlock()
+		v.L.SetContext(ctx)
 		return v, nil
 	}
 	p.mu.Unlock()
-	return newVM(p.dir, p.host)
+	v, err := newVM(p.dir, p.host, ctx)
+	if err != nil {
+		<-p.slots
+	}
+	return v, err
 }
 
 func (p *vmPool) put(v *luaVM) {
 	p.mu.Lock()
+	v.L.RemoveContext()
+	v.L.SetTop(0)
 	p.free = append(p.free, v)
 	p.mu.Unlock()
+	<-p.slots
 }
+
+func (p *vmPool) discard(v *luaVM) { v.L.Close(); <-p.slots }

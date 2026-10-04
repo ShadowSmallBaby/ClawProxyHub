@@ -45,6 +45,7 @@ func chatReqToTable(L *lua.LState, req *pb.ChatRequest) *lua.LTable {
 		t.RawSetString("tool_choice", ct)
 	}
 	if req.Credential != nil {
+		bindCredential(L, req.Credential)
 		t.RawSetString("credential", credToTable(L, req.Credential))
 	}
 	return t
@@ -114,6 +115,15 @@ func credToTable(L *lua.LState, c *pb.CredentialBlob) *lua.LTable {
 	ct.RawSetString("blob", lua.LString(string(c.Blob)))
 	ct.RawSetString("instance_id", lua.LNumber(c.InstanceId))
 	ct.RawSetString("updated_at", lua.LNumber(c.UpdatedAt))
+	if proxy := c.GetProxy(); proxy != nil {
+		pt := L.NewTable()
+		pt.RawSetString("scheme", lua.LString(proxy.Scheme))
+		pt.RawSetString("host", lua.LString(proxy.Host))
+		pt.RawSetString("port", lua.LNumber(proxy.Port))
+		pt.RawSetString("username", lua.LString(proxy.Username))
+		pt.RawSetString("password", lua.LString(proxy.Password))
+		ct.RawSetString("proxy", pt)
+	}
 	return ct
 }
 
