@@ -4,6 +4,7 @@ package responsesup
 
 import (
 	"encoding/json"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/streamutil"
 	"strings"
 
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
@@ -19,10 +20,24 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 		case "system":
 			instructions = append(instructions, m.Text)
 		case "tool":
+			var output interface{} = m.Text
+			if len(m.Parts) > 0 {
+				output = inputParts(m)
+			}
 			input = append(input, map[string]interface{}{
-				"type": "function_call_output", "call_id": m.ToolCallId, "output": m.Text,
+				"type": "function_call_output", "call_id": m.ToolCallId, "output": output,
 			})
 		case "assistant":
+			for _, part := range m.Parts {
+				if part.Type == "responses_reasoning" {
+					item := map[string]interface{}{"type": "reasoning", "summary": []map[string]interface{}{{"type": "summary_text", "text": part.Text}}}
+					if part.Signature != "" {
+						item["encrypted_content"] = part.Signature
+					}
+					input = append(input, item)
+				}
+			}
+
 			if m.Text != "" {
 				input = append(input, map[string]interface{}{
 					"role":    "assistant",
@@ -81,6 +96,12 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 	if v := req.Extra["parallel_tool_calls"]; v != "" {
 		body["parallel_tool_calls"] = rawJSON(v)
 	}
+	if v := req.Extra["responses_reasoning"]; v != "" {
+		body["reasoning"] = rawJSON(v)
+	}
+	if v := req.Extra["responses_text"]; v != "" {
+		body["text"] = rawJSON(v)
+	}
 	if v := req.Extra["user"]; v != "" {
 		body["user"] = v
 	}
@@ -114,13 +135,14 @@ type Parser struct {
 	emit       func(*pb.StreamEvent)
 	usage      *pb.Usage
 	sawTool    bool
+	toolIDs    map[string]string
 	argSeen    map[string]bool // item_id → 已收到 arguments 增量（done 时不再补发全量）
 	stop       string
 	sentFinish bool
 }
 
 func NewParser(emit func(*pb.StreamEvent)) *Parser {
-	return &Parser{emit: emit, argSeen: map[string]bool{}}
+	return &Parser{emit: emit, argSeen: map[string]bool{}, toolIDs: map[string]string{}}
 }
 
 // event 上游事件的公共字段（按 type 取用）。
@@ -130,11 +152,12 @@ type event struct {
 	ItemID    string `json:"item_id"`
 	Arguments string `json:"arguments"`
 	Item      struct {
-		ID        string `json:"id"`
-		Type      string `json:"type"`
-		CallID    string `json:"call_id"`
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
+		EncryptedContent string `json:"encrypted_content"`
+		ID               string `json:"id"`
+		Type             string `json:"type"`
+		CallID           string `json:"call_id"`
+		Name             string `json:"name"`
+		Arguments        string `json:"arguments"`
 	} `json:"item"`
 	Response struct {
 		Usage             *responseUsage `json:"usage"`
@@ -177,6 +200,9 @@ func (u *responseUsage) toEnvelope() *pb.Usage {
 
 // Feed 处理一行（"data: {...}"）。
 func (p *Parser) Feed(line string) {
+	if p.sentFinish {
+		return
+	}
 	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, "data:") {
 		return
@@ -187,6 +213,7 @@ func (p *Parser) Feed(line string) {
 	}
 	var ev event
 	if json.Unmarshal([]byte(payload), &ev) != nil {
+		p.FinishWithError(502, "invalid upstream JSON")
 		return
 	}
 	switch ev.Type {
@@ -201,19 +228,32 @@ func (p *Parser) Feed(line string) {
 	case "response.output_item.added":
 		if ev.Item.Type == "function_call" {
 			p.sawTool = true
+			p.toolIDs[ev.Item.ID] = ev.Item.CallID
 			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{
 				ToolCallDelta: &pb.ToolCallDelta{Id: ev.Item.CallID, Name: ev.Item.Name},
 			}})
 		}
 	case "response.function_call_arguments.delta":
+		if p.toolIDs[ev.ItemID] == "" {
+			p.FinishWithError(502, "tool continuation has no call identity")
+			return
+		}
 		p.argSeen[ev.ItemID] = true
 		p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{
-			ToolCallDelta: &pb.ToolCallDelta{ArgumentsDelta: ev.Delta}, // 后续增量不带 id，避免信封侧误开新块
+			ToolCallDelta: &pb.ToolCallDelta{Id: p.toolIDs[ev.ItemID], ArgumentsDelta: ev.Delta},
 		}})
 	case "response.function_call_arguments.done":
 		p.toolArgsDone(ev.ItemID, ev.Arguments)
 	case "response.output_item.done":
+		if ev.Item.Type == "reasoning" && ev.Item.EncryptedContent != "" {
+			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ReasoningDelta{ReasoningDelta: &pb.ReasoningDelta{Signature: streamutil.ResponsesSignature(ev.Item.EncryptedContent)}}})
+		}
 		if ev.Item.Type == "function_call" {
+			if p.toolIDs[ev.Item.ID] == "" {
+				p.toolIDs[ev.Item.ID] = ev.Item.CallID
+				p.sawTool = true
+				p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{ToolCallDelta: &pb.ToolCallDelta{Id: ev.Item.CallID, Name: ev.Item.Name}}})
+			}
 			p.toolArgsDone(ev.Item.ID, ev.Item.Arguments)
 		}
 	case "response.completed", "response.incomplete":
@@ -222,6 +262,8 @@ func (p *Parser) Feed(line string) {
 		}
 		if ev.Type == "response.incomplete" && ev.Response.IncompleteDetails.Reason == "max_output_tokens" {
 			p.stop = "length"
+		} else if ev.Type == "response.incomplete" {
+			p.stop = "content_filter"
 		}
 		p.finish()
 	case "response.failed":
@@ -233,18 +275,27 @@ func (p *Parser) Feed(line string) {
 
 // toolArgsDone 上游只在 done 给全量参数时补发一次（已走增量则跳过）。
 func (p *Parser) toolArgsDone(itemID, args string) {
-	if p.argSeen[itemID] || args == "" {
+	if p.argSeen[itemID] {
 		return
+	}
+	if p.toolIDs[itemID] == "" {
+		p.FinishWithError(502, "tool completion has no call identity")
+		return
+	}
+	if args == "" {
+		args = "{}"
 	}
 	p.argSeen[itemID] = true
 	p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{
-		ToolCallDelta: &pb.ToolCallDelta{ArgumentsDelta: args},
+		ToolCallDelta: &pb.ToolCallDelta{Id: p.toolIDs[itemID], ArgumentsDelta: args},
 	}})
 }
 
-// Finish 流结束：未收到 completed 时按已有状态收尾。
+// Finish 流结束：缺少终止事件时报告失败。
 func (p *Parser) Finish() {
-	p.finish()
+	if !p.sentFinish {
+		p.FinishWithError(502, "upstream ended before a terminal event")
+	}
 }
 
 // FinishWithError 流异常结束：发失败事件。

@@ -128,7 +128,7 @@ func TestParserToolCalls(t *testing.T) {
 	if toolEvents[0].Id != "call_1" || toolEvents[0].Name != "f" || toolEvents[0].ArgumentsDelta != "" {
 		t.Errorf("first tool event wrong: %+v", toolEvents[0])
 	}
-	if toolEvents[1].Id != "" || toolEvents[1].ArgumentsDelta+toolEvents[2].ArgumentsDelta != `{"a":1}` {
+	if toolEvents[1].Id != "call_1" || toolEvents[1].ArgumentsDelta+toolEvents[2].ArgumentsDelta != `{"a":1}` {
 		t.Errorf("arguments deltas wrong: %+v %+v", toolEvents[1], toolEvents[2])
 	}
 	if finish == nil || finish.FinishReason != "tool_calls" {
@@ -175,12 +175,12 @@ func TestParserIncompleteAndErrors(t *testing.T) {
 }
 
 func TestParserEmptyStreamFallback(t *testing.T) {
-	// 上游空流：Finish 补一个 stop
+	// 空流没有终态，必须报错。
 	events := collect(nil)
 	if len(events) != 1 {
 		t.Fatalf("want 1 fallback event, got %d", len(events))
 	}
-	if fin, ok := events[0].Event.(*pb.StreamEvent_MessageFinish); !ok || fin.MessageFinish.FinishReason != "stop" {
+	if fail := events[0].GetTaskFailed(); fail == nil || fail.GetError().GetCode() != 502 {
 		t.Errorf("fallback wrong: %+v", events[0])
 	}
 }

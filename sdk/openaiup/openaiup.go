@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/streamutil"
+
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
@@ -189,13 +191,14 @@ func imageItem(p *pb.ContentPart) map[string]interface{} {
 type Parser struct {
 	emit        func(*pb.StreamEvent)
 	pendingStop string
-	toolSeen    map[int]bool // tool_calls index → 是否已发过 name
-	usage       *pb.Usage    // 跨块合并的用量（部分上游每块都带累计 usage）
+	toolIDs     map[int]string // tool_calls index → 是否已发过 name
+	usage       *pb.Usage      // 跨块合并的用量（部分上游每块都带累计 usage）
 	sentFinish  bool
+	sawDone     bool
 }
 
 func NewParser(emit func(*pb.StreamEvent)) *Parser {
-	return &Parser{emit: emit, toolSeen: map[int]bool{}}
+	return &Parser{emit: emit, toolIDs: map[int]string{}}
 }
 
 // chunkUsage OpenAI 方言的 usage 块：prompt_tokens 含缓存读写；缓存明细在
@@ -233,15 +236,28 @@ func (u *chunkUsage) toEnvelope() *pb.Usage {
 
 // Feed 处理一行（"data: {...}" 或 "data: [DONE]"）。
 func (p *Parser) Feed(line string) {
+	if p.sentFinish {
+		return
+	}
 	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, "data:") {
 		return
 	}
 	payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-	if payload == "" || payload == "[DONE]" {
+	if payload == "[DONE]" {
+		p.sawDone = true
+		p.finish()
+		return
+	}
+	if payload == "" {
 		return
 	}
 	var chunk struct {
+		Error *struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Status  int32  `json:"status"`
+		} `json:"error"`
 		Choices []struct {
 			Delta struct {
 				Role             string `json:"role"`
@@ -262,6 +278,11 @@ func (p *Parser) Feed(line string) {
 		Usage *chunkUsage `json:"usage"`
 	}
 	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+		p.FinishWithError(502, "invalid upstream JSON")
+		return
+	}
+	if chunk.Error != nil {
+		p.FinishWithError(streamutil.ErrorCode(chunk.Error.Type, chunk.Error.Status), chunk.Error.Message)
 		return
 	}
 	for _, c := range chunk.Choices {
@@ -281,10 +302,14 @@ func (p *Parser) Feed(line string) {
 				Name:           tc.Function.Name,
 				ArgumentsDelta: tc.Function.Arguments,
 			}
-			if tc.ID == "" && p.toolSeen[tc.Index] {
-				ev.Id = "" // 后续增量不带 id，避免信封侧误开新块
+			if tc.ID != "" {
+				p.toolIDs[tc.Index] = tc.ID
 			}
-			p.toolSeen[tc.Index] = true
+			ev.Id = p.toolIDs[tc.Index]
+			if ev.Id == "" {
+				p.FinishWithError(502, "tool continuation has no call identity")
+				return
+			}
 			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{ToolCallDelta: ev}})
 		}
 		if c.FinishReason != nil && *c.FinishReason != "" {
@@ -303,11 +328,22 @@ func (p *Parser) Feed(line string) {
 
 // Finish 流结束：把挂起的 finish_reason 落地（从未发过时按已合并的 usage 收尾）。
 func (p *Parser) Finish() {
+	if p.sentFinish {
+		return
+	}
+	if p.pendingStop == "" && !p.sawDone {
+		p.FinishWithError(502, "upstream ended before a terminal event")
+		return
+	}
 	p.finish()
 }
 
 // FinishWithError 流异常结束：发失败事件。
 func (p *Parser) FinishWithError(code int32, message string) {
+	if p.sentFinish {
+		return
+	}
+	p.sentFinish = true
 	p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_TaskFailed{
 		TaskFailed: &pb.TaskFailed{Error: &pb.Error{Code: code, Message: message}},
 	}})

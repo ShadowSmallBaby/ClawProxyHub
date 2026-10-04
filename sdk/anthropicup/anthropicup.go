@@ -3,6 +3,7 @@ package anthropicup
 
 import (
 	"encoding/json"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/streamutil"
 	"strings"
 
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
@@ -194,6 +195,7 @@ func blocksOf(m *pb.EnvelopeMessage) []interface{} {
 			}
 			block = map[string]interface{}{"type": "image", "source": source}
 		case "thinking":
+			// 仅回放 Anthropic thinking 类型；Responses 使用独立内容类型。
 			if p.Signature != "" && m.Role == "assistant" {
 				block = map[string]interface{}{"type": "thinking", "thinking": p.Text, "signature": p.Signature}
 			}
@@ -222,9 +224,11 @@ type Parser struct {
 }
 
 type blockInfo struct {
-	kind string // text / tool_use
-	id   string
-	name string
+	kind    string // text / tool_use
+	id      string
+	name    string
+	input   string
+	emitted bool
 }
 
 func NewParser(emit func(*pb.StreamEvent)) *Parser {
@@ -248,6 +252,9 @@ func (u *anthUsage) toEnvelope() *pb.Usage {
 
 // Feed 处理一行（"event: xxx" 与 "data: {...}"）。
 func (p *Parser) Feed(line string) {
+	if p.sentFinish {
+		return
+	}
 	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, "data:") {
 		return
@@ -257,6 +264,11 @@ func (p *Parser) Feed(line string) {
 		return
 	}
 	var ev struct {
+		Error *struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Status  int32  `json:"status"`
+		} `json:"error"`
 		Type    string `json:"type"`
 		Index   int    `json:"index"`
 		Message struct {
@@ -282,6 +294,11 @@ func (p *Parser) Feed(line string) {
 		Usage *anthUsage `json:"usage"`
 	}
 	if err := json.Unmarshal([]byte(payload), &ev); err != nil {
+		p.FinishWithError(502, "invalid upstream JSON")
+		return
+	}
+	if ev.Error != nil {
+		p.FinishWithError(streamutil.ErrorCode(ev.Error.Type, ev.Error.Status), ev.Error.Message)
 		return
 	}
 	switch ev.Type {
@@ -293,7 +310,12 @@ func (p *Parser) Feed(line string) {
 		}
 		p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_MessageStart{MessageStart: start}})
 	case "content_block_start":
-		p.blocks[ev.Index] = blockInfo{kind: ev.ContentBlock.Type, id: ev.ContentBlock.ID, name: ev.ContentBlock.Name}
+		p.blocks[ev.Index] = blockInfo{kind: ev.ContentBlock.Type, id: ev.ContentBlock.ID, name: ev.ContentBlock.Name, input: string(ev.ContentBlock.Input)}
+		if ev.ContentBlock.Type == "text" && ev.ContentBlock.Text != "" {
+			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{ContentDelta: &pb.ContentDelta{Text: ev.ContentBlock.Text}}})
+		}
+	case "content_block_stop":
+		p.flushTool(ev.Index)
 	case "content_block_delta":
 		switch ev.Delta.Type {
 		case "text_delta":
@@ -310,6 +332,16 @@ func (p *Parser) Feed(line string) {
 			}})
 		case "input_json_delta":
 			info := p.blocks[ev.Index]
+			if info.id == "" {
+				p.FinishWithError(502, "tool delta without block identity")
+				return
+			}
+			if info.input != "" && info.input != "{}" {
+				p.FinishWithError(502, "conflicting initial tool arguments")
+				return
+			}
+			info.emitted = true
+			p.blocks[ev.Index] = info
 			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{
 				ToolCallDelta: &pb.ToolCallDelta{
 					Id: info.id, Name: info.name, ArgumentsDelta: ev.Delta.PartialJSON,
@@ -331,19 +363,38 @@ func (p *Parser) Feed(line string) {
 
 // Finish 流结束兜底。
 func (p *Parser) Finish() {
-	p.finish("stop", "")
+	if !p.sentFinish {
+		p.FinishWithError(502, "upstream ended before a terminal event")
+	}
 }
 
 // FinishWithError 流异常结束：发失败事件。
 func (p *Parser) FinishWithError(code int32, message string) {
+	if p.sentFinish {
+		return
+	}
+	p.sentFinish = true
 	p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_TaskFailed{
 		TaskFailed: &pb.TaskFailed{Error: &pb.Error{Code: code, Message: message}},
 	}})
 }
 
+func (p *Parser) flushTool(index int) {
+	info := p.blocks[index]
+	if info.kind != "tool_use" || info.emitted {
+		return
+	}
+	info.emitted = true
+	p.blocks[index] = info
+	p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{ToolCallDelta: &pb.ToolCallDelta{Id: info.id, Name: info.name, ArgumentsDelta: orDefault(info.input, "{}")}}})
+}
+
 func (p *Parser) finish(reason, stopSeq string) {
 	if p.sentFinish {
 		return
+	}
+	for index := range p.blocks {
+		p.flushTool(index)
 	}
 	p.sentFinish = true
 	p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_MessageFinish{
