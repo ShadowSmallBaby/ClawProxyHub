@@ -64,7 +64,7 @@ func (r *Router) Resolve(key *model.Key, req *pb.ChatRequest) (*Resolved, error)
 	}
 
 	// 粘性优先：指纹命中且账号可用则复用
-	fp := Fingerprint(req)
+	fp := fmt.Sprintf("%d:%d:%s", key.ID, route.ID, Fingerprint(req))
 	if route.Strategy == "sticky" {
 		if res := r.lookupSticky(fp, route, entries); res != nil {
 			r.markUsed(res.Account.ID)
@@ -72,8 +72,22 @@ func (r *Router) Resolve(key *model.Key, req *pb.ChatRequest) (*Resolved, error)
 		}
 	}
 
-	// 按权重选分组
-	entry := pickGroup(entries)
+	// 只在有可用账号的分组间分配权重。
+	available := make([]model.RouteGroupEntry, 0, len(entries))
+	for _, en := range entries {
+		if len(r.accountsInGroup(en.GroupID)) > 0 {
+			available = append(available, en)
+		}
+	}
+	if len(available) == 0 {
+		if route.FailoverEnabled && route.FailoverOn5xx {
+			if fallback := r.PickFailover(route); fallback != nil {
+				return fallback, nil
+			}
+		}
+		return &Resolved{Route: route}, nil
+	}
+	entry := pickGroup(available)
 
 	var acct *model.Account
 	switch route.Strategy {
@@ -137,6 +151,17 @@ var ErrRouteForbidden = fmt.Errorf("route exists but key is not authorized for i
 // (nil, nil) = 不是路由名；(nil, ErrRouteForbidden) = 路由存在但无权；
 // (nil, err) = DB 故障（上抛让网关回 502，不静默 fallback 掩盖故障）。
 func (r *Router) findRoute(key *model.Key, name string) (*model.Route, error) {
+	if key.RouteScope == "restricted" {
+		var count int64
+		if err := r.db.Model(&model.KeyRoute{}).Joins("JOIN routes ON routes.id = key_routes.route_id").Where("key_id = ? AND routes.name = ?", key.ID, name).Count(&count).Error; err != nil {
+			return nil, err
+		}
+		if count == 0 {
+			return nil, ErrRouteForbidden
+		}
+	} else if key.RouteScope != "all" && key.RouteScope != "" {
+		return nil, ErrRouteForbidden
+	}
 	var route model.Route
 	if err := r.db.Where("name = ?", name).First(&route).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -144,33 +169,24 @@ func (r *Router) findRoute(key *model.Key, name string) (*model.Route, error) {
 		}
 		return nil, err // 真实 DB 错误：上抛，勿当作非路由名
 	}
-	// key 绑定了授权范围则必须在范围内
-	var count int64
-	r.db.Model(&model.KeyRoute{}).Where("key_id = ?", key.ID).Count(&count)
-	if count > 0 {
-		r.db.Model(&model.KeyRoute{}).
-			Where("key_id = ? AND route_id = ?", key.ID, route.ID).Count(&count)
-		if count == 0 {
-			return nil, ErrRouteForbidden
-		}
-	}
 	return &route, nil
 }
 
 // AuthorizedModels key 授权的对外模型名列表。
 // 未绑范围 = 全部路由名；无任何路由时返回 nil（调用方 fallback 插件目录）。
-func (r *Router) AuthorizedModels(key *model.Key) []string {
+func (r *Router) AuthorizedModels(key *model.Key) ([]string, error) {
 	var names []string
-	var count int64
-	r.db.Model(&model.KeyRoute{}).Where("key_id = ?", key.ID).Count(&count)
-	if count == 0 {
-		r.db.Model(&model.Route{}).Order("name").Pluck("name", &names)
-		return names
+	if key.RouteScope == "all" || key.RouteScope == "" {
+		err := r.db.Model(&model.Route{}).Order("name").Pluck("name", &names).Error
+		return names, err
 	}
-	r.db.Raw(`SELECT r.name FROM routes r
+	if key.RouteScope != "restricted" {
+		return nil, ErrRouteForbidden
+	}
+	err := r.db.Raw(`SELECT r.name FROM routes r
 	    JOIN key_routes kr ON kr.route_id = r.id
-	    WHERE kr.key_id = ? ORDER BY r.name`, key.ID).Scan(&names)
-	return names
+	    WHERE kr.key_id = ? ORDER BY r.name`, key.ID).Scan(&names).Error
+	return names, err
 }
 
 // activeWhere 选号的可用性条件：active 且不在自动暂停期（429 限速等，到期自动恢复）。
@@ -292,6 +308,7 @@ func (r *Router) markUsed(accountID int64) {
 // 多轮对话里前缀稳定，同一会话的后续请求能命中同一账号。
 func Fingerprint(req *pb.ChatRequest) string {
 	h := sha256.New()
+	fmt.Fprintf(h, "user\x00%s\x00", req.Extra["user"])
 	for _, m := range req.Messages {
 		fmt.Fprintf(h, "%s\x00%s\x00", m.Role, m.Text)
 		if m.Role == "user" {
@@ -329,4 +346,15 @@ func parseGroups(raw string) ([]model.RouteGroupEntry, error) {
 	var entries []model.RouteGroupEntry
 	err := json.Unmarshal([]byte(raw), &entries)
 	return entries, err
+}
+
+// PickAlternative 留在当前分组内换号，跳过本次请求已经失败的账号。
+func (r *Router) PickAlternative(groupID int64, tried map[int64]bool) *model.Account {
+	for _, acct := range r.accountsInGroup(groupID) {
+		if !tried[acct.ID] {
+			r.markUsed(acct.ID)
+			return &acct
+		}
+	}
+	return nil
 }

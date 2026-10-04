@@ -4,6 +4,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/streamutil"
 
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
@@ -11,21 +12,30 @@ import (
 // parseResponsesRequest 把 /v1/responses 请求体转成统一信封。
 func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
 	var raw struct {
-		Model             string          `json:"model"`
-		Instructions      string          `json:"instructions"`
-		Input             json.RawMessage `json:"input"`
-		Tools             []respTool      `json:"tools"`
-		ToolChoice        json.RawMessage `json:"tool_choice"`
-		MaxOutputTokens   int32           `json:"max_output_tokens"`
-		Temperature       *float64        `json:"temperature"`
-		TopP              *float64        `json:"top_p"`
-		Stream            bool            `json:"stream"`
-		Reasoning         json.RawMessage `json:"reasoning"`
-		ParallelToolCalls json.RawMessage `json:"parallel_tool_calls"`
-		User              string          `json:"user"`
+		PreviousResponseID json.RawMessage `json:"previous_response_id"`
+		Conversation       json.RawMessage `json:"conversation"`
+		Text               json.RawMessage `json:"text"`
+		Model              string          `json:"model"`
+		Instructions       string          `json:"instructions"`
+		Input              json.RawMessage `json:"input"`
+		Tools              []respTool      `json:"tools"`
+		ToolChoice         json.RawMessage `json:"tool_choice"`
+		MaxOutputTokens    int32           `json:"max_output_tokens"`
+		Temperature        *float64        `json:"temperature"`
+		TopP               *float64        `json:"top_p"`
+		Stream             bool            `json:"stream"`
+		Reasoning          json.RawMessage `json:"reasoning"`
+		ParallelToolCalls  json.RawMessage `json:"parallel_tool_calls"`
+		User               string          `json:"user"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("invalid json: %w", err)
+	}
+
+	for name, value := range map[string]json.RawMessage{"previous_response_id": raw.PreviousResponseID, "conversation": raw.Conversation} {
+		if len(value) > 0 && string(value) != "null" && string(value) != `""` {
+			return nil, fmt.Errorf("%s is not supported; send the complete input history", name)
+		}
 	}
 
 	req := &pb.ChatRequest{
@@ -45,8 +55,12 @@ func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
 	if raw.User != "" {
 		req.Extra["user"] = raw.User
 	}
-	// 不透传 reasoning.effort：Codex 的 "xhigh" 等私有值上游不认，会 500。
-	// 对齐原项目——Responses 无顶层 reasoning_effort，该字段直接丢弃。
+	if len(raw.Reasoning) > 0 && string(raw.Reasoning) != "null" {
+		req.Extra["responses_reasoning"] = string(raw.Reasoning)
+	}
+	if len(raw.Text) > 0 && string(raw.Text) != "null" {
+		req.Extra["responses_text"] = string(raw.Text)
+	}
 	if raw.Instructions != "" {
 		req.Messages = append(req.Messages, &pb.EnvelopeMessage{Role: "system", Text: raw.Instructions})
 	}
@@ -104,20 +118,21 @@ func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
 					Role: role, Text: partsText(parts), Parts: finishParts(parts),
 				})
 			case "reasoning":
-				// 推理摘要作 thinking 块归入 assistant；encrypted_content 是 OpenAI 私有签名，
-				// 存到 signature 供 openai 系上游回放（anthropic 上游会因签名不匹配而丢弃）
+				// 单独类型记录来源，仅 Responses builder 回放 encrypted_content。
 				var texts []string
 				for _, s := range it.Summary {
 					texts = append(texts, s.Text)
 				}
 				pendParts = append(pendParts, &pb.ContentPart{
-					Type: "thinking", Text: joinTexts(texts), Signature: it.EncryptedContent,
+					Type: "responses_reasoning", Text: joinTexts(texts), Signature: it.EncryptedContent,
 				})
 				pendAssistant = true
 			case "function_call":
 				args := it.Arguments
 				if args == "" {
 					args = "{}" // 上游要求 arguments 是合法 JSON 文本
+				} else if !json.Valid([]byte(args)) {
+					return nil, fmt.Errorf("function_call %q arguments must be valid JSON", it.CallID)
 				}
 				pendTools = append(pendTools, &pb.ToolCall{Id: it.CallID, Name: it.Name, Arguments: args})
 			case "function_call_output":
@@ -126,12 +141,17 @@ func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
 				req.Messages = append(req.Messages, &pb.EnvelopeMessage{
 					Role: "tool", Text: partsText(parts), Parts: finishParts(parts), ToolCallId: it.CallID,
 				})
+			default:
+				return nil, fmt.Errorf("unsupported input item type: %s", it.Type)
 			}
 		}
 		flushAssistant()
 	}
 
 	for _, t := range raw.Tools {
+		if t.Type != "function" || t.Name == "" {
+			return nil, fmt.Errorf("unsupported tool type: %s", t.Type)
+		}
 		if t.Type == "function" && t.Name != "" {
 			req.Tools = append(req.Tools, &pb.ToolDefinition{
 				Name: t.Name, Description: t.Description,
@@ -139,9 +159,11 @@ func parseResponsesRequest(body []byte) (*pb.ChatRequest, error) {
 			})
 		}
 	}
-	if tc, err := convertResponsesToolChoice(raw.ToolChoice); err == nil && tc != nil {
-		req.ToolChoice = tc
+	tc, err := convertResponsesToolChoice(raw.ToolChoice)
+	if err != nil {
+		return nil, err
 	}
+	req.ToolChoice = tc
 	return req, nil
 }
 
@@ -171,7 +193,7 @@ func convertResponsesToolChoice(raw json.RawMessage) (*pb.ToolChoice, error) {
 	if tc.Type == "function" {
 		return &pb.ToolChoice{Type: "tool", ToolName: tc.Name}, nil
 	}
-	return &pb.ToolChoice{Type: tc.Type}, nil
+	return nil, fmt.Errorf("unsupported tool_choice: %s", tc.Type)
 }
 
 type respTool struct {
@@ -220,6 +242,7 @@ type responsesSSEState struct {
 	respID     string
 	reasonItem string // reasoning output_item 的 item_id；空未开
 	reasonIdx  int
+	signature  string
 	reasoning  string // 累计推理文本，供 summary_text.done 与 completed.output 回填
 	textItem   string // 文本 output_item 的 item_id；空未开
 	textIdx    int    // 文本 item 的 output_index
@@ -259,7 +282,10 @@ func (s *responsesSSEState) convertEvent(ev *pb.StreamEvent) string {
 
 	case *pb.StreamEvent_ReasoningDelta:
 		// Codex 读 reasoning_summary_text.delta 展示思考过程；签名不透
-		if e.ReasoningDelta.Text == "" {
+		if sig, ok := streamutil.DecodeResponsesSignature(e.ReasoningDelta.Signature); ok {
+			s.signature += sig
+		}
+		if e.ReasoningDelta.Text == "" && s.signature == "" {
 			return ""
 		}
 		var out string
@@ -353,6 +379,7 @@ func (s *responsesSSEState) convertEvent(ev *pb.StreamEvent) string {
 
 	case *pb.StreamEvent_MessageFinish:
 		s.usage = e.MessageFinish.Usage
+		status, details := responsesStatus(e.MessageFinish.FinishReason)
 		var out string
 		var output []interface{}
 		// 推理 item 收尾：summary_text.done + output_item.done（summary 带完整文本）。
@@ -361,8 +388,8 @@ func (s *responsesSSEState) convertEvent(ev *pb.StreamEvent) string {
 				"item_id": s.reasonItem, "output_index": s.reasonIdx, "summary_index": 0, "text": s.reasoning,
 			})
 			item := map[string]interface{}{
-				"type": "reasoning", "id": s.reasonItem, "status": "completed",
-				"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": s.reasoning}},
+				"type": "reasoning", "id": s.reasonItem, "status": status,
+				"encrypted_content": s.signature, "summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": s.reasoning}},
 			}
 			out += respEvent("response.output_item.done", map[string]interface{}{
 				"output_index": s.reasonIdx, "item": item,
@@ -375,7 +402,7 @@ func (s *responsesSSEState) convertEvent(ev *pb.StreamEvent) string {
 				"item_id": s.textItem, "output_index": s.textIdx, "content_index": 0, "text": s.text,
 			})
 			item := map[string]interface{}{
-				"type": "message", "id": s.textItem, "role": "assistant", "status": "completed",
+				"type": "message", "id": s.textItem, "role": "assistant", "status": status,
 				"content": []interface{}{map[string]interface{}{"type": "output_text", "text": s.text}},
 			}
 			out += respEvent("response.output_item.done", map[string]interface{}{
@@ -391,7 +418,7 @@ func (s *responsesSSEState) convertEvent(ev *pb.StreamEvent) string {
 			})
 			item := map[string]interface{}{
 				"type": "function_call", "id": fc.itemID, "call_id": fc.callID,
-				"name": fc.name, "arguments": fc.args, "status": "completed",
+				"name": fc.name, "arguments": fc.args, "status": status,
 			}
 			out += respEvent("response.output_item.done", map[string]interface{}{
 				"output_index": fc.idx, "item": item,
@@ -403,10 +430,10 @@ func (s *responsesSSEState) convertEvent(ev *pb.StreamEvent) string {
 		}
 		// usage 为必填字段，缺失时补零值（Codex 严格反序列化，否则断流）。
 		// response.completed 必须带 output：Codex 从这里读最终 message + function_call。
-		out += respEvent("response.completed", map[string]interface{}{
+		out += respEvent("response."+status, map[string]interface{}{
 			"response": map[string]interface{}{
 				"id": s.respID, "object": "response", "model": s.model,
-				"status": "completed", "output": output, "usage": responsesUsage(e.MessageFinish.Usage),
+				"status": status, "incomplete_details": details, "output": output, "usage": responsesUsage(e.MessageFinish.Usage),
 			},
 		})
 		return out
@@ -425,6 +452,7 @@ func respEvent(eventType string, payload map[string]interface{}) string {
 // responsesAggregate Responses 非流式聚合。
 type responsesAggregate struct {
 	model     string
+	signature string
 	reasoning string
 	text      string
 	tools     map[string]*aggrTool
@@ -438,6 +466,9 @@ func (a *responsesAggregate) feed(ev *pb.StreamEvent) {
 		a.model = e.MessageStart.Model
 	case *pb.StreamEvent_ReasoningDelta:
 		a.reasoning += e.ReasoningDelta.Text
+		if sig, ok := streamutil.DecodeResponsesSignature(e.ReasoningDelta.Signature); ok {
+			a.signature += sig
+		}
 	case *pb.StreamEvent_ContentDelta:
 		a.text += e.ContentDelta.Text
 	case *pb.StreamEvent_ToolCallDelta:
@@ -457,16 +488,17 @@ func (a *responsesAggregate) feed(ev *pb.StreamEvent) {
 }
 
 func (a *responsesAggregate) result() map[string]interface{} {
+	status, details := responsesStatus(a.finish)
 	var output []interface{}
-	if a.reasoning != "" {
+	if a.reasoning != "" || a.signature != "" {
 		output = append(output, map[string]interface{}{
-			"type": "reasoning", "id": "rs_0", "status": "completed",
-			"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": a.reasoning}},
+			"type": "reasoning", "id": "rs_0", "status": status,
+			"encrypted_content": a.signature, "summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": a.reasoning}},
 		})
 	}
 	if a.text != "" {
 		output = append(output, map[string]interface{}{
-			"type": "message", "id": "item_1", "role": "assistant", "status": "completed",
+			"type": "message", "id": "item_1", "role": "assistant", "status": status,
 			"content": []interface{}{map[string]interface{}{"type": "output_text", "text": a.text}},
 		})
 	}
@@ -474,7 +506,7 @@ func (a *responsesAggregate) result() map[string]interface{} {
 		t := a.tools[id]
 		output = append(output, map[string]interface{}{
 			"type": "function_call", "call_id": t.id, "name": t.name,
-			"arguments": t.input, "status": "completed",
+			"arguments": t.input, "status": status,
 		})
 	}
 	if output == nil {
@@ -482,7 +514,17 @@ func (a *responsesAggregate) result() map[string]interface{} {
 	}
 	return map[string]interface{}{
 		"id": "resp_" + randHex(16), "object": "response", "model": a.model,
-		"status": "completed", "output": output,
+		"status": status, "incomplete_details": details, "output": output,
 		"usage": responsesUsage(a.usage),
 	}
+}
+
+func responsesStatus(reason string) (string, interface{}) {
+	switch reason {
+	case "length", "max_tokens":
+		return "incomplete", map[string]string{"reason": "max_output_tokens"}
+	case "content_filter":
+		return "incomplete", map[string]string{"reason": "content_filter"}
+	}
+	return "completed", nil
 }

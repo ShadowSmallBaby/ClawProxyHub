@@ -10,6 +10,7 @@ type User struct {
 	Username     string `gorm:"uniqueIndex;size:64"`
 	PasswordHash string `gorm:"size:128"` // bcrypt
 	Role         string `gorm:"size:16;default:admin"`
+	AuthVersion  int64
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -95,11 +96,12 @@ type Key struct {
 	ID        int64  `gorm:"primaryKey;autoIncrement"`
 	KeyCipher string `gorm:"uniqueIndex;size:256;column:key_cipher"`
 	// KeyLookup：sha256(raw) hex 确定性查找列，鉴权 O(1) 命中免全表解密；空 = 存量新格式密钥（回退扫描）。
-	KeyLookup string `gorm:"index;size:64;column:key_lookup;default:''"`
-	Name      string `gorm:"size:128;default:''"`
-	Enabled   bool   `gorm:"default:true"`
-	ExpiresAt *time.Time
-	CreatedAt time.Time
+	KeyLookup  string `gorm:"index;size:64;column:key_lookup;default:''"`
+	RouteScope string `gorm:"default:all"`
+	Name       string `gorm:"size:128;default:''"`
+	Enabled    bool   `gorm:"default:true"`
+	ExpiresAt  *time.Time
+	CreatedAt  time.Time
 }
 
 // KeyRoute key ↔ 路由多对多授权。
@@ -142,14 +144,15 @@ type RouteGroupEntry struct {
 
 // Proxy 出站代理。
 type Proxy struct {
-	ID        int64  `gorm:"primaryKey;autoIncrement"`
-	Name      string `gorm:"size:128;default:''"`
-	Scheme    string `gorm:"size:16;default:http"`
-	Host      string `gorm:"size:255"`
-	Port      int32
-	Username  string `gorm:"size:128;default:''"`
-	Password  string `gorm:"size:128;default:''"`
-	CreatedAt time.Time
+	ID             int64  `gorm:"primaryKey;autoIncrement"`
+	Name           string `gorm:"size:128;default:''"`
+	Scheme         string `gorm:"size:16;default:http"`
+	Host           string `gorm:"size:255"`
+	Port           int32
+	Username       string `gorm:"size:128;default:''"`
+	Password       string `gorm:"size:128;default:''"`
+	PasswordCipher []byte `json:"-"`
+	CreatedAt      time.Time
 }
 
 // GroupProxy 分组与代理的多对多绑定。
@@ -178,7 +181,7 @@ type TaskRule struct {
 	TargetScope  string     `gorm:"column:target_scope;size:16;default:all"` // all/rotate/account_ids
 	TargetJSON   string     `gorm:"column:target_json;default:'[]'"`
 	Auto         bool       `gorm:"default:false"` // true = 系统按账号能力自动生成（编辑锁触发类型），false = 用户手动创建
-	Enabled      bool       `gorm:"default:true"`
+	Enabled      bool       `gorm:"not null"`
 	LastRunAt    *time.Time `gorm:"column:last_run_at"`
 	NextRunAt    *time.Time `gorm:"column:next_run_at;index"`
 	CreatedAt    time.Time
@@ -265,8 +268,8 @@ type Setting struct {
 
 // PluginStore 插件 KV 状态（ClawHost.StoreGet/StorePut），按插件名隔离命名空间。
 type PluginStore struct {
-	Plugin    string    `gorm:"primaryKey;size:64"`
-	Key       string    `gorm:"primaryKey;size:191"`
+	Plugin    string `gorm:"primaryKey;size:64"`
+	Key       string `gorm:"primaryKey;size:191"`
 	Value     []byte
 	UpdatedAt time.Time `gorm:"column:updated_at"`
 }

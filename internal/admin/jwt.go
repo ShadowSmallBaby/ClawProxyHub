@@ -1,5 +1,4 @@
-// jwt.go — 管理会话 JWT（HS256，标准库实现，免第三方依赖）。
-// 签名密钥存 settings（auth.jwt_secret），首次缺失时生成随机值落库。
+// jwt.go — 管理会话签名与按用户版本撤销。
 package admin
 
 import (
@@ -12,72 +11,103 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
+	"gorm.io/gorm"
 )
 
-// keyJWTSecret HS256 签名密钥的 settings key。
 const keyJWTSecret = "auth.jwt_secret"
-
-// jwtTTL 令牌有效期。
 const jwtTTL = 7 * 24 * time.Hour
 
-// jwtClaims 令牌载荷：管理会话必要字段。
 type jwtClaims struct {
-	Sub  string `json:"sub"`  // 用户名
-	Role string `json:"role"` // admin / guest
-	Iat  int64  `json:"iat"`  // 签发时间（Unix 秒）
-	Exp  int64  `json:"exp"`  // 过期时间（Unix 秒）
+	Sub     string `json:"sub"`
+	Role    string `json:"role"`
+	Iat     int64  `json:"iat"`
+	Exp     int64  `json:"exp"`
+	Version *int64 `json:"ver"`
 }
 
-// jwtSecret 取签名密钥，缺失时生成随机 32 字节并落库。
-func (s *Server) jwtSecret() []byte {
-	sec := s.settings.Get(keyJWTSecret, "")
-	if sec == "" {
+func (s *Server) jwtSecret() ([]byte, error) {
+	s.jwtMu.Lock()
+	defer s.jwtMu.Unlock()
+	if len(s.jwtKey) > 0 {
+		return s.jwtKey, nil
+	}
+	var rec model.Setting
+	err := s.db.Where("key = ?", keyJWTSecret).First(&rec).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		buf := make([]byte, 32)
 		rand.Read(buf)
-		sec = hex.EncodeToString(buf)
-		s.settings.Set(keyJWTSecret, sec)
+		if err := s.db.Exec(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO NOTHING`, keyJWTSecret, hex.EncodeToString(buf)).Error; err != nil {
+			return nil, err
+		}
+		err = s.db.Where("key = ?", keyJWTSecret).First(&rec).Error
 	}
-	return []byte(sec)
+	if err != nil {
+		return nil, err
+	}
+	if len(rec.Value) < 32 {
+		return nil, errors.New("invalid JWT secret")
+	}
+	s.jwtKey = []byte(rec.Value)
+	return s.jwtKey, nil
 }
 
 func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
-// signJWT 签发 HS256 令牌。
-func (s *Server) signJWT(username, role string) string {
-	header := b64url([]byte(`{"alg":"HS256","typ":"JWT"}`))
+func (s *Server) signJWT(username, role string) (string, error) {
+	var user model.User
+	q := s.db.Where("username = ?", username)
+	if username == "" {
+		q = s.db.Where("role = ?", "admin").Order("id")
+	}
+	if err := q.First(&user).Error; err != nil {
+		return "", err
+	}
+	key, err := s.jwtSecret()
+	if err != nil {
+		return "", err
+	}
 	now := time.Now()
-	payload, _ := json.Marshal(jwtClaims{
-		Sub: username, Role: role,
-		Iat: now.Unix(), Exp: now.Add(jwtTTL).Unix(),
-	})
-	signing := header + "." + b64url(payload)
-	mac := hmac.New(sha256.New, s.jwtSecret())
+	payload, err := json.Marshal(jwtClaims{Sub: user.Username, Role: user.Role, Iat: now.Unix(), Exp: now.Add(jwtTTL).Unix(), Version: &user.AuthVersion})
+	if err != nil {
+		return "", err
+	}
+	signing := b64url([]byte(`{"alg":"HS256","typ":"JWT"}`)) + "." + b64url(payload)
+	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(signing))
-	return signing + "." + b64url(mac.Sum(nil))
+	return signing + "." + b64url(mac.Sum(nil)), nil
 }
 
-// parseJWT 校验签名与过期，返回载荷。
 func (s *Server) parseJWT(token string) (*jwtClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, errors.New("malformed token")
 	}
-	signing := parts[0] + "." + parts[1]
-	mac := hmac.New(sha256.New, s.jwtSecret())
-	mac.Write([]byte(signing))
+	key, err := s.jwtSecret()
+	if err != nil {
+		return nil, err
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(parts[0] + "." + parts[1]))
 	if !hmac.Equal([]byte(b64url(mac.Sum(nil))), []byte(parts[2])) {
 		return nil, errors.New("bad signature")
 	}
-	payloadRaw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return nil, errors.New("bad payload")
+		return nil, err
 	}
 	var c jwtClaims
-	if err := json.Unmarshal(payloadRaw, &c); err != nil {
-		return nil, errors.New("bad claims")
+	if json.Unmarshal(raw, &c) != nil || c.Sub == "" || c.Version == nil || time.Now().Unix() >= c.Exp {
+		return nil, errors.New("invalid or expired claims")
 	}
-	if time.Now().Unix() > c.Exp {
-		return nil, errors.New("token expired")
+	var user model.User
+	if err := s.db.Where("username = ?", c.Sub).First(&user).Error; err != nil {
+		return nil, err
 	}
+	if *c.Version != user.AuthVersion || (user.Role != "admin" && user.Role != "guest") {
+		return nil, errors.New("session revoked")
+	}
+	c.Role = user.Role
 	return &c, nil
 }

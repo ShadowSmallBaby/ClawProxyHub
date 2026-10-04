@@ -25,22 +25,24 @@ import (
 type HostService struct {
 	pb.UnimplementedClawHostServer
 
-	db     *gorm.DB
-	plugin string // 绑定的插件名（store 命名空间）；空 = 未绑定的模板
+	db       *gorm.DB
+	settings *setting.Store
+	decrypt  func([]byte) ([]byte, error)
+	plugin   string // 绑定的插件名（store 命名空间）；空 = 未绑定的模板
 }
 
 func NewHostService(db *gorm.DB) *HostService {
-	return &HostService{db: db}
+	return &HostService{db: db, settings: setting.New(db)}
 }
 
 // forPlugin 派生一个绑定到具体插件的宿主视图（共享 db），store 按 plugin 名隔离。
 func (h *HostService) forPlugin(name string) *HostService {
-	return &HostService{db: h.db, plugin: name}
+	return &HostService{db: h.db, plugin: name, settings: h.settings, decrypt: h.decrypt}
 }
 
 // runLogger 运行日志写入器（级别设置实时读库）。
 func (h *HostService) runLogger() *runlog.Logger {
-	return runlog.New(h.db, func() string { return setting.New(h.db).RunLevel() })
+	return runlog.New(h.db, h.settings.RunLevel)
 }
 
 // runActions 固定 action 词表（语义化；插件自定义的 action 未命中按 "other"）。
@@ -119,6 +121,16 @@ func (h *HostService) proxyByID(id int64) (*pb.ProxyConfig, error) {
 	if err := h.db.First(&proxy, id).Error; err != nil {
 		return nil, fmt.Errorf("proxy record missing")
 	}
+	if len(proxy.PasswordCipher) > 0 {
+		if h.decrypt == nil {
+			return nil, fmt.Errorf("proxy decryption unavailable")
+		}
+		plain, err := h.decrypt(proxy.PasswordCipher)
+		if err != nil {
+			return nil, err
+		}
+		proxy.Password = string(plain)
+	}
 	return &pb.ProxyConfig{
 		Scheme: proxy.Scheme, Host: proxy.Host, Port: proxy.Port,
 		Username: proxy.Username, Password: proxy.Password,
@@ -144,7 +156,7 @@ func (h *HostService) GetSettings(ctx context.Context, r *pb.GetSettingsRequest)
 			merged["instance_name"], _ = json.Marshal(inst.Name)
 		}
 	}
-	if ua := setting.New(h.db).BrowserUserAgent(); ua != "" {
+	if ua := h.settings.BrowserUserAgent(); ua != "" {
 		merged[sdk.SettingBrowserUserAgent], _ = json.Marshal(ua)
 	}
 	out, err := json.Marshal(merged)

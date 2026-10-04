@@ -2,9 +2,14 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
@@ -73,102 +78,243 @@ func newAggregate(protocol, model string) aggregate {
 }
 
 // streamOut 流式：编码写回 + 失败短路 + 日志收尾。prefix 为首内容前已缓冲的事件（含首个内容帧）。
-func (s *Server) streamOut(w http.ResponseWriter, events chan *pb.StreamEvent, prefix []*pb.StreamEvent, log *requestLogCtx, enc streamEncoder) {
+func (s *Server) streamOut(w http.ResponseWriter, events <-chan *pb.StreamEvent, prefix []*pb.StreamEvent, log *requestLogCtx, enc streamEncoder) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
 
 	log.status = http.StatusOK
-	filler := &toolIDFiller{}
-
+	terminal := false
 	emit := func(ev *pb.StreamEvent) bool {
-		if failed, ok := ev.Event.(*pb.StreamEvent_TaskFailed); ok && failed.TaskFailed != nil {
-			log.status = http.StatusBadGateway
-			log.errBrief = failed.TaskFailed.Error.GetMessage()
-			io.WriteString(w, enc.failure(log.errBrief))
+		if failed := ev.GetTaskFailed(); failed != nil {
+			log.status = int(errorStatus(failed.GetError().GetCode()))
+			log.errBrief = failed.GetError().GetMessage()
+			_, _ = io.WriteString(w, enc.failure(log.errBrief))
 			return false
 		}
-		filler.fill(ev)
 		collectUsage(log, ev)
 		if out := enc.convertEvent(ev); out != "" {
-			io.WriteString(w, out)
+			if _, err := io.WriteString(w, out); err != nil {
+				log.status = 499
+				log.errBrief = "client write failed"
+				return false
+			}
 			if flusher != nil {
 				flusher.Flush()
 			}
 		}
-		return true
+		terminal = ev.GetMessageFinish() != nil
+		return !terminal
 	}
-
-	for _, ev := range prefix {
-		if !emit(ev) {
-			io.WriteString(w, enc.finish())
-			log.write(s.db)
-			return
-		}
+	consumeEvents(log.context(), events, prefix, emit)
+	if terminal {
+		_, _ = io.WriteString(w, enc.finish())
 	}
-	for ev := range events {
-		if !emit(ev) {
-			break
-		}
-	}
-	io.WriteString(w, enc.finish())
 	log.write(s.db)
 }
 
-// nonStreamOut 聚合：完整 JSON 一次写回。prefix 为首内容前已缓冲的事件（含首个内容帧）。
-// 返回 failCode 非 0：聚合中途失败且响应/日志均未写（凭据失效或可降级错误），
-// 交回 serve 层决定恢复重试或收尾；成功路径自行写响应与日志。
-func (s *Server) nonStreamOut(w http.ResponseWriter, events chan *pb.StreamEvent, prefix []*pb.StreamEvent, log *requestLogCtx, aggr ...aggregate) (failCode int32, brief string) {
+// nonStreamOut 失败立即交回调用层；调用层先取消旧流再恢复。
+func (s *Server) nonStreamOut(w http.ResponseWriter, events <-chan *pb.StreamEvent, prefix []*pb.StreamEvent, log *requestLogCtx, aggr ...aggregate) (failCode int32, brief string) {
 	if len(aggr) == 0 {
-		return 0, ""
+		return 502, "missing aggregate"
 	}
 	a := aggr[0]
-	filler := &toolIDFiller{}
-
-	handle := func(ev *pb.StreamEvent) bool {
-		if failed, ok := ev.Event.(*pb.StreamEvent_TaskFailed); ok && failed.TaskFailed != nil {
-			// 失败时响应尚未写出：返回码与摘要，恢复/降级决策归 serve 层
-			failCode = failed.TaskFailed.Error.GetCode()
-			brief = failed.TaskFailed.Error.GetMessage()
+	consumeEvents(log.context(), events, prefix, func(ev *pb.StreamEvent) bool {
+		if failed := ev.GetTaskFailed(); failed != nil {
+			failCode = errorStatus(failed.GetError().GetCode())
+			brief = failed.GetError().GetMessage()
 			return false
 		}
-		filler.fill(ev)
 		collectUsage(log, ev)
 		a.feed(ev)
-		return true
+		return ev.GetMessageFinish() == nil
+	})
+	if failCode != 0 {
+		return failCode, brief
 	}
-	for _, ev := range prefix {
-		if !handle(ev) {
-			drain(events)
-			return failCode, brief
-		}
-	}
-	for ev := range events {
-		if !handle(ev) {
-			drain(events)
-			return failCode, brief
-		}
+	body, err := json.Marshal(a.result())
+	if err != nil {
+		return 502, "encode aggregate response: " + err.Error()
 	}
 	log.status = http.StatusOK
-	writeJSON(w, http.StatusOK, a.result())
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(body); err != nil {
+		log.status = 499
+		log.errBrief = "client write failed"
+	}
 	log.write(s.db)
 	return 0, ""
 }
 
-// toolIDFiller 把工具调用续块的空 id 补成上一个非空 id（openaiup 契约：续块只带
-// arguments）。出口层统一补齐，供所有按 id 索引的编码器/聚合器复用。
-type toolIDFiller struct{ lastID string }
+func (c *requestLogCtx) context() context.Context {
+	if c.ctx != nil {
+		return c.ctx
+	}
+	return context.Background()
+}
 
-func (f *toolIDFiller) fill(ev *pb.StreamEvent) {
-	tc, ok := ev.Event.(*pb.StreamEvent_ToolCallDelta)
-	if !ok || tc.ToolCallDelta == nil {
-		return
+func errorStatus(code int32) int32 {
+	if code >= 400 && code <= 599 {
+		return code
 	}
-	if tc.ToolCallDelta.Id != "" {
-		f.lastID = tc.ToolCallDelta.Id
-		return
+	return 502
+}
+func failureEvent(code int32, message string) *pb.StreamEvent {
+	return &pb.StreamEvent{Event: &pb.StreamEvent_TaskFailed{TaskFailed: &pb.TaskFailed{Error: &pb.Error{Code: code, Message: message}}}}
+}
+
+// consumeEvents 在终态、取消、写失败或空闲超时后立即退出，不依赖生产方关通道。
+func consumeEvents(ctx context.Context, events <-chan *pb.StreamEvent, prefix []*pb.StreamEvent, emit func(*pb.StreamEvent) bool) {
+	for _, ev := range prefix {
+		if ev != nil && !emit(ev) {
+			return
+		}
 	}
-	tc.ToolCallDelta.Id = f.lastID // 续块归入上一个调用
+	timer := time.NewTimer(120 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			emit(failureEvent(499, "request canceled"))
+			return
+		case <-timer.C:
+			emit(failureEvent(504, "upstream stream idle timeout"))
+			return
+		case ev, ok := <-events:
+			if !ok {
+				emit(failureEvent(502, "upstream ended before a terminal event"))
+				return
+			}
+			if ev == nil {
+				continue
+			}
+			if !emit(ev) {
+				return
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(120 * time.Second)
+		}
+	}
+}
+
+// normalizeEvents 校验生命周期与工具参数；旧插件的无 ID 续块沿用最近一次调用。
+func normalizeEvents(ctx context.Context, events <-chan *pb.StreamEvent, model string) <-chan *pb.StreamEvent {
+	out := make(chan *pb.StreamEvent)
+	go func() {
+		defer close(out)
+		send := func(ev *pb.StreamEvent) bool {
+			select {
+			case out <- ev:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		started := false
+		args := map[string]string{}
+		names := map[string]string{}
+		currentToolID := ""
+		size := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					send(failureEvent(502, "upstream ended before a terminal event"))
+					return
+				}
+				if ev == nil {
+					continue
+				}
+				if ev.GetTaskFailed() != nil {
+					send(failureEvent(errorStatus(ev.GetTaskFailed().GetError().GetCode()), ev.GetTaskFailed().GetError().GetMessage()))
+					return
+				}
+				if ev.GetMessageStart() != nil {
+					if started {
+						continue
+					}
+					started = true
+				} else if !started {
+					started = true
+					if !send(&pb.StreamEvent{Event: &pb.StreamEvent_MessageStart{MessageStart: &pb.MessageStart{Model: model}}}) {
+						return
+					}
+				}
+				if t := ev.GetToolCallDelta(); t != nil {
+					if t.Id == "" {
+						if currentToolID == "" {
+							send(failureEvent(502, "tool continuation has no call identity"))
+							return
+						}
+						// 只补内部信封，避免改写生产方持有的事件。
+						ev = proto.Clone(ev).(*pb.StreamEvent)
+						t = ev.GetToolCallDelta()
+						t.Id = currentToolID
+					}
+					currentToolID = t.Id
+					args[t.Id] += t.ArgumentsDelta
+					if t.Name != "" {
+						names[t.Id] = t.Name
+					}
+					size += len(t.ArgumentsDelta) + len(t.Name) + len(t.Id)
+				}
+				if d := ev.GetContentDelta(); d != nil {
+					size += len(d.Text)
+				}
+				if d := ev.GetReasoningDelta(); d != nil {
+					size += len(d.Text) + len(d.Signature)
+				}
+				if size > 32<<20 {
+					send(failureEvent(502, "upstream response exceeds 32 MiB"))
+					return
+				}
+				if f := ev.GetMessageFinish(); f != nil {
+					switch f.FinishReason {
+					case "end_turn", "":
+						f.FinishReason = "stop"
+					case "tool_use":
+						f.FinishReason = "tool_calls"
+					case "max_tokens":
+						f.FinishReason = "length"
+					case "stop", "stop_sequence", "tool_calls", "length", "content_filter":
+					default:
+						send(failureEvent(502, "unsupported upstream finish reason"))
+						return
+					}
+					if f.FinishReason != "length" && f.FinishReason != "content_filter" {
+						for id, a := range args {
+							if names[id] == "" {
+								send(failureEvent(502, "tool call has no name"))
+								return
+							}
+							if a == "" {
+								if !send(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{ToolCallDelta: &pb.ToolCallDelta{Id: id, ArgumentsDelta: "{}"}}}) {
+									return
+								}
+							} else if !json.Valid([]byte(a)) {
+								send(failureEvent(502, fmt.Sprintf("tool %q arguments are invalid JSON", id)))
+								return
+							}
+						}
+					}
+					send(ev)
+					return
+				}
+				if !send(ev) {
+					return
+				}
+			}
+		}
+	}()
+	return out
 }
 
 // collectUsage 从 MessageFinish 事件提取用量。
@@ -241,11 +387,5 @@ func errBody(errType string, err error) map[string]interface{} {
 	return map[string]interface{}{
 		"type":  "error",
 		"error": map[string]string{"type": errType, "message": err.Error()},
-	}
-}
-
-// drain 清空事件通道，让生产者（gRPC 流消费协程）能退出。
-func drain(events chan *pb.StreamEvent) {
-	for range events {
 	}
 }

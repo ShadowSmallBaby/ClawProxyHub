@@ -80,8 +80,14 @@ func parseChatCompletions(body []byte) (*pb.ChatRequest, error) {
 		}
 		em.Parts = finishParts(parts)
 		for _, tc := range m.ToolCalls {
+			args := tc.Function.Arguments
+			if args == "" {
+				args = "{}" // 空 arguments 跨方言会变成非法 tool_use.input
+			} else if !json.Valid([]byte(args)) {
+				return nil, fmt.Errorf("tool_call %q arguments must be valid JSON", tc.ID)
+			}
 			em.ToolCalls = append(em.ToolCalls, &pb.ToolCall{
-				Id: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+				Id: tc.ID, Name: tc.Function.Name, Arguments: args,
 			})
 		}
 		if m.ToolCallID != "" {
@@ -234,13 +240,14 @@ func (s *openaiSSEState) convertEvent(ev *pb.StreamEvent) string {
 			s.toolIdx[e.ToolCallDelta.Id] = idx
 		}
 		fn := map[string]interface{}{"arguments": e.ToolCallDelta.ArgumentsDelta}
+		tool := map[string]interface{}{"index": idx, "function": fn}
 		if !ok {
 			fn["name"] = e.ToolCallDelta.Name
+			tool["id"] = e.ToolCallDelta.Id
+			tool["type"] = "function"
 		}
 		return s.chunk(map[string]interface{}{
-			"tool_calls": []interface{}{map[string]interface{}{
-				"index": idx, "id": e.ToolCallDelta.Id, "type": "function", "function": fn,
-			}},
+			"tool_calls": []interface{}{tool},
 		}, "")
 
 	case *pb.StreamEvent_MessageFinish:

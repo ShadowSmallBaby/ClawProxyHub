@@ -4,6 +4,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/streamutil"
 
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
@@ -330,7 +331,7 @@ func (s *anthSSEState) convertEvent(ev *pb.StreamEvent) string {
 				"delta": map[string]interface{}{"type": "thinking_delta", "thinking": e.ReasoningDelta.Text},
 			})
 		}
-		if e.ReasoningDelta.Signature != "" {
+		if _, foreign := streamutil.DecodeResponsesSignature(e.ReasoningDelta.Signature); !foreign && e.ReasoningDelta.Signature != "" {
 			out += anthEvent("content_block_delta", map[string]interface{}{
 				"type": "content_block_delta", "index": s.thinkBlock,
 				"delta": map[string]interface{}{"type": "signature_delta", "signature": e.ReasoningDelta.Signature},
@@ -470,7 +471,9 @@ func (a *anthAggregate) feed(ev *pb.StreamEvent) {
 		a.model = e.MessageStart.Model
 	case *pb.StreamEvent_ReasoningDelta:
 		a.thinking += e.ReasoningDelta.Text
-		a.signature += e.ReasoningDelta.Signature
+		if _, foreign := streamutil.DecodeResponsesSignature(e.ReasoningDelta.Signature); !foreign {
+			a.signature += e.ReasoningDelta.Signature
+		}
 	case *pb.StreamEvent_ContentDelta:
 		a.text += e.ContentDelta.Text
 	case *pb.StreamEvent_ToolCallDelta:

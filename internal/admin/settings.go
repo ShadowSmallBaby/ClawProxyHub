@@ -41,8 +41,11 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 			"browser_user_agent":       s.settings.BrowserUserAgent(),
 			"github_proxy":             s.settings.GitHubProxy(),
 			"log_retention_days":       s.settings.LogRetentionDays(),
+			"run_retention_days":       s.settings.RetentionDays("logs.run_retention_days"),
+			"task_retention_days":      s.settings.RetentionDays("logs.task_retention_days"),
 			"run_level":                s.settings.RunLevel(),
 			"task_daily_jitter":        int(s.settings.DailyJitter().Minutes()),
+			"timezone":                 s.settings.Timezone(),
 			"context_truncate_enabled": s.settings.ContextTruncateEnabled(),
 			"context_truncate_ratio":   s.settings.ContextTruncateRatio(),
 			"context_bytes_per_token":  s.settings.ContextBytesPerToken(),
@@ -59,6 +62,8 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 // putSettings PUT /admin/settings — body: {first_token_timeout, user_agent, browser_user_agent, github_proxy, log_retention_days, site_name, site_abbr, site_logo}
 // （插件源见 /admin/plugin-sources）。前端按 tab 分块保存，缺省字段保持原值。
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
+	changes := map[string]string{}
+	set := func(key, value string) { changes[key] = value }
 	var body struct {
 		FirstTokenTimeout      *int     `json:"first_token_timeout"`
 		FirstEventTimeout      *int     `json:"first_event_timeout"`
@@ -66,9 +71,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		UserAgent              *string  `json:"user_agent"`
 		BrowserUserAgent       *string  `json:"browser_user_agent"`
 		GitHubProxy            *string  `json:"github_proxy"`
+		RunRetentionDays       *int     `json:"run_retention_days"`
+		TaskRetentionDays      *int     `json:"task_retention_days"`
 		LogRetentionDays       *int     `json:"log_retention_days"`
 		RunLevel               *string  `json:"run_level"`
 		TaskDailyJitter        *int     `json:"task_daily_jitter"`
+		Timezone               *string  `json:"timezone"`
 		ContextTruncateEnabled *bool    `json:"context_truncate_enabled"`
 		ContextTruncateRatio   *float64 `json:"context_truncate_ratio"`
 		ContextBytesPerToken   *float64 `json:"context_bytes_per_token"`
@@ -82,26 +90,34 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if !readBody(w, r, &body) {
 		return
 	}
+	if body.Timezone != nil {
+		zone := strings.TrimSpace(*body.Timezone)
+		if err := setting.ValidateTimezone(zone); err != nil {
+			http.Error(w, `{"error":"invalid IANA timezone; use Asia/Shanghai, UTC, etc."}`, http.StatusBadRequest)
+			return
+		}
+		set(setting.KeyTimezone, zone)
+	}
 	if body.FirstTokenTimeout != nil {
 		if *body.FirstTokenTimeout < 5 || *body.FirstTokenTimeout > 3600 {
 			http.Error(w, `{"error":"首字超时需在 5–3600 秒之间"}`, http.StatusBadRequest)
 			return
 		}
-		s.settings.Set(setting.KeyFirstTokenTimeout, strconv.Itoa(*body.FirstTokenTimeout))
+		set(setting.KeyFirstTokenTimeout, strconv.Itoa(*body.FirstTokenTimeout))
 	}
 	if body.FirstEventTimeout != nil {
 		if *body.FirstEventTimeout < 5 || *body.FirstEventTimeout > 3600 {
 			http.Error(w, `{"error":"首帧超时需在 5–3600 秒之间"}`, http.StatusBadRequest)
 			return
 		}
-		s.settings.Set(setting.KeyFirstEventTimeout, strconv.Itoa(*body.FirstEventTimeout))
+		set(setting.KeyFirstEventTimeout, strconv.Itoa(*body.FirstEventTimeout))
 	}
 	if body.MaxRetries != nil {
 		if *body.MaxRetries < 1 || *body.MaxRetries > 10 {
 			http.Error(w, `{"error":"重试次数需在 1–10 之间"}`, http.StatusBadRequest)
 			return
 		}
-		s.settings.Set(setting.KeyMaxRetries, strconv.Itoa(*body.MaxRetries))
+		set(setting.KeyMaxRetries, strconv.Itoa(*body.MaxRetries))
 	}
 	// UA：空 = 不覆盖（网关 UA 透传客户端；浏览器 UA 由插件用内置值）
 	for key, v := range map[string]*string{setting.KeyGatewayUserAgent: body.UserAgent, setting.KeyBrowserUserAgent: body.BrowserUserAgent} {
@@ -113,7 +129,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"User-Agent 不超过 512 字符"}`, http.StatusBadRequest)
 			return
 		}
-		s.settings.Set(key, ua)
+		set(key, ua)
 	}
 	if body.GitHubProxy != nil {
 		proxy := strings.TrimSuffix(strings.TrimSpace(*body.GitHubProxy), "/")
@@ -121,19 +137,28 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"GitHub 代理需以 http:// 或 https:// 开头（如 https://ghproxy.com），留空则直连"}`, http.StatusBadRequest)
 			return
 		}
-		s.settings.Set(setting.KeyGitHubProxy, proxy)
+		set(setting.KeyGitHubProxy, proxy)
 	}
 	if body.LogRetentionDays != nil {
 		if *body.LogRetentionDays < 0 || *body.LogRetentionDays > 3650 {
 			http.Error(w, `{"error":"日志保留天数需在 0（永久）–3650 之间"}`, http.StatusBadRequest)
 			return
 		}
-		s.settings.Set(setting.KeyLogRetentionDays, strconv.Itoa(*body.LogRetentionDays))
+		set(setting.KeyLogRetentionDays, strconv.Itoa(*body.LogRetentionDays))
+	}
+	for key, value := range map[string]*int{"logs.run_retention_days": body.RunRetentionDays, "logs.task_retention_days": body.TaskRetentionDays} {
+		if value != nil {
+			if *value < 0 || *value > 3650 {
+				http.Error(w, "retention days must be 0..3650", 400)
+				return
+			}
+			set(key, strconv.Itoa(*value))
+		}
 	}
 	if body.RunLevel != nil {
 		switch *body.RunLevel {
 		case "error", "warn", "debug", "info":
-			s.settings.Set(setting.KeyRunLevel, *body.RunLevel)
+			set(setting.KeyRunLevel, *body.RunLevel)
 		default:
 			http.Error(w, `{"error":"运行日志级别需为 error/warn/debug/info"}`, http.StatusBadRequest)
 			return
@@ -145,37 +170,37 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"任务偏移分钟数需在 0（关闭）–45 之间"}`, http.StatusBadRequest)
 			return
 		}
-		s.settings.Set(setting.KeyTaskDailyJitter, strconv.Itoa(*body.TaskDailyJitter))
+		set(setting.KeyTaskDailyJitter, strconv.Itoa(*body.TaskDailyJitter))
 	}
 	// 输入超窗自动截断：开关 + 触发比例(0,1] + token 估算系数
 	if body.ContextTruncateEnabled != nil {
-		s.settings.Set(setting.KeyContextTruncateEnabled, strconv.FormatBool(*body.ContextTruncateEnabled))
+		set(setting.KeyContextTruncateEnabled, strconv.FormatBool(*body.ContextTruncateEnabled))
 	}
 	if body.ContextTruncateRatio != nil {
 		if *body.ContextTruncateRatio <= 0 || *body.ContextTruncateRatio > 1 {
 			http.Error(w, `{"error":"上下文截断阈值需在 (0,1] 之间"}`, http.StatusBadRequest)
 			return
 		}
-		s.settings.Set(setting.KeyContextTruncateRatio, strconv.FormatFloat(*body.ContextTruncateRatio, 'g', -1, 64))
+		set(setting.KeyContextTruncateRatio, strconv.FormatFloat(*body.ContextTruncateRatio, 'g', -1, 64))
 	}
 	if body.ContextBytesPerToken != nil {
 		if *body.ContextBytesPerToken < 1 || *body.ContextBytesPerToken > 100 {
 			http.Error(w, `{"error":"token 估算系数需在 1–100 之间"}`, http.StatusBadRequest)
 			return
 		}
-		s.settings.Set(setting.KeyContextBytesPerToken, strconv.FormatFloat(*body.ContextBytesPerToken, 'g', -1, 64))
+		set(setting.KeyContextBytesPerToken, strconv.FormatFloat(*body.ContextBytesPerToken, 'g', -1, 64))
 	}
 	// 插件（lua 运行时）：启用总开关 / 隔离（本版锁定为开）/ 更新方式
 	if body.LuaEnabled != nil {
-		s.settings.Set(setting.KeyLuaEnabled, strconv.FormatBool(*body.LuaEnabled))
+		set(setting.KeyLuaEnabled, strconv.FormatBool(*body.LuaEnabled))
 	}
 	if body.LuaIsolation != nil { // 本版锁定为开：无论传入何值都存 true（前端 disabled，此为服务端兜底）
-		s.settings.Set(setting.KeyLuaIsolation, strconv.FormatBool(true))
+		set(setting.KeyLuaIsolation, strconv.FormatBool(true))
 	}
 	if body.LuaUpdateMode != nil {
 		switch *body.LuaUpdateMode {
 		case "manual", "online":
-			s.settings.Set(setting.KeyLuaUpdateMode, *body.LuaUpdateMode)
+			set(setting.KeyLuaUpdateMode, *body.LuaUpdateMode)
 		default:
 			http.Error(w, `{"error":"lua 更新方式需为 manual/online"}`, http.StatusBadRequest)
 			return
@@ -188,7 +213,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"站点品牌名不超过 32 字符"}`, http.StatusBadRequest)
 			return
 		}
-		s.settings.Set(setting.KeySiteName, name)
+		set(setting.KeySiteName, name)
 	}
 	if body.SiteAbbr != nil {
 		abbr := strings.TrimSpace(*body.SiteAbbr)
@@ -196,7 +221,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"站点缩写不超过 8 字符"}`, http.StatusBadRequest)
 			return
 		}
-		s.settings.Set(setting.KeySiteAbbr, abbr)
+		set(setting.KeySiteAbbr, abbr)
 	}
 	if body.SiteLogo != nil {
 		logo := strings.TrimSpace(*body.SiteLogo)
@@ -208,7 +233,18 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"logo 不超过 256KB"}`, http.StatusBadRequest)
 			return
 		}
-		s.settings.Set(setting.KeySiteLogo, logo)
+		set(setting.KeySiteLogo, logo)
+	}
+	save := s.settings.SetMany
+	if s.engine != nil {
+		save = s.engine.SaveSettings
+	}
+	if err := save(changes); err != nil {
+		http.Error(w, `{"error":"settings update failed"}`, http.StatusInternalServerError)
+		return
+	}
+	if body.LuaEnabled != nil && !*body.LuaEnabled && s.plugins != nil {
+		s.plugins.StopLua()
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

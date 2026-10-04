@@ -31,14 +31,28 @@ func StartLogRetention(ctx context.Context, db *gorm.DB, settings *setting.Store
 
 // sweepLogs 删除 created_at 早于保留窗口的日志。
 func sweepLogs(db *gorm.DB, settings *setting.Store) {
-	days := settings.LogRetentionDays()
-	if days <= 0 {
-		return
-	}
-	res := db.Exec("DELETE FROM request_logs WHERE created_at < datetime('now', ?)", fmt.Sprintf("-%d days", days))
-	if res.Error == nil && res.RowsAffected > 0 {
-		fmt.Printf("[janitor] purged %d request logs older than %d days\n", res.RowsAffected, days)
-		runlog.New(db, func() string { return settings.RunLevel() }).
-			Info("janitor", "purge", fmt.Sprintf("清理过期调用日志 %d 条（%d 天前）", res.RowsAffected, days), "", nil)
+	for _, entry := range []struct {
+		table, column string
+		days          int
+	}{
+		{"request_logs", "created_at", settings.LogRetentionDays()},
+		{"run_logs", "created_at", settings.RetentionDays("logs.run_retention_days")},
+		{"task_runs", "finished_at", settings.RetentionDays("logs.task_retention_days")},
+	} {
+		if entry.days <= 0 {
+			continue
+		}
+		query := fmt.Sprintf("DELETE FROM %s WHERE id IN (SELECT id FROM %s WHERE %s < ? LIMIT 1000)", entry.table, entry.table, entry.column)
+		cutoff := time.Now().AddDate(0, 0, -entry.days)
+		for batch := 0; batch < 100; batch++ {
+			res := db.Exec(query, cutoff)
+			if res.Error != nil {
+				runlog.New(db, settings.RunLevel).Error("janitor", "purge", "日志清理失败", res.Error.Error(), nil)
+				break
+			}
+			if res.RowsAffected < 1000 {
+				break
+			}
+		}
 	}
 }

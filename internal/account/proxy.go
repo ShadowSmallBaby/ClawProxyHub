@@ -1,64 +1,87 @@
-// proxy.go — 分组出站代理解析：账号 → 分组 → group_proxies → 代理配置。
 package account
 
 import (
-	"gorm.io/gorm"
-
+	"errors"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
+	"gorm.io/gorm"
 )
 
-// ProxyForAccount 账号出站代理：账号级绑定优先，miss 回退分组级。
-func ProxyForAccount(db *gorm.DB, accountID int64) *pb.ProxyConfig {
-	if px := proxyForAccountDirect(db, accountID); px != nil {
-		return px
+// ProxyConfig 将持久化代理转换为仅供出站使用的明文配置。
+func ProxyConfig(dataDir string, px *model.Proxy) (*pb.ProxyConfig, error) {
+	password := px.Password
+	if len(px.PasswordCipher) > 0 {
+		raw, err := DecryptCredential(dataDir, px.PasswordCipher)
+		if err != nil {
+			return nil, err
+		}
+		password = string(raw)
+	}
+	return &pb.ProxyConfig{Scheme: px.Scheme, Host: px.Host, Port: px.Port, Username: px.Username, Password: password}, nil
+}
+
+func ProxyForAccountIn(db *gorm.DB, dataDir string, accountID, groupID int64) (*pb.ProxyConfig, error) {
+	var link model.AccountProxy
+	err := db.Where("account_id = ?", accountID).Order("proxy_id").First(&link).Error
+	if err == nil {
+		return proxyByID(db, dataDir, link.ProxyID)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	if groupID > 0 {
+		px, err := ProxyForGroup(db, dataDir, groupID)
+		if px != nil || err != nil {
+			return px, err
+		}
 	}
 	var ag model.AccountGroup
-	if err := db.Where("account_id = ?", accountID).Order("group_id").First(&ag).Error; err != nil {
-		return nil
+	err = db.Where("account_id = ?", accountID).Order("group_id").First(&ag).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
 	}
-	return ProxyForGroup(db, ag.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	return ProxyForGroup(db, dataDir, ag.GroupID)
 }
 
-// ProxyForAccountIn 账号在命中分组下的代理：账号级 > 命中分组 > 任一分组。
-func ProxyForAccountIn(db *gorm.DB, accountID, groupID int64) *pb.ProxyConfig {
-	if px := proxyForAccountDirect(db, accountID); px != nil {
-		return px
+func ProxyForGroup(db *gorm.DB, dataDir string, groupID int64) (*pb.ProxyConfig, error) {
+	var link model.GroupProxy
+	err := db.Where("group_id = ?", groupID).Order("proxy_id").First(&link).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
 	}
-	if px := ProxyForGroup(db, groupID); px != nil {
-		return px
+	if err != nil {
+		return nil, err
 	}
-	return ProxyForAccount(db, accountID)
+	return proxyByID(db, dataDir, link.ProxyID)
 }
 
-// proxyForAccountDirect 账号级绑定的首个代理（account_proxies）。
-func proxyForAccountDirect(db *gorm.DB, accountID int64) *pb.ProxyConfig {
-	var links []model.AccountProxy
-	if err := db.Where("account_id = ?", accountID).Order("proxy_id").Find(&links).Error; err != nil || len(links) == 0 {
-		return nil
+func proxyByID(db *gorm.DB, dataDir string, id int64) (*pb.ProxyConfig, error) {
+	var px model.Proxy
+	if err := db.First(&px, id).Error; err != nil {
+		return nil, err
 	}
-	var proxy model.Proxy
-	if err := db.First(&proxy, links[0].ProxyID).Error; err != nil {
-		return nil
-	}
-	return &pb.ProxyConfig{
-		Scheme: proxy.Scheme, Host: proxy.Host, Port: proxy.Port,
-		Username: proxy.Username, Password: proxy.Password,
-	}
+	return ProxyConfig(dataDir, &px)
 }
 
-// ProxyForGroup 分组绑定的首个代理（Host.GetProxy 回调用）。
-func ProxyForGroup(db *gorm.DB, groupID int64) *pb.ProxyConfig {
-	var links []model.GroupProxy
-	if err := db.Where("group_id = ?", groupID).Order("proxy_id").Find(&links).Error; err != nil || len(links) == 0 {
+// EncryptProxyPasswords 成功加密后才清除旧明文；重复执行无副作用。
+func EncryptProxyPasswords(db *gorm.DB, dataDir string) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		var list []model.Proxy
+		if err := tx.Where("password <> ''").Find(&list).Error; err != nil {
+			return err
+		}
+		for _, px := range list {
+			blob, err := EncryptCredential(dataDir, []byte(px.Password))
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&px).Updates(map[string]interface{}{"password_cipher": blob, "password": ""}).Error; err != nil {
+				return err
+			}
+		}
 		return nil
-	}
-	var proxy model.Proxy
-	if err := db.First(&proxy, links[0].ProxyID).Error; err != nil {
-		return nil
-	}
-	return &pb.ProxyConfig{
-		Scheme: proxy.Scheme, Host: proxy.Host, Port: proxy.Port,
-		Username: proxy.Username, Password: proxy.Password,
-	}
+	})
 }

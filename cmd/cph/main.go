@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	accountpkg "github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/admin"
@@ -27,12 +28,34 @@ import (
 
 // seedAPIKey 首次部署引导：环境变量指定 key，不存在则入库（加密存储）。
 func seedAPIKey(db *gorm.DB, raw string, dataDir string) error {
-	var count int64
-	db.Model(&model.Key{}).Where("key_cipher = ?", string(accountpkg.EncryptCredential(dataDir, []byte(raw)))).Count(&count)
-	if count > 0 {
-		return nil
-	}
-	return db.Create(&model.Key{KeyCipher: string(accountpkg.EncryptCredential(dataDir, []byte(raw))), Name: "seed"}).Error
+	lookup := accountpkg.KeyLookupHash(raw)
+	return db.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&model.Key{}).Where("key_lookup = ? OR key_cipher = ?", lookup, lookup).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return nil
+		}
+		var old []model.Key
+		if err := tx.Where("key_lookup IS NULL OR key_lookup = ''").Find(&old).Error; err != nil {
+			return err
+		}
+		for _, key := range old {
+			plain, err := accountpkg.DecryptCredential(dataDir, []byte(key.KeyCipher))
+			if err != nil {
+				return err
+			}
+			if string(plain) == raw {
+				return tx.Model(&key).Update("key_lookup", lookup).Error
+			}
+		}
+		sealed, err := accountpkg.EncryptCredential(dataDir, []byte(raw))
+		if err != nil {
+			return err
+		}
+		return tx.Create(&model.Key{KeyCipher: string(sealed), KeyLookup: lookup, Name: "seed"}).Error
+	})
 }
 
 func main() {
@@ -71,7 +94,15 @@ func run() error {
 		}
 	}
 
+	if err := accountpkg.InitCrypto(cfg.DataDir); err != nil {
+		return err
+	}
+	if err := accountpkg.EncryptProxyPasswords(db, cfg.DataDir); err != nil {
+		return err
+	}
+	settings := setting.New(db)
 	plugins := plugin.NewManager(cfg.PluginDir, db)
+	plugins.Configure(settings, func(blob []byte) ([]byte, error) { return accountpkg.DecryptCredential(cfg.DataDir, blob) })
 	// 开机自启：持久化停止的插件（enabled=0）跳过，其余全拉起
 	if bins, err := plugins.AutoStarts(); err == nil {
 		for _, bin := range bins {
@@ -84,13 +115,12 @@ func run() error {
 	defer plugins.StopAll()
 
 	bus := event.New()
-	accounts := accountpkg.New(db, cfg.DataDir, plugins)
+	accounts := accountpkg.New(db, cfg.DataDir, plugins, settings)
 	accounts.SubscribeRefresh(ctx, bus)
 
-	engine := task.NewEngine(db, cfg.DataDir, task.NewPluginRunner(plugins), bus)
+	engine := task.NewEngine(db, cfg.DataDir, task.NewPluginRunner(plugins), bus, settings)
 	engine.Start(ctx)
 	defer engine.Stop()
-	settings := setting.New(db)
 	janitor.StartLogRetention(ctx, db, settings)
 	gw := gateway.New(db, cfg.DataDir, plugins, router.New(db), accounts, settings)
 	adminSrv := admin.New(db, accounts, plugins, engine, settings, cfg.MarketplaceURL, cfg.DataDir, dbPath)
@@ -114,12 +144,14 @@ func run() error {
 	mux.Handle("/", web.Handler())
 
 	fmt.Printf("listening on %s\n", cfg.Addr)
-	httpSrv := &http.Server{Addr: cfg.Addr, Handler: mux}
+	httpSrv := &http.Server{Addr: cfg.Addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpSrv.ListenAndServe() }()
 	select {
 	case <-ctx.Done():
-		return httpSrv.Shutdown(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return httpSrv.Shutdown(ctx)
 	case err := <-errCh:
 		return err
 	}

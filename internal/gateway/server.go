@@ -2,11 +2,14 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/textutil"
 	"io"
 	"log"
 	"net"
@@ -52,8 +55,8 @@ type PluginRegistry interface {
 	ResolveModel(model string) (pluginName string, ok bool)
 	// Endpoints 插件声明的对外端点方言（空 = 全部支持）。
 	Endpoints(pluginName string) []string
-	// Chat 发起一次信封请求，返回事件流。pluginName 为空按模型目录解析。
-	Chat(req *pb.ChatRequest, pluginName string, cred *pb.CredentialBlob) (events chan *pb.StreamEvent, err error)
+	// Chat 发起一次信封请求，返回事件流。ctx 取消后流退出。pluginName 为空按模型目录解析。
+	Chat(ctx context.Context, req *pb.ChatRequest, pluginName string, cred *pb.CredentialBlob) (events <-chan *pb.StreamEvent, err error)
 }
 
 // SettingsReader 全局设置读取（setting.Store 注入，nil 时走默认值）。
@@ -94,12 +97,17 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var data []map[string]interface{}
-	for _, name := range s.router.AuthorizedModels(key) {
+	names, err := s.router.AuthorizedModels(key)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, errBody("api_error", err))
+		return
+	}
+	for _, name := range names {
 		data = append(data, map[string]interface{}{
 			"id": name, "object": "model", "owned_by": "cph",
 		})
 	}
-	if data == nil {
+	if data == nil && key.RouteScope != "restricted" {
 		// 未配置任何路由：透出插件真实模型名，保持开箱可用
 		for id := range s.plugins.Models() {
 			data = append(data, map[string]interface{}{
@@ -152,11 +160,17 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	s.serve(w, r, key, req, "responses")
 }
 
-// parseBody 读体并解析为信封，失败时已写响应。
+// parseBody 读体并解析为信封，失败时已写响应。体积超限回 413（读满 32MiB 后再验一字节）。
 func (s *Server) parseBody(w http.ResponseWriter, r *http.Request, parse func([]byte) (*pb.ChatRequest, error)) (*pb.ChatRequest, bool) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20+1))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errBody("invalid body", err))
+		return nil, false
+	}
+	if len(body) > 32<<20 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		writeJSONBody(w, errBody("request_too_large", fmt.Errorf("request body exceeds %d bytes", 32<<20)))
 		return nil, false
 	}
 	req, err := parse(body)
@@ -221,8 +235,8 @@ func keyMatches(cipher string, raw string, dataDir string) bool {
 		return hex.EncodeToString(sum[:]) == cipher
 	}
 	// 新建：AES-256-GCM 密文（0x01 前缀）
-	plain := accountpkg.DecryptCredential(dataDir, []byte(cipher))
-	return len(cipher) > 0 && cipher[0] == 0x01 && string(plain) == raw
+	plain, err := accountpkg.DecryptCredential(dataDir, []byte(cipher))
+	return err == nil && len(cipher) > 0 && cipher[0] == 0x01 && string(plain) == raw
 }
 
 // endpointAllowed 插件端点方言校验：声明为空 = 全支持。
@@ -300,7 +314,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 	}
 	// 未命中路由时 key 若绑定了授权范围，则只允许路由名（安全边界）
 	if !isRoute {
-		if models := s.router.AuthorizedModels(key); len(models) > 0 {
+		models, err := s.router.AuthorizedModels(key)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, errBody("api_error", err))
+			return
+		}
+		if key.RouteScope == "restricted" || len(models) > 0 {
 			writeJSON(w, http.StatusForbidden, errBody("invalid_request_error",
 				fmt.Errorf("model %q not in authorized routes", req.Model)))
 			return
@@ -314,6 +333,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 		req.Extra[sdk.ExtraClientUserAgent] = ua
 	}
 
+	if req.Extra == nil {
+		req.Extra = map[string]string{}
+	}
+	req.Extra["cph.caller_id"] = fmt.Sprint(key.ID)
+
 	// 输入超窗保护：按选中账号的模型窗口估算并裁剪旧消息（未知窗口 / 关闭时不动）。
 	if account != nil && s.accounts != nil && s.settings != nil && s.settings.ContextTruncateEnabled() {
 		if win := s.accounts.ModelContextWindow(account.ID, req.Model); win > 0 {
@@ -325,7 +349,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 
 	var cred *pb.CredentialBlob
 	if account != nil {
-		cred = s.buildCred(account, groupID)
+		cred, err = s.buildCred(account, groupID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, errBody("api_error", err))
+			return
+		}
 	}
 
 	// 发起调用。失败恢复顺序：401 先保凭据（刷新同账号 → 换号，保住会话粘性），
@@ -335,34 +363,38 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 	if isRoute {
 		routeName = origModel // 对外路由名（模型列存真实模型 req.Model）
 	}
-	log := &requestLogCtx{key: key, account: account, model: req.Model, routeName: routeName,
+	log := &requestLogCtx{ctx: r.Context(), key: key, account: account, model: req.Model, routeName: routeName,
 		protocol: protocol, stream: req.Stream,
 		clientIP: clientIP(r), userAgent: truncStr(r.UserAgent(), 250)}
 	var route *model.Route
 	if resolved != nil {
 		route = resolved.Route
 	}
-	failoverUsed := false
+	failoverUsed := resolved != nil && route != nil && route.FailoverGroupID != nil && groupID == *route.FailoverGroupID && req.Model == route.FailoverModel
 	// 恢复预算按故障类型分别计数（凭据刷新 / 限速换号），互不挤占；降级换组后重置。
 	authTries, rateTries := 0, 0
 	feTimeout := s.firstEventTimeout(route) // 等第一个事件
 	ftTimeout := s.firstTokenTimeout(route) // 首内容前控制帧窗口
 
-	// switchAccount 重新解析路由换一个可用账号（不刷新凭据，暂停/过期账号已被选号条件排除）。
+	triedAccounts := map[int64]bool{}
 	switchAccount := func() bool {
-		req.Model = origModel
-		again, err := s.router.Resolve(key, req)
-		if err == nil && again != nil && again.Account != nil && (account == nil || again.Account.ID != account.ID) {
-			account = again.Account
-			pluginName = again.PluginName
-			groupID = again.GroupID
-			req.Model = again.RealModel
-			cred = s.buildCred(account, groupID)
-			log.account = account
-			log.model = req.Model
-			return true
+		if r.Context().Err() != nil {
+			return false
 		}
-		return false
+		if account != nil {
+			triedAccounts[account.ID] = true
+		}
+		candidate := s.router.PickAlternative(groupID, triedAccounts)
+		if candidate == nil {
+			return false
+		}
+		nextCred, err := s.buildCred(candidate, groupID)
+		if err != nil {
+			return false
+		}
+		account, cred = candidate, nextCred
+		log.account = account
+		return true
 	}
 
 	// recoverCredential 凭据失效恢复：刷新同账号；终态失效标 expired 换号。
@@ -370,10 +402,23 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 		if account == nil || s.accounts == nil {
 			return false, nil
 		}
+		var latest model.Account
+		if err := s.db.First(&latest, account.ID).Error; err == nil && !bytes.Equal(latest.CredentialBlob, account.CredentialBlob) {
+			updated, err := s.buildCred(&latest, groupID)
+			if err != nil {
+				return false, err
+			}
+			account, cred = &latest, updated
+			log.account = account
+			return true, nil
+		}
 		refreshed, rerr := s.accounts.Refresh(r.Context(), account.ID)
 		if rerr == nil {
 			account = refreshed
-			cred = s.buildCred(account, groupID)
+			cred, err = s.buildCred(account, groupID)
+			if err != nil {
+				return false, err
+			}
 			log.account = account
 			return true, nil
 		}
@@ -399,12 +444,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 		if res == nil || res.Account == nil {
 			return false
 		}
+		nextCred, buildErr := s.buildCred(res.Account, res.GroupID)
+		if buildErr != nil {
+			return false
+		}
 		failoverUsed = true
 		account = res.Account
 		pluginName = res.PluginName
 		groupID = res.GroupID
 		req.Model = res.RealModel
-		cred = s.buildCred(account, groupID)
+		cred = nextCred
 		log.account = account
 		log.model = req.Model
 		authTries, rateTries = 0, 0 // 降级到新组：给新账号一份新鲜的恢复预算
@@ -414,6 +463,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 	// recoverFrom 单次失败后的恢复决策。
 	// retry=true 已切换可重试；transient 非 nil 表示暂时性失败（保留账号，不降级）。
 	recoverFrom := func(status int, brief string) (retry bool, transient error) {
+		if r.Context().Err() != nil {
+			return false, r.Context().Err()
+		}
 		switch {
 		case status == 401 && authTries < 2 && account != nil && s.accounts != nil:
 			authTries++
@@ -469,14 +521,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 	// collectPrefix 缓冲「首内容前」的控制帧，返回 (前缀, 失败码, 摘要, 通道是否已关闭)。
 	// 遇 TaskFailed 立即返回失败码（此时未向客户端写字节，可换号/降级）；
 	// 遇首个内容帧或通道关闭返回前缀；仅收到控制帧后挂死按 504。
-	collectPrefix := func(first *pb.StreamEvent, events chan *pb.StreamEvent) (prefix []*pb.StreamEvent, code int32, brief string, closed bool) {
+	collectPrefix := func(first *pb.StreamEvent, events <-chan *pb.StreamEvent) (prefix []*pb.StreamEvent, code int32, brief string, closed bool) {
+		timer := time.NewTimer(ftTimeout)
+		defer timer.Stop()
 		ev := first
 		for {
 			if ev == nil {
-				return prefix, 0, "", true
+				return prefix, 502, "upstream ended before a terminal event", true
 			}
 			if c := failedCode(ev); c != 0 {
 				return prefix, c, failedBrief(ev), false
+			}
+			if len(prefix) >= 64 {
+				return prefix, 502, "too many pre-content events", false
 			}
 			prefix = append(prefix, ev)
 			if !isPreContent(ev) {
@@ -485,69 +542,92 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, key *model.Key, r
 			select {
 			case next, ok := <-events:
 				if !ok {
-					return prefix, 0, "", true
+					return prefix, 502, "upstream ended before a terminal event", true
 				}
 				ev = next
-			case <-time.After(ftTimeout):
+			case <-r.Context().Done():
+				return prefix, 499, "request canceled", false
+			case <-timer.C:
 				return prefix, 504, "", false
 			}
 		}
 	}
 
-	for guard := 0; guard < s.maxRetries(); guard++ {
-		events, err := s.plugins.Chat(req, pluginName, cred)
-		if err != nil {
-			// 通道级失败（插件崩溃等）按 5xx 类参与降级判定
-			if retry, _ := recoverFrom(502, err.Error()); retry {
-				continue
-			}
-			failWith(http.StatusBadGateway, "upstream_error", err.Error())
-			return
-		}
-		// 首事件超时兜底：插件/上游挂死时按配置时限返回 504，而不是让客户端永久等待
-		var first *pb.StreamEvent
-		{
-			var ok bool
-			select {
-			case first, ok = <-events:
-				if !ok {
-					first = nil
-				}
-			case <-time.After(feTimeout):
-				if retry, _ := recoverFrom(504, ""); retry {
-					continue
-				}
-				failWith(http.StatusGatewayTimeout, "upstream_error",
-					fmt.Sprintf("upstream produced no events within %s (check proxy / upstream reachability)", feTimeout))
-				return
-			}
-		}
-		log.firstTokenMs = int32(time.Since(start).Milliseconds())
+	// 每轮尝试独立作用域：ctx/cancel 生命周期随 attempt 闭包结束（含 return 路径）。
 
-		// 恢复窗口延到首个内容 token——首内容前的控制帧先缓冲，期间失败仍可恢复
-		prefix, code, brief, _ := collectPrefix(first, events)
-		if code != 0 {
-			retry, transient := recoverFrom(int(code), brief)
-			if retry {
-				continue
+	for guard := 0; guard < s.maxRetries(); guard++ {
+		// 每轮独立作用域：ctx/cancel 生命周期随 attempt 函数结束（含 return 路径），
+		// 重试/失败由 attempt 内 defer 取消旧流，事件泵随之退出，无需 drain。
+		done, retry := func() (done, retry bool) {
+			attemptCtx, cancel := context.WithCancel(r.Context())
+			defer cancel()
+			events, err := s.plugins.Chat(attemptCtx, req, pluginName, cred)
+			if err != nil {
+				// 通道级失败（插件崩溃等）按 5xx 类参与降级判定
+				cancel()
+				if r, _ := recoverFrom(502, err.Error()); r {
+					return false, true
+				}
+				failWith(http.StatusBadGateway, "upstream_error", err.Error())
+				return true, false
 			}
-			finishUnrecovered(code, brief, transient)
-			return
-		}
-		if req.Stream {
-			s.streamOut(w, events, prefix, log, newEncoder(protocol, req.Model))
-			return
-		}
-		if code, brief := s.nonStreamOut(w, events, prefix, log, newAggregate(protocol, req.Model)); code != 0 {
-			// 聚合中途失败且响应未写：尝试恢复后重试
-			retry, transient := recoverFrom(int(code), brief)
-			if retry {
-				continue
+			events = normalizeEvents(attemptCtx, events, req.Model)
+			// 首事件超时兜底：插件/上游挂死时按配置时限返回 504，而不是让客户端永久等待
+			var first *pb.StreamEvent
+			{
+				var ok bool
+				select {
+				case <-r.Context().Done():
+					return true, false
+				case first, ok = <-events:
+					if !ok {
+						first = nil
+					}
+				case <-time.After(feTimeout):
+					cancel()
+					if r, _ := recoverFrom(504, ""); r {
+						return false, true
+					}
+					failWith(http.StatusGatewayTimeout, "upstream_error",
+						fmt.Sprintf("upstream produced no events within %s (check proxy / upstream reachability)", feTimeout))
+					return true, false
+				}
 			}
-			finishUnrecovered(code, brief, transient)
+			log.firstTokenMs = int32(time.Since(start).Milliseconds())
+
+			// 恢复窗口延到首个内容 token——首内容前的控制帧先缓冲，期间失败仍可恢复
+			prefix, code, brief, _ := collectPrefix(first, events)
+			if code != 0 {
+				cancel()
+				r, transient := recoverFrom(int(code), brief)
+				if r {
+					return false, true
+				}
+				finishUnrecovered(code, brief, transient)
+				return true, false
+			}
+			if req.Stream {
+				s.streamOut(w, events, prefix, log, newEncoder(protocol, req.Model))
+				return true, false
+			}
+			if code, brief := s.nonStreamOut(w, events, prefix, log, newAggregate(protocol, req.Model)); code != 0 {
+				// 聚合中途失败且响应未写：尝试恢复后重试
+				cancel()
+				r, transient := recoverFrom(int(code), brief)
+				if r {
+					return false, true
+				}
+				finishUnrecovered(code, brief, transient)
+				return true, false
+			}
+			return true, false
+		}()
+		if done {
 			return
 		}
-		return
+		if retry {
+			continue
+		}
 	}
 	failWith(http.StatusBadGateway, "api_error", "recovery attempts exhausted")
 }
@@ -623,12 +703,13 @@ func (s *Server) maxRetries() int {
 }
 
 // buildCred 账号 → 凭据信封（groupID 为路由命中的分组，出站代理优先用它）。
-func (s *Server) buildCred(account *model.Account, groupID int64) *pb.CredentialBlob {
+func (s *Server) buildCred(account *model.Account, groupID int64) (*pb.CredentialBlob, error) {
 	return accountpkg.BuildCred(s.db, s.dataDir, account, groupID)
 }
 
 // requestLogCtx 单次请求的日志上下文。
 type requestLogCtx struct {
+	ctx           context.Context
 	key           *model.Key
 	account       *model.Account
 	model         string
@@ -670,6 +751,13 @@ func (c *requestLogCtx) write(db *gorm.DB) {
 	db.Create(rl)
 }
 
+// writeJSONBody 在已 WriteHeader 后写体（编码失败无法改状态，仅记日志）。
+func writeJSONBody(w http.ResponseWriter, v interface{}) {
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("[gateway] encode response: %v", err)
+	}
+}
+
 // clientIP 提取客户端 IP（反代场景优先 X-Forwarded-For / X-Real-IP）。
 func clientIP(r *http.Request) string {
 	if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
@@ -686,12 +774,7 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-func truncStr(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
-}
+func truncStr(s string, n int) string { return textutil.Truncate(s, n) }
 
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {

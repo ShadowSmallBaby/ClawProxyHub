@@ -1,6 +1,4 @@
-// crypto.go — 凭据加密存储：AES-256-GCM。
-// 密钥来源：CPH_SECRET_KEY（hex）或自动生成并落盘 <data>/secret.key。
-// 加密数据以 0x01 前缀标记；解密失败按明文返回（平滑兼容存量数据）。
+// crypto.go — 主密钥可靠落盘后才启用加密，损坏的加密记录必须报错。
 package account
 
 import (
@@ -9,7 +7,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"io"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -17,90 +16,134 @@ import (
 
 const encPrefix = byte(0x01)
 
-// KeyLookupHash 返回 apikey 明文的确定性查找哈希（sha256 hex，64 字符）。
-// 高熵随机 key 无需加盐；用作 keys.key_lookup 索引列，鉴权按等值 O(1) 命中，
-// 免去 AES-GCM 密文（nonce 随机不可等值查）导致的全表解密扫描。
-// 与存量 sha256 hex 密钥（KeyCipher 即本值）天然一致，故可直接回填。
 func KeyLookupHash(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }
 
-var (
-	keyOnce  sync.Once
-	aead     cipher.AEAD
-	keyError error
-)
+var keyMu sync.Mutex
+var ciphers = map[string]cipher.AEAD{}
 
-// loadKey 初始化加密器（进程内一次）。
-func loadKey(dataDir string) (cipher.AEAD, error) {
-	keyOnce.Do(func() {
-		key := loadOrCreateKey(dataDir)
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			keyError = err
-			return
-		}
-		aead, keyError = cipher.NewGCM(block)
-	})
-	return aead, keyError
+func InitCrypto(dataDir string) error { _, err := loadKey(dataDir); return err }
+
+// BackupKey 导出当前实际密钥，环境变量密钥与文件密钥遵循同一优先级。
+func BackupKey(dataDir string) ([]byte, error) {
+	keyMu.Lock()
+	defer keyMu.Unlock()
+	return loadOrCreateKey(dataDir)
 }
 
-// loadOrCreateKey 取密钥：env(hex) > data/secret.key（自动生成）。
-func loadOrCreateKey(dataDir string) []byte {
+func loadKey(dataDir string) (cipher.AEAD, error) {
+	keyMu.Lock()
+	defer keyMu.Unlock()
+	path, err := filepath.Abs(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	cacheKey := path + "\x00" + os.Getenv("CPH_SECRET_KEY")
+	if c := ciphers[cacheKey]; c != nil {
+		return c, nil
+	}
+	key, err := loadOrCreateKey(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err == nil {
+		ciphers[cacheKey] = gcm
+	}
+	return gcm, err
+}
+
+func loadOrCreateKey(dataDir string) ([]byte, error) {
 	if env := os.Getenv("CPH_SECRET_KEY"); env != "" {
 		if key, err := hex.DecodeString(env); err == nil && len(key) == 32 {
-			return key
+			return key, nil
 		}
-		// 非 hex 的按原始字节取（凑满 32 字节即可用）
 		if len(env) == 32 {
-			return []byte(env)
+			return []byte(env), nil
 		}
+		return nil, errors.New("CPH_SECRET_KEY must contain 32 bytes or 64 hex characters")
 	}
-	keyPath := filepath.Join(dataDir, "secret.key")
-	if b, err := os.ReadFile(keyPath); err == nil && len(b) == 32 {
-		return b
+	path := filepath.Join(dataDir, "secret.key")
+	if key, err := os.ReadFile(path); err == nil {
+		if len(key) != 32 {
+			return nil, errors.New("invalid secret.key length")
+		}
+		return key, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		return nil, err
 	}
 	key := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		panic("generate secret key: " + err.Error())
+	rand.Read(key)
+	tmp, err := os.CreateTemp(dataDir, ".secret-*")
+	if err != nil {
+		return nil, err
 	}
-	_ = os.MkdirAll(dataDir, 0o700)
-	_ = os.WriteFile(keyPath, key, 0o600)
-	return key
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return nil, err
+	}
+	if _, err := tmp.Write(key); err != nil {
+		tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	// 硬链接以排他方式发布完整文件，避免并发首启互相覆盖。
+	if err := os.Link(tmp.Name(), path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			existing, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return nil, readErr
+			}
+			if len(existing) != 32 {
+				return nil, errors.New("invalid secret.key length")
+			}
+			return existing, nil
+		}
+		return nil, fmt.Errorf("persist secret.key: %w", err)
+	}
+	return key, nil
 }
 
-// EncryptCredential 加密凭据 blob；未初始化加密器时原样返回。
-func EncryptCredential(dataDir string, blob []byte) []byte {
+func EncryptCredential(dataDir string, blob []byte) ([]byte, error) {
+	if len(blob) == 0 {
+		return nil, nil
+	}
 	gcm, err := loadKey(dataDir)
-	if err != nil || len(blob) == 0 {
-		return blob
+	if err != nil {
+		return nil, err
 	}
 	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return blob
-	}
-	sealed := gcm.Seal(nil, nonce, blob, nil)
-	return append([]byte{encPrefix}, append(nonce, sealed...)...)
+	rand.Read(nonce)
+	return gcm.Seal(append([]byte{encPrefix}, nonce...), nonce, blob, nil), nil
 }
 
-// DecryptCredential 解密凭据 blob；非加密格式（无 0x01 前缀）按明文返回。
-func DecryptCredential(dataDir string, data []byte) []byte {
+func DecryptCredential(dataDir string, data []byte) ([]byte, error) {
 	if len(data) == 0 || data[0] != encPrefix {
-		return data
+		return data, nil
 	}
 	gcm, err := loadKey(dataDir)
 	if err != nil {
-		return data
+		return nil, err
 	}
-	nonceSize := gcm.NonceSize()
-	if len(data) < 1+nonceSize+gcm.Overhead() {
-		return data
+	n := gcm.NonceSize()
+	if len(data) < 1+n+gcm.Overhead() {
+		return nil, errors.New("truncated encrypted credential")
 	}
-	nonce, sealed := data[1:1+nonceSize], data[1+nonceSize:]
-	plain, err := gcm.Open(nil, nonce, sealed, nil)
-	if err != nil {
-		return data // 解不开（密钥不匹配的存量）按原样返回，交由插件报凭据错误
-	}
-	return plain
+	return gcm.Open(nil, data[1:1+n], data[1+n:], nil)
 }

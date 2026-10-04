@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/task"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
@@ -158,7 +159,7 @@ func (s *Server) listTaskRules(w http.ResponseWriter, r *http.Request) {
 			Enabled: rule.Enabled, NextRunAt: rule.NextRunAt, LastRunAt: rule.LastRunAt,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"rules": out, "total": total})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"rules": out, "total": total, "timezone": s.settings.Timezone()})
 }
 
 // pluginTaskCapabilities GET /admin/plugins/{name}/task-capabilities — 新建规则弹窗的能力下拉数据。
@@ -218,6 +219,10 @@ func (s *Server) createTaskRule(w http.ResponseWriter, r *http.Request) {
 		PluginID: body.PluginID, CapabilityID: body.CapabilityID,
 		TriggerType: body.TriggerType, TriggerValue: body.TriggerValue,
 		TargetScope: body.TargetScope, TargetJSON: target, Enabled: true,
+	}
+	if err := task.ValidateRule(&rule); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
 	}
 	if s.ruleDuplicated(&rule, 0) {
 		http.Error(w, `{"error":"已存在实例/能力/触发条件/触发值/账号范围完全一致的规则"}`, http.StatusConflict)
@@ -285,6 +290,10 @@ func (s *Server) updateTaskRule(w http.ResponseWriter, r *http.Request) {
 			updated.TargetJSON = t
 		}
 	}
+	if err := task.ValidateRule(&updated); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
 	if s.ruleDuplicated(&updated, rule.ID) {
 		http.Error(w, `{"error":"已存在实例/能力/触发条件/触发值/账号范围完全一致的规则"}`, http.StatusConflict)
 		return
@@ -328,8 +337,12 @@ func (s *Server) runTaskRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 直接执行该规则（不新建 once 规则、不影响调度时刻）
-	s.engine.RunNow(r.Context(), &rule)
-	writeJSON(w, http.StatusOK, map[string]bool{"scheduled": true})
+	id, err := s.engine.RunNow(r.Context(), &rule)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"scheduled": true, "run_id": id, "status": "queued"})
 }
 
 // runView 执行历史的语义视图：不暴露规则/账号/插件的业务 id。

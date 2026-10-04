@@ -80,9 +80,14 @@ func (s *Server) createOAuth(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(extra) == "" {
 		extra = "{}"
 	}
+	blob, err := account.EncryptCredential(s.accounts.DataDir(), []byte(body.Token))
+	if err != nil {
+		http.Error(w, `{"error":"credential encryption failed"}`, http.StatusInternalServerError)
+		return
+	}
 	rec := model.OAuthCredential{
 		Platform: body.Platform, AccountLabel: body.AccountLabel,
-		TokenBlob: account.EncryptCredential(s.accounts.DataDir(), []byte(body.Token)),
+		TokenBlob: blob,
 		ExpiresAt: parseExpires(body.ExpiresAt), ExtraJSON: extra,
 	}
 	if err := s.db.Create(&rec).Error; err != nil {
@@ -116,9 +121,17 @@ func (s *Server) updateOAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	// token 留空 = 保留原值（不回显，编辑时无需重填）
 	if body.Token != "" {
-		fields["token_blob"] = account.EncryptCredential(s.accounts.DataDir(), []byte(body.Token))
+		blob, err := account.EncryptCredential(s.accounts.DataDir(), []byte(body.Token))
+		if err != nil {
+			http.Error(w, `{"error":"credential encryption failed"}`, http.StatusInternalServerError)
+			return
+		}
+		fields["token_blob"] = blob
 	}
-	s.db.Model(&rec).Updates(fields)
+	if err := s.db.Model(&rec).Updates(fields).Error; err != nil {
+		http.Error(w, `{"error":"update failed"}`, http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"updated": true})
 }
 
