@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/textutil"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -33,18 +35,23 @@ func IsAuthFailure(err error) bool {
 
 // Service 账号域服务。
 type Service struct {
-	db      *gorm.DB
-	dataDir string
-	mgr     *plugin.Manager
+	db       *gorm.DB
+	dataDir  string
+	mgr      *plugin.Manager
+	settings *setting.Store
 }
 
-func New(db *gorm.DB, dataDir string, mgr *plugin.Manager) *Service {
-	return &Service{db: db, dataDir: dataDir, mgr: mgr}
+func New(db *gorm.DB, dataDir string, mgr *plugin.Manager, stores ...*setting.Store) *Service {
+	settings := setting.New(db)
+	if len(stores) > 0 {
+		settings = stores[0]
+	}
+	return &Service{db: db, dataDir: dataDir, mgr: mgr, settings: settings}
 }
 
 // runLogger 运行日志写入器（级别设置实时读库）。
 func (s *Service) runLogger() *runlog.Logger {
-	return runlog.New(s.db, func() string { return setting.New(s.db).RunLevel() })
+	return runlog.New(s.db, s.settings.RunLevel)
 }
 
 // DataDir 数据目录（解密密钥等用途）。
@@ -125,9 +132,13 @@ func (s *Service) create(pluginID, instanceID int64, blob []byte, profile *pb.Ac
 			status, reason = "disabled", unhealthyReason
 		}
 	}
+	sealed, err := EncryptCredential(s.dataDir, blob)
+	if err != nil {
+		return nil, err
+	}
 	acct := &model.Account{
 		PluginID: pluginID, InstanceID: instanceID, DisplayName: name,
-		CredentialBlob: EncryptCredential(s.dataDir, blob), Status: status, PauseReason: reason,
+		CredentialBlob: sealed, Status: status, PauseReason: reason,
 		ProfileJSON: profileJSON, CreditsJSON: creditsJSON, LastRefreshAt: ptrTime(time.Now()),
 	}
 	if err := s.db.Create(acct).Error; err != nil {
@@ -153,6 +164,13 @@ func Schedulable(acct *model.Account) bool {
 
 // Refresh 刷新单账号凭据。刷新失败且凭据确已失效时标记 expired。
 func (s *Service) Refresh(ctx context.Context, accountID int64) (*model.Account, error) {
+	unlock, err := LockCredential(ctx, s.dataDir, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	var acct model.Account
 	if err := s.db.First(&acct, accountID).Error; err != nil {
 		return nil, err
@@ -166,7 +184,10 @@ func (s *Service) Refresh(ctx context.Context, accountID int64) (*model.Account,
 		return nil, fmt.Errorf("plugin %q not running", pluginName)
 	}
 
-	cred := BuildCred(s.db, s.dataDir, &acct, 0)
+	cred, err := BuildCred(s.db, s.dataDir, &acct, 0)
+	if err != nil {
+		return nil, err
+	}
 	result, err := inst.Client().Refresh(ctx, cred)
 	if err != nil {
 		if status.Code(err) == codes.Unimplemented {
@@ -182,12 +203,19 @@ func (s *Service) Refresh(ctx context.Context, accountID int64) (*model.Account,
 			s.db.Model(&acct).Update("status", "expired")
 		}
 		s.runLogger().Error("account", "refresh", "刷新失败: "+pluginName, result.Error.Message, &acct.ID)
-		return nil, ErrUnauthorized(result.Error.Message)
+		if result.Error.Code == 401 {
+			return nil, ErrUnauthorized(result.Error.Message)
+		}
+		return nil, fmt.Errorf("refresh failed (%d): %s", result.Error.Code, result.Error.Message)
 	}
 
 	updates := map[string]interface{}{"last_refresh_at": time.Now()}
 	if len(result.Blob) > 0 {
-		updates["credential_blob"] = EncryptCredential(s.dataDir, result.Blob)
+		sealed, err := EncryptCredential(s.dataDir, result.Blob)
+		if err != nil {
+			return nil, err
+		}
+		updates["credential_blob"] = sealed
 	}
 	if result.Profile != nil {
 		updates["profile_json"] = profileJSON(result.Profile)
@@ -210,7 +238,9 @@ func (s *Service) Refresh(ctx context.Context, accountID int64) (*model.Account,
 	case acct.Status == "disabled" && acct.PauseReason == unhealthyReason:
 		updates["pause_reason"] = "" // 凭据已可用，等待手动启用
 	}
-	s.db.Model(&acct).Updates(updates)
+	if err := s.db.Model(&acct).Updates(updates).Error; err != nil {
+		return nil, err
+	}
 	// 插件要求提醒（如密钥已更换需重新同步模型）→ 站内通知
 	if n := result.Notification; n != nil && n.Title != "" {
 		s.db.Create(&model.Notification{
@@ -239,7 +269,10 @@ func (s *Service) Models(ctx context.Context, accountID int64) ([]*pb.ModelInfo,
 	if err != nil {
 		return nil, err
 	}
-	cred := BuildCred(s.db, s.dataDir, &acct, 0)
+	cred, err := BuildCred(s.db, s.dataDir, &acct, 0)
+	if err != nil {
+		return nil, err
+	}
 	inst, ok := s.mgr.Get(pluginName)
 	if !ok {
 		return nil, fmt.Errorf("plugin %q not running", pluginName)
@@ -323,7 +356,7 @@ func (s *Service) MarkExpired(accountID int64) {
 // resumeAt 到期自动恢复；传 nil 写入远期时间 = 需手动恢复。仅对 active 账号生效。
 func (s *Service) MarkAutoPause(accountID int64, reason string, resumeAt *time.Time) {
 	if resumeAt == nil {
-		far := time.Now().AddDate(100, 0, 0) // 远期哨兵：选号条件统一按 paused_until 判断
+		far := ManualPauseSentinel() // 远期哨兵：选号条件统一按 paused_until 判断
 		resumeAt = &far
 	}
 	s.db.Model(&model.Account{}).Where("id = ? AND status = ?", accountID, "active").
@@ -341,12 +374,11 @@ func (s *Service) Resume(accountID int64) {
 		})
 }
 
-func truncStr(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
-}
+// ManualPauseSentinel 手动暂停的远期哨兵时刻（写入侧 100 年；识别侧以 50 年为宽松阈值，
+// 兼容历史哨兵；两处共用此定义，谁改谁一处）。
+func ManualPauseSentinel() time.Time { return time.Now().AddDate(100, 0, 0) }
+
+func truncStr(s string, n int) string { return textutil.Truncate(s, n) }
 
 // List 插件维度的账号列表（凭据不外泄）。
 func (s *Service) List(pluginID int64) ([]model.Account, error) {
@@ -375,17 +407,52 @@ func profileJSON(p *pb.AccountProfile) string {
 
 func ptrTime(t time.Time) *time.Time { return &t }
 
-// SubscribeRefresh 订阅任务完成事件，成功后刷新该账号 profile（积分/套餐）。
+// SubscribeRefresh 接收与刷新分离，最多合并 1024 个账号；超限计入总线丢弃数。
 func (s *Service) SubscribeRefresh(ctx context.Context, bus *event.Bus) {
 	ch := bus.Subscribe(event.TopicTaskCompleted)
+	pending := map[int64]bool{}
+	var mu sync.Mutex
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case ev := <-ch:
-				if ev.AccountID > 0 {
-					_, _ = s.Refresh(ctx, ev.AccountID)
+				if ev.AccountID <= 0 {
+					continue
+				}
+				mu.Lock()
+				if len(pending) < 1024 || pending[ev.AccountID] {
+					pending[ev.AccountID] = true
+				} else {
+					bus.RecordDrop()
+				}
+				mu.Unlock()
+			}
+		}
+	}()
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				mu.Lock()
+				ids := make([]int64, 0, len(pending))
+				for id := range pending {
+					ids = append(ids, id)
+					delete(pending, id)
+				}
+				mu.Unlock()
+				for _, id := range ids {
+					if ctx.Err() != nil {
+						return
+					}
+					refreshCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+					_, _ = s.Refresh(refreshCtx, id)
+					cancel()
 				}
 			}
 		}

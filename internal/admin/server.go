@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"gorm.io/gorm"
@@ -22,6 +23,10 @@ import (
 
 // Server 管理后台。
 type Server struct {
+	jwtMu          sync.Mutex
+	jwtKey         []byte
+	limiter        loginLimiter
+	restoreMu      sync.Mutex
 	db             *gorm.DB
 	accounts       *account.Service
 	plugins        *plugin.Manager
@@ -213,8 +218,8 @@ func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request) {
 		// 实例级设置 JSON Schema（空 = 实例只有 name + base_url）
 		InstanceSchema string `json:"instance_schema,omitempty"`
 		// 契约版本与多实例能力（旧契约 / 未声明 instances 的插件只有默认实例，前端不展示实例选择）
-		ProtocolVersion int32 `json:"protocol_version"`
-		MultiInstance   bool  `json:"multi_instance"`
+		ProtocolVersion int32  `json:"protocol_version"`
+		MultiInstance   bool   `json:"multi_instance"`
 		Runtime         string `json:"runtime,omitempty"` // 空=Go；"lua"=脚本插件（取自落盘 manifest，非握手）
 		Editable        bool   `json:"editable"`          // 用户自建（data/plugins/local/）才可在线编辑
 	}
@@ -339,8 +344,17 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 		} `json:"credits,omitempty"`
 	}
 	var out []acctView
+	// N+1 优化：一次取全部账号↔分组映射，内存归组
+	type ag struct{ AccountID, GroupID int64 }
+	var links []ag
+	s.db.Model(&model.AccountGroup{}).Order("group_id").
+		Select("account_id, group_id").Scan(&links)
+	groupMap := map[int64][]int64{}
+	for _, l := range links {
+		groupMap[l.AccountID] = append(groupMap[l.AccountID], l.GroupID)
+	}
 	for _, a := range accts {
-		v := acctView{ID: a.ID, PluginID: a.PluginID, InstanceID: a.InstanceID, GroupIDs: accountGroupIDs(s.db, a.ID), Name: a.DisplayName,
+		v := acctView{ID: a.ID, PluginID: a.PluginID, InstanceID: a.InstanceID, GroupIDs: groupMap[a.ID], Name: a.DisplayName,
 			Status: a.Status, PauseReason: a.PauseReason}
 		if a.PausedUntil != nil {
 			t := a.PausedUntil.Format("2006-01-02T15:04:05Z07:00")

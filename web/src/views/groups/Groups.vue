@@ -1,10 +1,12 @@
 <template>
-  <div class="page">
-    <page-header v-if="!isPhone">
+  <page-layout :body-key="`${page}:${pageSize}`" :scroll="false">
+    <template v-if="!isPhone" #header>
+      <page-header>
       
-      <t-button theme="primary" @click="createVisible = true">{{ $t('groups.create') }}</t-button>
-    </page-header>
-    <c-table row-key="id" :data="groups" :columns="columns" :loading="loading" mobile-cards>
+        <t-button theme="primary" @click="createVisible = true">{{ $t('groups.create') }}</t-button>
+      </page-header>
+    </template>
+    <c-table fill row-key="id" :data="pageItems" :columns="columns" :loading="loading" mobile-cards>
       <template #op="{ row }">
         <t-space size="small">
           <t-link theme="primary" @click="openEdit(row)">{{ $t('common.edit') }}</t-link>
@@ -15,6 +17,11 @@
         </t-space>
       </template>
     </c-table>
+    <template #footer>
+      <c-pagination v-model="page" v-model:pageSize="pageSize" :total="total" />
+    </template>
+    <template #overlays>
+
 
     <c-drawer v-model:visible="createVisible" :header="$t('groups.create')" :confirm-btn="{ loading: creating }" @confirm="create">
       <t-form>
@@ -57,14 +64,17 @@
         <template #icon><add-icon /></template>
       </t-button>
     </mobile-fab>
-  </div>
+    </template>
+  </page-layout>
 </template>
 
 <script setup lang="ts">
+import { PageLayout, PageHeader } from '@/components'
+import { CPagination } from '@/components/base'
+import { useClientPagination } from '@/composables'
 import { CDrawer } from '@/components/base'
 import { FormItem } from '@/components'
 import { CCard, CTable, MobileFab } from '@/components/base'
-import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -206,4 +216,6 @@ async function remove(id: number) {
 }
 
 onMounted(load)
+
+const { page, pageSize, total, items: pageItems } = useClientPagination(groups)
 </script>

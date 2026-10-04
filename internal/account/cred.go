@@ -12,21 +12,21 @@ import (
 
 // BuildCred 账号 → 凭据信封：解密 blob + 刷新时间 + 实例 + 出站代理。
 // groupID>0 为路由命中的分组（代理优先级：账号 > 该分组）；0 = 仅按账号绑定回退全部分组。
-func BuildCred(db *gorm.DB, dataDir string, acct *model.Account, groupID int64) *pb.CredentialBlob {
+func BuildCred(db *gorm.DB, dataDir string, acct *model.Account, groupID int64) (*pb.CredentialBlob, error) {
+	blob, err := DecryptCredential(dataDir, acct.CredentialBlob)
+	if err != nil {
+		return nil, err
+	}
 	cred := &pb.CredentialBlob{
 		AccountId:  fmt.Sprintf("%d", acct.ID),
-		Blob:       DecryptCredential(dataDir, acct.CredentialBlob),
+		Blob:       blob,
 		InstanceId: acct.InstanceID,
 	}
 	if acct.LastRefreshAt != nil {
 		cred.UpdatedAt = acct.LastRefreshAt.Unix()
 	}
-	if groupID > 0 {
-		cred.Proxy = ProxyForAccountIn(db, acct.ID, groupID)
-	} else {
-		cred.Proxy = ProxyForAccount(db, acct.ID)
-	}
-	return cred
+	cred.Proxy, err = ProxyForAccountIn(db, dataDir, acct.ID, groupID)
+	return cred, err
 }
 
 // DefaultInstance 单例插件的默认实例（最早创建的一个）；没有则建一个「默认」。

@@ -39,18 +39,47 @@ jobs:
           [ -n "$tag" ] || { echo "no v*.*.* tag found"; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-  build:
+  web:
     needs: resolve
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web UI
+        working-directory: web
+        run: |
+          npm ci
+          npx vite build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist/
+
+  build:
+    needs: [resolve, web]
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { goos: windows, goarch: amd64, ext: ".exe" }
-          - { goos: linux, goarch: amd64, ext: "" }
-          - { goos: linux, goarch: arm64, ext: "" }
-          - { goos: darwin, goarch: amd64, ext: "" }
-          - { goos: darwin, goarch: arm64, ext: "" }
+          - { runner: windows-latest, goos: windows, goarch: amd64, ext: ".exe" }
+          - { runner: ubuntu-24.04, goos: linux, goarch: amd64, ext: "" }
+          - { runner: ubuntu-24.04-arm, goos: linux, goarch: arm64, ext: "" }
+          - { runner: macos-15-intel, goos: darwin, goarch: amd64, ext: "" }
+          - { runner: macos-15, goos: darwin, goarch: arm64, ext: "" }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,6 +89,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist/
 
       # luahost 独立 module 且 replace 回核心库，-C 下构建仍解析 replace
       - name: Build luahost
@@ -73,7 +107,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
+          CGO_ENABLED: "1"
           VERSION: ${{ needs.resolve.outputs.tag }}
         run: |
           cp luahost.bin internal/plugin/luahost.bin
@@ -84,7 +118,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
+          CGO_ENABLED: "1"
           VERSION: ${{ needs.resolve.outputs.tag }}
         run: |
           go build -trimpath -ldflags "-s -w -X github.com/ShadowSmallBaby/ClawProxyHub/internal/version.Core=${VERSION#v}" \

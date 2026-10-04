@@ -1,18 +1,14 @@
 <template>
-  <div class="page">
-    <page-header v-if="!isPhone">
-      <filter-bar>
-        <t-select v-model="instanceFilter" clearable :placeholder="$t('accounts.filterInstance')" :options="instanceFilterOptions" class="w-md" />
-        <t-button theme="primary" :disabled="!plugins.length" @click="openAdd">{{ $t('accounts.add') }}</t-button>
-      </filter-bar>
-    </page-header>
-
-    <!-- 手机端：实例筛选收进底部抽屉 -->
-    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('accounts.filterInstance')" :footer="false">
-      <t-select v-model="instanceFilter" clearable :placeholder="$t('accounts.filterInstance')" :options="instanceFilterOptions" />
-    </c-drawer>
-
-    <c-table row-key="id" :data="filteredAccounts" :columns="columns" :loading="loading" mobile-cards :phone-cols="['display_name', 'status', 'credits']">
+  <page-layout :body-key="`${page}:${pageSize}`" :scroll="false">
+    <template v-if="!isPhone" #header>
+      <page-header>
+        <filter-bar>
+          <t-select v-model="instanceFilter" clearable :placeholder="$t('accounts.filterInstance')" :options="instanceFilterOptions" class="w-md" />
+          <t-button theme="primary" :disabled="!plugins.length" @click="openAdd">{{ $t('accounts.add') }}</t-button>
+        </filter-bar>
+      </page-header>
+    </template>
+    <c-table fill row-key="id" :data="pageItems" :columns="columns" :loading="loading" mobile-cards :phone-cols="['display_name', 'status', 'credits']">
       <template #display_name="{ row }">
         <span class="acct-name" @click="openDetail(row.id)">{{ row.display_name || `#${row.id}` }}</span>
       </template>
@@ -59,6 +55,17 @@
         </t-space>
       </template>
     </c-table>
+    <template #footer>
+      <c-pagination v-model="page" v-model:pageSize="pageSize" :total="total" />
+    </template>
+    <template #overlays>
+
+    <!-- 手机端：实例筛选收进底部抽屉 -->
+    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('accounts.filterInstance')" :footer="false">
+      <t-select v-model="instanceFilter" clearable :placeholder="$t('accounts.filterInstance')" :options="instanceFilterOptions" />
+    </c-drawer>
+
+
 
     <!-- 账号详情：套餐/积分 + 任务执行情况 -->
     <c-drawer v-model:visible="detailVisible" :header="detailHeader" :footer="false" width="720px" close-on-overlay-click>
@@ -274,7 +281,7 @@
     </c-drawer>
 
     <!-- 编辑账号：改名 / 绑分组 / 绑代理 / 同步模型 -->
-    <c-drawer v-model:visible="editVisible" :header="$t('accounts.editTitle')" :confirm-btn="{ loading: editSaving }" width="640px" @confirm="submitEdit">
+    <c-drawer v-model:visible="editVisible" :header="$t('accounts.editTitle')" :confirm-btn="{ loading: editSaving, disabled: !editLoaded }" width="640px" @confirm="submitEdit">
       <t-form v-if="editRow">
         <form-item :label="$t('accounts.name')">
           <t-input v-model="editName" :placeholder="$t('accounts.namePh')" clearable />
@@ -350,13 +357,16 @@
         <template #icon><add-icon /></template>
       </t-button>
     </mobile-fab>
-  </div>
+    </template>
+  </page-layout>
 </template>
 
 <script setup lang="ts">
+import { PageLayout, PageHeader } from '@/components'
+import { CPagination } from '@/components/base'
+import { useClientPagination } from '@/composables'
 import { CCard, CDrawer, CTable, CTabs, MobileFab, FilterBar } from '@/components/base'
 import { FormItem } from '@/components'
-import PageHeader from '@/components/PageHeader.vue'
 import EntityIcon from '@/components/EntityIcon.vue'
 import GroupPicker from './GroupPicker.vue'
 import { pluginLabelOf, instanceNameOf } from '@/utils/lookup'
@@ -368,7 +378,7 @@ import { useIsMobile } from '@/composables'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { AddIcon, FilterIcon } from 'tdesign-icons-vue-next'
-import { accountApi, groupApi, instanceApi, pluginApi, proxyApi } from '@/api/entities'
+import { accountApi, groupApi, instanceApi, pluginApi, proxyApi, type Proxy } from '@/api/entities'
 import BindSelect from '@/components/BindSelect.vue'
 import DeleteImpactDialog from '@/components/DeleteImpactDialog.vue'
 import { accountStatusDict, capabilityDict, dict, label, runStatusDict } from '@/utils/dict'
@@ -386,7 +396,7 @@ const runningPlugins = computed(() => plugins.value.filter((p) => p.running))
 const accounts = ref<Account[]>([])
 const groups = ref<GroupInfo[]>([])
 const instances = ref<InstanceInfo[]>([])
-const proxies = ref<{ ID: number; Scheme: string; Host: string; Port: number }[]>([])
+const proxies = ref<Proxy[]>([])
 const loading = ref(false)
 const instanceFilter = ref<string | undefined>(undefined) // "pluginId:instanceId"，空 = 全部
 
@@ -397,7 +407,12 @@ const editName = ref('')
 const editInstanceId = ref<number | undefined>(undefined) // t-select 空值用 undefined，避免显示 0
 const editGroups = ref<number[]>([])
 const editProxies = ref<number[]>([])
-const editModels = ref<{ id: string }[]>([])
+const editModels = ref<ModelInfo[]>([])
+const editLoaded = ref(false)
+let editSequence = 0
+let originalModels = ''
+let originalProxies = ''
+const testModels = ref<ModelInfo[]>([])
 const editSaving = ref(false)
 const editSyncing = ref(false)
 
@@ -667,7 +682,7 @@ async function loadAll() {
 }
 
 const proxyOptions = computed(() =>
-  proxies.value.map((px) => ({ value: px.ID, label: `${px.Scheme}://${px.Host}:${px.Port}` })),
+  proxies.value.map((px) => ({ value: px.id, label: `${px.scheme}://${px.host}:${px.port}` })),
 )
 const wizardGroupOptions = computed(() =>
   pluginGroups.value.map((g) => ({ value: g.id, label: `${g.name} (${g.plugin_label || g.plugin})` })),
@@ -683,10 +698,12 @@ const endpointOptions = [
   { value: 'messages', label: 'messages' },
   { value: 'responses', label: 'responses' },
 ]
-const testModelOptions = computed(() => editModels.value.map((m) => ({ value: m.id, label: m.id })))
+const testModelOptions = computed(() => testModels.value.map((m) => ({ value: m.id, label: m.id })))
 
 // openEdit 打开编辑弹窗，回填名称/分组/代理/模型
 async function openEdit(row: Account) {
+  const sequence = ++editSequence
+  editLoaded.value = false
   editRow.value = row
   editName.value = row.display_name
   editInstanceId.value = row.instance_id || undefined
@@ -694,21 +711,30 @@ async function openEdit(row: Account) {
   editModels.value = []
   editProxies.value = []
   editVisible.value = true
-  const [px, detail] = await Promise.all([
-    accountApi.proxies(row.id).catch(() => ({ proxy_ids: [] })),
-    accountApi.detail(row.id).catch(() => null),
-  ])
-  editProxies.value = px.proxy_ids ?? []
-  editModels.value = (detail?.models ?? []).map((m) => ({ id: m.id }))
+  try {
+    const [px, detail] = await Promise.all([accountApi.proxies(row.id), accountApi.detail(row.id)])
+    if (sequence !== editSequence || !editVisible.value) return
+    editProxies.value = [...(px.proxy_ids ?? [])]
+    editModels.value = (detail.models ?? []).map((m) => ({ ...m }))
+    originalModels = JSON.stringify(editModels.value)
+    originalProxies = JSON.stringify(editProxies.value)
+    editLoaded.value = true
+  } catch (e: any) {
+    if (sequence === editSequence) MessagePlugin.error(e.message || t('common.loadFailed'))
+  }
 }
 
 // editSyncModels 拉上游模型目录（?refresh=1 落库）
 async function editSyncModels() {
-  if (!editRow.value || editSyncing.value) return
+  if (!editRow.value || editSyncing.value || !editLoaded.value) return
+  const id = editRow.value.id
+  const sequence = editSequence
   editSyncing.value = true
   try {
-    const resp = await accountApi.models(editRow.value.id, true)
-    editModels.value = (resp.models ?? []).map((m) => ({ id: m.id }))
+    const resp = await accountApi.models(id, true)
+    if (sequence !== editSequence || !editVisible.value) return
+    editModels.value = (resp.models ?? []).map((m) => ({ ...m }))
+    originalModels = JSON.stringify(editModels.value)
   } catch (e: any) {
     MessagePlugin.warning(t('accounts.syncFailed', { msg: e.message }))
   } finally {
@@ -718,13 +744,13 @@ async function editSyncModels() {
 
 // submitEdit 保存名称/分组/代理/模型（模型以用户勾选为准）
 async function submitEdit() {
-  if (!editRow.value) return
+  if (!editRow.value || !editLoaded.value || editSaving.value) return
   editSaving.value = true
   try {
     const id = editRow.value.id
     await accountApi.update(id, { display_name: editName.value, group_ids: editGroups.value, instance_id: editInstanceId.value ?? 0 })
-    await accountApi.saveProxies(id, editProxies.value)
-    await accountApi.saveModels(id, editModels.value)
+    if (JSON.stringify(editProxies.value) !== originalProxies) await accountApi.saveProxies(id, editProxies.value)
+    if (JSON.stringify(editModels.value) !== originalModels) await accountApi.saveModels(id, editModels.value)
     MessagePlugin.success(t('common.saved'))
     editVisible.value = false
     await loadAll()
@@ -747,8 +773,9 @@ async function openTest(row: Account) {
   testModel.value = ''
   testVisible.value = true
   const detail = await accountApi.detail(row.id).catch(() => null)
-  editModels.value = (detail?.models ?? []).map((m) => ({ id: m.id }))
-  if (editModels.value.length) testModel.value = editModels.value[0].id
+  if (testRow.value?.id !== row.id) return
+  testModels.value = detail?.models ?? []
+  if (testModels.value.length) testModel.value = testModels.value[0].id
 }
 
 // runTest 直调插件 Chat（绕路由/key），输出响应与日志
@@ -988,6 +1015,9 @@ function askRemove(row: Account) {
 
 onBeforeUnmount(stopPolling)
 onMounted(loadAll)
+
+const { page, pageSize, total, items: pageItems, reset: resetPage } = useClientPagination(filteredAccounts)
+watch(instanceFilter, resetPage)
 </script>
 
 <style scoped>

@@ -1,9 +1,11 @@
 <template>
-  <div class="page">
-    <page-header v-if="!isPhone">
-      <t-button theme="primary" @click="openCreate">{{ $t('oauth.create') }}</t-button>
-    </page-header>
-    <c-table row-key="id" :data="creds" :columns="columns" :loading="loading" mobile-cards>
+  <page-layout :body-key="`${page}:${pageSize}`" :scroll="false">
+    <template v-if="!isPhone" #header>
+      <page-header>
+        <t-button theme="primary" @click="openCreate">{{ $t('oauth.create') }}</t-button>
+      </page-header>
+    </template>
+    <c-table fill row-key="id" :data="pageItems" :columns="columns" :loading="loading" mobile-cards>
       <template #has_token="{ row }">
         <t-tag v-if="row.has_token" theme="success" variant="light" size="small">{{ $t('oauth.tokenSet') }}</t-tag>
         <t-tag v-else theme="warning" variant="light" size="small">{{ $t('oauth.tokenEmpty') }}</t-tag>
@@ -20,6 +22,11 @@
         </t-space>
       </template>
     </c-table>
+    <template #footer>
+      <c-pagination v-model="page" v-model:pageSize="pageSize" :total="total" />
+    </template>
+    <template #overlays>
+
 
     <c-drawer
       v-model:visible="dialogVisible"
@@ -58,14 +65,17 @@
         <template #icon><add-icon /></template>
       </t-button>
     </mobile-fab>
-  </div>
+    </template>
+  </page-layout>
 </template>
 
 <script setup lang="ts">
+import { PageLayout, PageHeader } from '@/components'
+import { CPagination } from '@/components/base'
+import { useClientPagination } from '@/composables'
 import { CDrawer } from '@/components/base'
 import { FormItem } from '@/components'
 import { CCard, CTable, MobileFab } from '@/components/base'
-import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -161,4 +171,6 @@ async function remove(id: number) {
 }
 
 onMounted(load)
+
+const { page, pageSize, total, items: pageItems } = useClientPagination(creds)
 </script>

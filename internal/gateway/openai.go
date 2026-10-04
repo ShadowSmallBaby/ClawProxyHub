@@ -6,16 +6,22 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/requestutil"
+
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
 // parseChatCompletions 把 /v1/chat/completions 请求体转成统一信封。
 func parseChatCompletions(body []byte) (*pb.ChatRequest, error) {
+	if err := validateRequestContent(body, "chat"); err != nil {
+		return nil, err
+	}
 	var raw struct {
 		Model               string          `json:"model"`
 		Messages            []openaiMessage `json:"messages"`
 		MaxTokens           int32           `json:"max_tokens"`
 		MaxCompletionTokens int32           `json:"max_completion_tokens"` // 新版字段，max_tokens 的替代
+		N                   *int            `json:"n"`
 		Temperature         *float64        `json:"temperature"`
 		TopP                *float64        `json:"top_p"`
 		Stop                json.RawMessage `json:"stop"`
@@ -37,7 +43,10 @@ func parseChatCompletions(body []byte) (*pb.ChatRequest, error) {
 	if len(raw.Messages) == 0 {
 		return nil, fmt.Errorf("messages is required")
 	}
-	if raw.MaxTokens == 0 {
+	if raw.N != nil && *raw.N != 1 {
+		return nil, fmt.Errorf("only n=1 is supported")
+	}
+	if raw.MaxCompletionTokens != 0 {
 		raw.MaxTokens = raw.MaxCompletionTokens
 	}
 
@@ -49,6 +58,10 @@ func parseChatCompletions(body []byte) (*pb.ChatRequest, error) {
 		Extra:       map[string]string{},
 	}
 	setTemperature(req, raw.Temperature)
+	requestutil.CaptureNative(req, body, "chat")
+	if raw.MaxCompletionTokens != 0 {
+		req.Extra["openai_max_completion_tokens"] = "true"
+	}
 	if raw.TopP != nil {
 		req.Extra["top_p"] = fmt.Sprintf("%g", *raw.TopP)
 	}
@@ -73,6 +86,16 @@ func parseChatCompletions(body []byte) (*pb.ChatRequest, error) {
 	for i := range raw.Messages {
 		m := &raw.Messages[i]
 		parts := openaiParts(m.Content)
+		if m.Refusal != "" {
+			parts = append(parts, &pb.ContentPart{Type: "refusal", Text: m.Refusal})
+		}
+		if len(m.Annotations) > 0 && string(m.Annotations) != "null" {
+			if len(parts) == 0 {
+				parts = append(parts, &pb.ContentPart{Type: "text"})
+			}
+			parts[0].Annotations = string(m.Annotations)
+			parts[0].Source = "chat"
+		}
 		em := &pb.EnvelopeMessage{Role: normalizeRole(m.Role), Text: partsText(parts), Raw: m.Content}
 		if m.ReasoningContent != "" && em.Role == "assistant" {
 			// 推理正文放最前（Anthropic 要求 thinking 块先于 text）
@@ -80,8 +103,14 @@ func parseChatCompletions(body []byte) (*pb.ChatRequest, error) {
 		}
 		em.Parts = finishParts(parts)
 		for _, tc := range m.ToolCalls {
+			args := tc.Function.Arguments
+			if args == "" {
+				args = "{}" // 空 arguments 跨方言会变成非法 tool_use.input
+			} else if !json.Valid([]byte(args)) {
+				return nil, fmt.Errorf("tool_call %q arguments must be valid JSON", tc.ID)
+			}
 			em.ToolCalls = append(em.ToolCalls, &pb.ToolCall{
-				Id: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+				Id: tc.ID, Name: tc.Function.Name, Arguments: args,
 			})
 		}
 		if m.ToolCallID != "" {
@@ -91,6 +120,10 @@ func parseChatCompletions(body []byte) (*pb.ChatRequest, error) {
 	}
 
 	for _, t := range raw.Tools {
+		if t.Type != "function" || t.Function.Name == "" {
+			return nil, fmt.Errorf("unsupported tool type or missing function name: %s", t.Type)
+		}
+		requestutil.SetToolStrict(req, t.Function.Name, t.Function.Strict)
 		if t.Function.Name != "" {
 			req.Tools = append(req.Tools, &pb.ToolDefinition{
 				Name: t.Function.Name, Description: t.Function.Description,
@@ -98,16 +131,20 @@ func parseChatCompletions(body []byte) (*pb.ChatRequest, error) {
 			})
 		}
 	}
-	if tc, err := convertOpenAIToolChoice(raw.ToolChoice); err == nil && tc != nil {
-		req.ToolChoice = tc
+	tc, err := convertOpenAIToolChoice(raw.ToolChoice)
+	if err != nil {
+		return nil, err
 	}
-	return req, nil
+	req.ToolChoice = tc
+	return req, validateToolHistory(req)
 }
 
 type openaiMessage struct {
-	Role      string          `json:"role"`
-	Content   json.RawMessage `json:"content"`
-	ToolCalls []struct {
+	Role        string          `json:"role"`
+	Refusal     string          `json:"refusal"`
+	Annotations json.RawMessage `json:"annotations"`
+	Content     json.RawMessage `json:"content"`
+	ToolCalls   []struct {
 		ID       string `json:"id"`
 		Type     string `json:"type"`
 		Function struct {
@@ -132,7 +169,8 @@ func openaiParts(raw json.RawMessage) []*pb.ContentPart {
 		Type     string `json:"type"`
 		Text     string `json:"text"`
 		ImageURL struct {
-			URL string `json:"url"`
+			URL    string `json:"url"`
+			Detail string `json:"detail"`
 		} `json:"image_url"`
 	}
 	if err := json.Unmarshal(raw, &items); err != nil {
@@ -145,7 +183,9 @@ func openaiParts(raw json.RawMessage) []*pb.ContentPart {
 			parts = append(parts, &pb.ContentPart{Type: "text", Text: it.Text})
 		case "image_url":
 			if it.ImageURL.URL != "" {
-				parts = append(parts, imagePart(it.ImageURL.URL))
+				part := imagePart(it.ImageURL.URL)
+				part.ImageDetail = it.ImageURL.Detail
+				parts = append(parts, part)
 			}
 		}
 	}
@@ -158,11 +198,12 @@ type openaiTool struct {
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
 		Parameters  json.RawMessage `json:"parameters"`
+		Strict      *bool           `json:"strict"`
 	} `json:"function"`
 }
 
 func convertOpenAIToolChoice(raw json.RawMessage) (*pb.ToolChoice, error) {
-	if len(raw) == 0 {
+	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
 	var s string
@@ -184,10 +225,10 @@ func convertOpenAIToolChoice(raw json.RawMessage) (*pb.ToolChoice, error) {
 	if err := json.Unmarshal(raw, &tc); err != nil {
 		return nil, err
 	}
-	if tc.Type == "function" {
+	if tc.Type == "function" && tc.Function.Name != "" {
 		return &pb.ToolChoice{Type: "tool", ToolName: tc.Function.Name}, nil
 	}
-	return &pb.ToolChoice{Type: tc.Type}, nil
+	return nil, fmt.Errorf("unsupported tool_choice or missing function name: %s", tc.Type)
 }
 
 // ---------- 信封事件 → OpenAI SSE ----------
@@ -222,9 +263,19 @@ func (s *openaiSSEState) convertEvent(ev *pb.StreamEvent) string {
 		}, "")
 
 	case *pb.StreamEvent_ContentDelta:
-		return s.chunk(map[string]interface{}{
-			"role": "assistant", "content": e.ContentDelta.Text,
-		}, "")
+		delta := map[string]interface{}{"role": "assistant"}
+		if e.ContentDelta.Refusal {
+			delta["refusal"] = e.ContentDelta.Text
+		} else if e.ContentDelta.Text != "" {
+			delta["content"] = e.ContentDelta.Text
+		}
+		if e.ContentDelta.Source == "chat" && e.ContentDelta.Annotations != "" {
+			delta["annotations"] = json.RawMessage(e.ContentDelta.Annotations)
+		}
+		if len(delta) == 1 {
+			return ""
+		}
+		return s.chunk(delta, "")
 
 	case *pb.StreamEvent_ToolCallDelta:
 		idx, ok := s.toolIdx[e.ToolCallDelta.Id]
@@ -234,13 +285,14 @@ func (s *openaiSSEState) convertEvent(ev *pb.StreamEvent) string {
 			s.toolIdx[e.ToolCallDelta.Id] = idx
 		}
 		fn := map[string]interface{}{"arguments": e.ToolCallDelta.ArgumentsDelta}
+		tool := map[string]interface{}{"index": idx, "function": fn}
 		if !ok {
 			fn["name"] = e.ToolCallDelta.Name
+			tool["id"] = e.ToolCallDelta.Id
+			tool["type"] = "function"
 		}
 		return s.chunk(map[string]interface{}{
-			"tool_calls": []interface{}{map[string]interface{}{
-				"index": idx, "id": e.ToolCallDelta.Id, "type": "function", "function": fn,
-			}},
+			"tool_calls": []interface{}{tool},
 		}, "")
 
 	case *pb.StreamEvent_MessageFinish:
@@ -277,12 +329,14 @@ func (s *openaiSSEState) chunkRaw(payload map[string]interface{}) string {
 
 // openaiAggregate 非流式聚合。
 type openaiAggregate struct {
-	model     string
-	reasoning string
-	text      string
-	tools     map[string]*aggrTool
-	finish    string
-	usage     *pb.Usage
+	refusal     string
+	annotations []json.RawMessage
+	model       string
+	reasoning   string
+	text        string
+	tools       map[string]*aggrTool
+	finish      string
+	usage       *pb.Usage
 }
 
 func (a *openaiAggregate) feed(ev *pb.StreamEvent) {
@@ -292,7 +346,16 @@ func (a *openaiAggregate) feed(ev *pb.StreamEvent) {
 	case *pb.StreamEvent_ReasoningDelta:
 		a.reasoning += e.ReasoningDelta.Text
 	case *pb.StreamEvent_ContentDelta:
-		a.text += e.ContentDelta.Text
+		if e.ContentDelta.Refusal {
+			a.refusal += e.ContentDelta.Text
+		} else {
+			a.text += e.ContentDelta.Text
+		}
+		if e.ContentDelta.Source == "chat" && e.ContentDelta.Annotations != "" {
+			var values []json.RawMessage
+			_ = json.Unmarshal([]byte(e.ContentDelta.Annotations), &values)
+			a.annotations = append(a.annotations, values...)
+		}
 	case *pb.StreamEvent_ToolCallDelta:
 		if a.tools == nil {
 			a.tools = map[string]*aggrTool{}
@@ -311,6 +374,15 @@ func (a *openaiAggregate) feed(ev *pb.StreamEvent) {
 
 func (a *openaiAggregate) result() map[string]interface{} {
 	msg := map[string]interface{}{"role": "assistant", "content": a.text}
+	if a.refusal != "" {
+		msg["refusal"] = a.refusal
+		if a.text == "" {
+			msg["content"] = nil
+		}
+	}
+	if len(a.annotations) > 0 {
+		msg["annotations"] = a.annotations
+	}
 	if a.reasoning != "" {
 		msg["reasoning_content"] = a.reasoning
 	}

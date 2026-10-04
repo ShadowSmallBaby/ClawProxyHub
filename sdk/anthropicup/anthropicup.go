@@ -3,6 +3,10 @@ package anthropicup
 
 import (
 	"encoding/json"
+	"fmt"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/requestutil"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/streamutil"
+	"sort"
 	"strings"
 
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
@@ -34,12 +38,17 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 			result := map[string]interface{}{"type": "tool_result", "tool_use_id": m.ToolCallId}
 			if len(m.Parts) > 0 {
 				blocks := blocksOf(m)
-				if last, ok := blocks[len(blocks)-1].(map[string]interface{}); ok && last["cache_control"] != nil {
-					result["cache_control"] = last["cache_control"]
-					delete(last, "cache_control")
-					if last["type"] == "text" && last["text"] == "" {
-						blocks = blocks[:len(blocks)-1] // 只为承载断点补的空文本块
+				if len(blocks) > 0 {
+					if last, ok := blocks[len(blocks)-1].(map[string]interface{}); ok && last["cache_control"] != nil {
+						result["cache_control"] = last["cache_control"]
+						delete(last, "cache_control")
+						if last["type"] == "text" && last["text"] == "" {
+							blocks = blocks[:len(blocks)-1] // 只为承载断点补的空文本块
+						}
 					}
+				}
+				if blocks == nil {
+					blocks = []interface{}{}
 				}
 				result["content"] = blocks
 			} else {
@@ -79,6 +88,7 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 			if t.CacheControl != "" {
 				tool["cache_control"] = rawJSON(t.CacheControl)
 			}
+			requestutil.ApplyToolStrict(req, t.Name, tool)
 			tools = append(tools, tool)
 		}
 		body["tools"] = tools
@@ -93,11 +103,14 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 					body["tool_choice"] = map[string]interface{}{"type": "tool", "name": tc.ToolName}
 				}
 			}
-			if v := req.Extra["parallel_tool_calls"]; v == "false" {
-				if tcm, ok := body["tool_choice"].(map[string]interface{}); ok {
-					tcm["disable_parallel_tool_use"] = true
-				}
+		}
+		if req.Extra["parallel_tool_calls"] == "false" {
+			tcm, ok := body["tool_choice"].(map[string]interface{})
+			if !ok {
+				tcm = map[string]interface{}{"type": "auto"}
+				body["tool_choice"] = tcm
 			}
+			tcm["disable_parallel_tool_use"] = true
 		}
 	}
 	if v, ok := req.Extra["temperature"]; ok && v != "" {
@@ -126,7 +139,7 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 	}
 	if v, ok := req.Extra["thinking"]; ok && v != "" {
 		body["thinking"] = rawJSON(v)
-	} else if effort := req.Extra["reasoning_effort"]; effort != "" {
+	} else if effort := requestutil.ReasoningEffort(req.Extra); effort != "" {
 		// OpenAI 客户端的 reasoning_effort → 按 max_tokens 比例折算 budget
 		if t := thinkingFromEffort(effort, body["max_tokens"].(int32)); t != nil {
 			body["thinking"] = t
@@ -135,6 +148,10 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 	if v := req.Extra["user"]; v != "" {
 		body["metadata"] = map[string]interface{}{"user_id": v}
 	}
+	if v := req.Extra["anthropic_output_config"]; v != "" {
+		body["output_config"] = rawJSON(v)
+	}
+	requestutil.ApplyNative(req, body, "anthropic")
 	return body
 }
 
@@ -143,6 +160,8 @@ func ChatBody(req *pb.ChatRequest) map[string]interface{} {
 func thinkingFromEffort(effort string, maxTokens int32) map[string]interface{} {
 	var pct int32
 	switch effort {
+	case "none":
+		return map[string]interface{}{"type": "disabled"}
 	case "minimal":
 		pct = 5
 	case "low":
@@ -180,8 +199,8 @@ func blocksOf(m *pb.EnvelopeMessage) []interface{} {
 	for _, p := range m.Parts {
 		var block map[string]interface{}
 		switch p.Type {
-		case "text":
-			if p.Text == "" && p.CacheControl == "" {
+		case "text", "refusal":
+			if p.Text == "" && p.CacheControl == "" && p.Annotations == "" {
 				continue
 			}
 			block = map[string]interface{}{"type": "text", "text": p.Text}
@@ -194,6 +213,7 @@ func blocksOf(m *pb.EnvelopeMessage) []interface{} {
 			}
 			block = map[string]interface{}{"type": "image", "source": source}
 		case "thinking":
+			// 仅回放 Anthropic thinking 类型；Responses 使用独立内容类型。
 			if p.Signature != "" && m.Role == "assistant" {
 				block = map[string]interface{}{"type": "thinking", "thinking": p.Text, "signature": p.Signature}
 			}
@@ -204,6 +224,9 @@ func blocksOf(m *pb.EnvelopeMessage) []interface{} {
 		}
 		if block == nil {
 			continue
+		}
+		if p.Source == "anthropic" && p.Annotations != "" {
+			block["citations"] = json.RawMessage(p.Annotations)
 		}
 		if p.CacheControl != "" {
 			block["cache_control"] = rawJSON(p.CacheControl)
@@ -222,9 +245,11 @@ type Parser struct {
 }
 
 type blockInfo struct {
-	kind string // text / tool_use
-	id   string
-	name string
+	kind    string // text / tool_use
+	id      string
+	name    string
+	input   string
+	emitted bool
 }
 
 func NewParser(emit func(*pb.StreamEvent)) *Parser {
@@ -248,6 +273,9 @@ func (u *anthUsage) toEnvelope() *pb.Usage {
 
 // Feed 处理一行（"event: xxx" 与 "data: {...}"）。
 func (p *Parser) Feed(line string) {
+	if p.sentFinish {
+		return
+	}
 	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, "data:") {
 		return
@@ -257,6 +285,11 @@ func (p *Parser) Feed(line string) {
 		return
 	}
 	var ev struct {
+		Error *struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Status  int32  `json:"status"`
+		} `json:"error"`
 		Type    string `json:"type"`
 		Index   int    `json:"index"`
 		Message struct {
@@ -264,24 +297,33 @@ func (p *Parser) Feed(line string) {
 			Usage *anthUsage `json:"usage"`
 		} `json:"message"`
 		ContentBlock struct {
-			Type  string          `json:"type"`
-			ID    string          `json:"id"`
-			Name  string          `json:"name"`
-			Input json.RawMessage `json:"input"`
-			Text  string          `json:"text"`
+			Thinking  string            `json:"thinking"`
+			Signature string            `json:"signature"`
+			Type      string            `json:"type"`
+			ID        string            `json:"id"`
+			Name      string            `json:"name"`
+			Input     json.RawMessage   `json:"input"`
+			Text      string            `json:"text"`
+			Citations []json.RawMessage `json:"citations"`
 		} `json:"content_block"`
 		Delta struct {
-			Type        string `json:"type"`
-			Text        string `json:"text"`
-			PartialJSON string `json:"partial_json"`
-			Thinking    string `json:"thinking"`
-			Signature   string `json:"signature"`
-			StopReason  string `json:"stop_reason"`
-			StopSeq     string `json:"stop_sequence"`
+			Type        string          `json:"type"`
+			Citation    json.RawMessage `json:"citation"`
+			Text        string          `json:"text"`
+			PartialJSON string          `json:"partial_json"`
+			Thinking    string          `json:"thinking"`
+			Signature   string          `json:"signature"`
+			StopReason  string          `json:"stop_reason"`
+			StopSeq     string          `json:"stop_sequence"`
 		} `json:"delta"`
 		Usage *anthUsage `json:"usage"`
 	}
 	if err := json.Unmarshal([]byte(payload), &ev); err != nil {
+		p.FinishWithError(502, "invalid upstream JSON")
+		return
+	}
+	if ev.Error != nil {
+		p.FinishWithError(streamutil.ErrorCode(ev.Error.Type, ev.Error.Status), ev.Error.Message)
 		return
 	}
 	switch ev.Type {
@@ -293,12 +335,37 @@ func (p *Parser) Feed(line string) {
 		}
 		p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_MessageStart{MessageStart: start}})
 	case "content_block_start":
-		p.blocks[ev.Index] = blockInfo{kind: ev.ContentBlock.Type, id: ev.ContentBlock.ID, name: ev.ContentBlock.Name}
+		switch ev.ContentBlock.Type {
+		case "text", "thinking", "tool_use":
+		default:
+			p.FinishWithError(502, "unsupported upstream content block: "+ev.ContentBlock.Type)
+			return
+		}
+		if ev.ContentBlock.Type == "tool_use" && (ev.ContentBlock.ID == "" || ev.ContentBlock.Name == "") {
+			p.FinishWithError(502, "tool block has no identity")
+			return
+		}
+		p.blocks[ev.Index] = blockInfo{kind: ev.ContentBlock.Type, id: ev.ContentBlock.ID, name: ev.ContentBlock.Name, input: string(ev.ContentBlock.Input)}
+		if ev.ContentBlock.Type == "thinking" && (ev.ContentBlock.Thinking != "" || ev.ContentBlock.Signature != "") {
+			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ReasoningDelta{ReasoningDelta: &pb.ReasoningDelta{Text: ev.ContentBlock.Thinking, Signature: ev.ContentBlock.Signature}}})
+		}
+		if ev.ContentBlock.Type == "text" && ev.ContentBlock.Text != "" {
+			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{ContentDelta: &pb.ContentDelta{Text: ev.ContentBlock.Text, Source: "anthropic", BlockId: fmt.Sprint(ev.Index)}}})
+		}
+		if len(ev.ContentBlock.Citations) > 0 {
+			raw, _ := json.Marshal(ev.ContentBlock.Citations)
+			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{ContentDelta: &pb.ContentDelta{Annotations: string(raw), Source: "anthropic", BlockId: fmt.Sprint(ev.Index)}}})
+		}
+	case "content_block_stop":
+		p.flushTool(ev.Index)
 	case "content_block_delta":
 		switch ev.Delta.Type {
+		case "citations_delta":
+			raw, _ := json.Marshal([]json.RawMessage{ev.Delta.Citation})
+			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{ContentDelta: &pb.ContentDelta{Annotations: string(raw), Source: "anthropic", BlockId: fmt.Sprint(ev.Index)}}})
 		case "text_delta":
 			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{
-				ContentDelta: &pb.ContentDelta{Text: ev.Delta.Text},
+				ContentDelta: &pb.ContentDelta{Text: ev.Delta.Text, Source: "anthropic", BlockId: fmt.Sprint(ev.Index)},
 			}})
 		case "thinking_delta":
 			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ReasoningDelta{
@@ -310,6 +377,16 @@ func (p *Parser) Feed(line string) {
 			}})
 		case "input_json_delta":
 			info := p.blocks[ev.Index]
+			if info.id == "" || info.kind != "tool_use" {
+				p.FinishWithError(502, "tool delta without block identity")
+				return
+			}
+			if info.input != "" && info.input != "{}" {
+				p.FinishWithError(502, "conflicting initial tool arguments")
+				return
+			}
+			info.emitted = true
+			p.blocks[ev.Index] = info
 			p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{
 				ToolCallDelta: &pb.ToolCallDelta{
 					Id: info.id, Name: info.name, ArgumentsDelta: ev.Delta.PartialJSON,
@@ -331,19 +408,43 @@ func (p *Parser) Feed(line string) {
 
 // Finish 流结束兜底。
 func (p *Parser) Finish() {
-	p.finish("stop", "")
+	if !p.sentFinish {
+		p.FinishWithError(502, "upstream ended before a terminal event")
+	}
 }
 
 // FinishWithError 流异常结束：发失败事件。
 func (p *Parser) FinishWithError(code int32, message string) {
+	if p.sentFinish {
+		return
+	}
+	p.sentFinish = true
 	p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_TaskFailed{
 		TaskFailed: &pb.TaskFailed{Error: &pb.Error{Code: code, Message: message}},
 	}})
 }
 
+func (p *Parser) flushTool(index int) {
+	info := p.blocks[index]
+	if info.kind != "tool_use" || info.emitted {
+		return
+	}
+	info.emitted = true
+	p.blocks[index] = info
+	p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_ToolCallDelta{ToolCallDelta: &pb.ToolCallDelta{Id: info.id, Name: info.name, ArgumentsDelta: orDefault(info.input, "{}")}}})
+}
+
 func (p *Parser) finish(reason, stopSeq string) {
 	if p.sentFinish {
 		return
+	}
+	indices := make([]int, 0, len(p.blocks))
+	for index := range p.blocks {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	for _, index := range indices {
+		p.flushTool(index)
 	}
 	p.sentFinish = true
 	p.emit(&pb.StreamEvent{Event: &pb.StreamEvent_MessageFinish{

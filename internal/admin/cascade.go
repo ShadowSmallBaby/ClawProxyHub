@@ -158,22 +158,38 @@ func (s *Server) cascadeDelete(sc cascadeScope) error {
 		}
 		for id, keep := range sc.prune {
 			b, _ := json.Marshal(keep)
-			tx.Model(&model.TaskRule{}).Where("id = ?", id).Update("target_json", string(b))
+			if err := tx.Model(&model.TaskRule{}).Where("id = ?", id).Update("target_json", string(b)).Error; err != nil {
+				return err
+			}
 		}
 		if len(sc.rules) > 0 {
-			tx.Where("id IN ?", sc.rules).Delete(&model.TaskRule{})
+			if err := tx.Where("id IN ?", sc.rules).Delete(&model.TaskRule{}).Error; err != nil {
+				return err
+			}
 		}
 		if len(sc.accounts) > 0 {
-			tx.Where("account_id IN ?", sc.accounts).Delete(&model.AccountGroup{})
-			tx.Where("account_id IN ?", sc.accounts).Delete(&model.AccountProxy{})
-			tx.Where("id IN ?", sc.accounts).Delete(&model.Account{})
+			if err := tx.Where("account_id IN ?", sc.accounts).Delete(&model.AccountGroup{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("account_id IN ?", sc.accounts).Delete(&model.AccountProxy{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("id IN ?", sc.accounts).Delete(&model.Account{}).Error; err != nil {
+				return err
+			}
 		}
 		if len(sc.groups) > 0 {
-			tx.Where("group_id IN ?", sc.groups).Delete(&model.GroupProxy{})
-			tx.Where("id IN ?", sc.groups).Delete(&model.Group{})
+			if err := tx.Where("group_id IN ?", sc.groups).Delete(&model.GroupProxy{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("id IN ?", sc.groups).Delete(&model.Group{}).Error; err != nil {
+				return err
+			}
 		}
 		if len(sc.instances) > 0 {
-			tx.Where("id IN ?", sc.instances).Delete(&model.Instance{})
+			if err := tx.Where("id IN ?", sc.instances).Delete(&model.Instance{}).Error; err != nil {
+				return err
+			}
 		}
 		return tx.Error
 	})

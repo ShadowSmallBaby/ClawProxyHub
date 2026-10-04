@@ -220,6 +220,9 @@ message ContentPart {
   // 提示缓存断点（Anthropic cache_control 对象 JSON，如 {"type":"ephemeral"}）。
   // 只对 Anthropic 方言上游有意义，其余上游忽略。
   string cache_control = 7;
+  string image_detail = 8; // OpenAI/Responses 图片 detail；空表示省略
+  string annotations = 9; // 来源协议的引用/注解 JSON 数组
+  string source = 10; // 注解来源：chat / responses / anthropic
 }
 
 message ToolDefinition {
@@ -259,6 +262,10 @@ message MessageStart {
 
 message ContentDelta {
   string text = 1;    // 增量文本
+  bool refusal = 2;   // 拒绝正文，text 仍供旧消费者读取
+  string annotations = 3; // 新增注解 JSON 数组，不重复发送快照已有注解
+  string source = 4; // 注解来源：chat / responses / anthropic
+  string block_id = 5; // 来源内容块身份，保留引用所属块与偏移
 }
 
 // ReasoningDelta 推理/思考增量（OpenAI reasoning_content / Anthropic thinking）。

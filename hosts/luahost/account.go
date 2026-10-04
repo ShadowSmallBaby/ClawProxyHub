@@ -13,7 +13,9 @@ func loginResultFromTable(t *lua.LTable) *pb.LoginResult {
 	if b := strField(t, "blob"); b != "" {
 		out.Blob = []byte(b)
 	}
-	out.Profile = profileFromTable(tblField(t, "profile"))
+	if profile := tblField(t, "profile"); profile != nil {
+		out.Profile = profileFromTable(profile)
+	}
 	if nx := tblField(t, "next"); nx != nil {
 		out.Next = loginNextFromTable(nx)
 	}
@@ -44,6 +46,8 @@ func refreshResultFromTable(t *lua.LTable) *pb.RefreshResult {
 	if b := strField(t, "blob"); b != "" {
 		out.Blob = []byte(b)
 	}
-	out.Profile = profileFromTable(tblField(t, "profile"))
+	if profile := tblField(t, "profile"); profile != nil {
+		out.Profile = profileFromTable(profile)
+	}
 	return out
 }

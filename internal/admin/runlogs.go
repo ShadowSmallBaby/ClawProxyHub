@@ -51,6 +51,15 @@ func (s *Server) listRunLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"db"}`, http.StatusInternalServerError)
 		return
 	}
+	if roleOf(r) != "admin" {
+		// 历史日志也可能含凭据：guest 只获得结构化概览，不返回原始文本。
+		out := make([]map[string]interface{}, 0, len(logs))
+		for _, entry := range logs {
+			out = append(out, map[string]interface{}{"id": entry.ID, "level": entry.Level, "module": entry.Module, "action": entry.Action, "message": entry.Action, "account_id": entry.AccountID, "created_at": entry.CreatedAt})
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"logs": out, "total": total})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"logs": logs, "total": total})
 }
 

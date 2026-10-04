@@ -35,13 +35,14 @@ var CoreVersion = version.Core
 
 // Manager 持有全部已启动的插件实例。
 type Manager struct {
-	mu      sync.RWMutex
-	plugins map[string]*Instance // key: plugin name
-	dir     string
-	db      *gorm.DB // plugins 表记录同步（nil = 不落库，测试用）
-	host    *HostService
-	runLog  *runlog.Logger
-	catalog map[string]string // model id → plugin name
+	installMu sync.Mutex
+	mu        sync.RWMutex
+	plugins   map[string]*Instance // key: plugin name
+	dir       string
+	db        *gorm.DB // plugins 表记录同步（nil = 不落库，测试用）
+	host      *HostService
+	runLog    *runlog.Logger
+	catalog   map[string]string // model id → plugin name
 }
 
 // Instance 一个运行中的插件子进程。
@@ -102,9 +103,15 @@ func NewManager(dir string, db *gorm.DB) *Manager {
 		catalog: map[string]string{},
 	}
 	if db != nil {
-		m.runLog = runlog.New(db, func() string { return setting.New(db).RunLevel() })
+		m.runLog = runlog.New(db, m.host.settings.RunLevel)
 	}
 	return m
+}
+
+// Configure 在启动插件前注入共享设置与凭据解密能力。
+func (m *Manager) Configure(settings *setting.Store, decrypt func([]byte) ([]byte, error)) {
+	m.host.settings, m.host.decrypt = settings, decrypt
+	m.runLog = runlog.New(m.db, settings.RunLevel)
 }
 
 // runLogger 运行日志写入器（db 为 nil 时安全返回空实现）。
@@ -176,7 +183,7 @@ func (m *Manager) pluginDirs() []string {
 	}
 	var dirs []string
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		sub := filepath.Join(m.dir, e.Name())
@@ -189,7 +196,7 @@ func (m *Manager) pluginDirs() []string {
 			continue
 		}
 		for _, ie := range inner {
-			if p := filepath.Join(sub, ie.Name()); ie.IsDir() && isPluginDir(p) {
+			if p := filepath.Join(sub, ie.Name()); ie.IsDir() && !strings.HasPrefix(ie.Name(), ".") && isPluginDir(p) {
 				dirs = append(dirs, p)
 			}
 		}
@@ -217,6 +224,9 @@ func pluginBinary(dir string) (string, error) {
 // Start 启动一个插件子进程并完成契约握手。
 // go-plugin 层按 [MinProtocolVersion, ProtocolVersion] 协商版本，旧契约插件按协商到的版本握手（线格式向后兼容）。
 func (m *Manager) Start(ctx context.Context, dir string) (*Instance, error) {
+	if manifestRuntimeAt(dir) == "lua" && m.db != nil && !m.host.settings.LuaEnabled() {
+		return nil, fmt.Errorf("Lua runtime is disabled")
+	}
 	// 由插件目录解析启动命令与插件名（lua → 共享 luahost + --dir；go → 目录内二进制）
 	name, cmd, err := m.resolveLaunch(dir)
 	if err != nil {
@@ -274,7 +284,7 @@ func (m *Manager) Start(ctx context.Context, dir string) (*Instance, error) {
 		client.Kill()
 		return nil, fmt.Errorf("plugin rejected: %s", hs.Error.Message)
 	}
-	if hs.Manifest == nil || hs.Manifest.ProtocolVersion != negotiated {
+	if hs.Manifest == nil || hs.Manifest.ProtocolVersion != negotiated || hs.Manifest.Name != name {
 		client.Kill()
 		return nil, fmt.Errorf("protocol version mismatch: negotiated=%d plugin=%d",
 			negotiated, hs.Manifest.GetProtocolVersion())
@@ -291,6 +301,15 @@ func (m *Manager) Start(ctx context.Context, dir string) (*Instance, error) {
 	m.mu.Unlock()
 	m.syncRecord(inst)
 	return inst, nil
+}
+
+// StopLua 关闭总开关后停止既有 Lua 进程；Start 同样检查开关。
+func (m *Manager) StopLua() {
+	for _, name := range m.Names() {
+		if dir, ok := m.pluginDir(name); ok && manifestRuntimeAt(dir) == "lua" {
+			m.Stop(name, false)
+		}
+	}
 }
 
 // syncRecord 每次启动成功后同步 plugins 表（版本 / 契约 / manifest 快照）；
@@ -398,8 +417,8 @@ func (m *Manager) Endpoints(name string) []string {
 func (i *Instance) Client() pb.ClawPluginClient { return i.rpc }
 
 // Chat 实现 gateway.PluginRegistry：按插件路由并泵出事件流。
-// pluginName 为空时按模型目录解析（非路由直连场景）。
-func (m *Manager) Chat(req *pb.ChatRequest, pluginName string, cred *pb.CredentialBlob) (chan *pb.StreamEvent, error) {
+// ctx 取消后事件泵退出，消费者无需 drain。pluginName 为空时按模型目录解析。
+func (m *Manager) Chat(ctx context.Context, req *pb.ChatRequest, pluginName string, cred *pb.CredentialBlob) (<-chan *pb.StreamEvent, error) {
 	if pluginName == "" {
 		var ok bool
 		pluginName, ok = m.ResolveModel(req.Model)
@@ -415,7 +434,7 @@ func (m *Manager) Chat(req *pb.ChatRequest, pluginName string, cred *pb.Credenti
 	req.Credential = cred
 	injectFingerprint(req)
 
-	stream, err := inst.rpc.Chat(context.Background(), req)
+	stream, err := inst.rpc.Chat(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("plugin chat: %w", err)
 	}
@@ -426,16 +445,23 @@ func (m *Manager) Chat(req *pb.ChatRequest, pluginName string, cred *pb.Credenti
 		for {
 			ev, err := stream.Recv()
 			if err != nil {
-				if err != io.EOF {
-					events <- &pb.StreamEvent{Event: &pb.StreamEvent_TaskFailed{
+				if ctx.Err() == nil && err != io.EOF {
+					select {
+					case events <- &pb.StreamEvent{Event: &pb.StreamEvent_TaskFailed{
 						TaskFailed: &pb.TaskFailed{Error: &pb.Error{
-							Code: 1, Message: err.Error(),
+							Code: 502, Message: err.Error(),
 						}},
-					}}
+					}}:
+					case <-ctx.Done():
+					}
 				}
 				return
 			}
-			events <- ev
+			select {
+			case events <- ev:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 	return events, nil

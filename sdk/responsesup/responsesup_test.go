@@ -8,6 +8,42 @@ import (
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
+func TestParserErrorShapes(t *testing.T) {
+	for _, tc := range []struct {
+		line    string
+		code    int32
+		message string
+	}{
+		{`data: {"type":"error","code":"rate_limit_exceeded","message":"slow down"}`, 429, "slow down"},
+		{`data: {"type":"error","error":{"type":"authentication_error","message":"bad key"}}`, 401, "bad key"},
+		{`data: {"type":"response.failed","response":{"error":{"code":"insufficient_quota","message":"quota"}}}`, 429, "quota"},
+		{`data: {"type":"error","error":{"type":"server_error","status":503,"message":"unavailable"}}`, 503, "unavailable"},
+	} {
+		events := collect([]string{tc.line, `data: {"type":"response.completed","response":{}}`})
+		if len(events) != 1 {
+			t.Fatalf("terminal not unique: %v", events)
+		}
+		err := events[0].GetTaskFailed().GetError()
+		if err.GetCode() != tc.code || err.GetMessage() != tc.message {
+			t.Fatalf("wrong error: %v", events)
+		}
+	}
+}
+
+func TestParserRefusalAndUnknownIncomplete(t *testing.T) {
+	events := collect([]string{
+		`data: {"type":"response.refusal.delta","delta":"Cannot help."}`,
+		`data: {"type":"response.completed","response":{}}`,
+	})
+	if len(events) != 2 || events[0].GetContentDelta().GetText() != "Cannot help." || events[1].GetMessageFinish().GetFinishReason() != "content_filter" {
+		t.Fatalf("refusal lost: %v", events)
+	}
+	events = collect([]string{`data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"upstream_interrupted"}}}`})
+	if len(events) != 1 || events[0].GetTaskFailed().GetError().GetCode() != 502 {
+		t.Fatalf("unknown incomplete misclassified: %v", events)
+	}
+}
+
 func collect(lines []string) []*pb.StreamEvent {
 	var out []*pb.StreamEvent
 	p := NewParser(func(ev *pb.StreamEvent) { out = append(out, ev) })
@@ -128,7 +164,7 @@ func TestParserToolCalls(t *testing.T) {
 	if toolEvents[0].Id != "call_1" || toolEvents[0].Name != "f" || toolEvents[0].ArgumentsDelta != "" {
 		t.Errorf("first tool event wrong: %+v", toolEvents[0])
 	}
-	if toolEvents[1].Id != "" || toolEvents[1].ArgumentsDelta+toolEvents[2].ArgumentsDelta != `{"a":1}` {
+	if toolEvents[1].Id != "call_1" || toolEvents[1].ArgumentsDelta+toolEvents[2].ArgumentsDelta != `{"a":1}` {
 		t.Errorf("arguments deltas wrong: %+v %+v", toolEvents[1], toolEvents[2])
 	}
 	if finish == nil || finish.FinishReason != "tool_calls" {
@@ -175,12 +211,12 @@ func TestParserIncompleteAndErrors(t *testing.T) {
 }
 
 func TestParserEmptyStreamFallback(t *testing.T) {
-	// 上游空流：Finish 补一个 stop
+	// 空流没有终态，必须报错。
 	events := collect(nil)
 	if len(events) != 1 {
 		t.Fatalf("want 1 fallback event, got %d", len(events))
 	}
-	if fin, ok := events[0].Event.(*pb.StreamEvent_MessageFinish); !ok || fin.MessageFinish.FinishReason != "stop" {
+	if fail := events[0].GetTaskFailed(); fail == nil || fail.GetError().GetCode() != 502 {
 		t.Errorf("fallback wrong: %+v", events[0])
 	}
 }

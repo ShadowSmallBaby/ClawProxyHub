@@ -16,16 +16,15 @@ export function clearToken() {
 }
 
 // getRole 从 JWT 载荷解出角色（仅前端展示/守卫用，真正边界在服务端）。
-// 非 JWT（旧 user:password 过渡态）或解析失败一律按 admin，避免误挡。
+// 未知或损坏的令牌按最低权限展示。
 export function getRole(): string {
-  const t = getToken()
-  const parts = t.split('.')
-  if (parts.length !== 3) return 'admin'
+  const parts = getToken().split('.')
+  if (parts.length !== 3) return 'guest'
   try {
     const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
-    return payload.role || 'admin'
+    return payload.role === 'admin' ? 'admin' : 'guest'
   } catch {
-    return 'admin'
+    return 'guest'
   }
 }
 
@@ -68,19 +67,30 @@ export async function requestStream(method: string, path: string, body: unknown,
   const reader = resp.body!.getReader()
   const decoder = new TextDecoder()
   let buf = ''
-  for (;;) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buf += decoder.decode(value, { stream: true })
-    let nl: number
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl).trim()
-      buf = buf.slice(nl + 1)
-      if (!line) continue
-      const ev = JSON.parse(line)
-      if (ev.error) throw new Error(ev.error)
-      onEvent(ev)
+  const consume = (line: string) => {
+    if (!line.trim()) return
+    const ev = JSON.parse(line)
+    if (ev.error) throw new Error(ev.error)
+    onEvent(ev)
+  }
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      buf += decoder.decode(value, { stream: !done })
+      let nl: number
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        consume(buf.slice(0, nl))
+        buf = buf.slice(nl + 1)
+      }
+      if (buf.length > 1024 * 1024) throw new Error('Progress event exceeds size limit')
+      if (done) {
+        consume(buf)
+        break
+      }
     }
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
   }
 }
 

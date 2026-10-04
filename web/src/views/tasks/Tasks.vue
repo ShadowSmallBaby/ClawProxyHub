@@ -1,16 +1,17 @@
 <template>
-  <div class="page">
-    <page-header v-if="!isPhone">
+  <page-layout :body-key="`${tab}:${page}:${pageSize}`" :scroll="false">
+    <template v-if="!isPhone" #header>
+      <page-header>
 
-      <t-button theme="primary" @click="openCreate">{{ $t('tasks.create') }}</t-button>
-      <t-button v-if="tab === 'runs'" theme="default" variant="outline" :loading="runsLoading" @click="refreshRuns">
-        {{ $t('tasks.refreshRuns') }}
-      </t-button>
-    </page-header>
-
-    <c-tabs v-model="tab" class="task-tabs phone-scroll">
+        <t-button theme="primary" @click="openCreate">{{ $t('tasks.create') }}</t-button>
+        <t-button v-if="tab === 'runs'" theme="default" variant="outline" :loading="runsLoading" @click="refreshRuns">
+          {{ $t('tasks.refreshRuns') }}
+        </t-button>
+      </page-header>
+    </template>
+    <c-tabs v-model="tab" fill>
       <t-tab-panel value="rules" :label="$t('tasks.tabRules')">
-        <c-table row-key="id" :data="rules" :columns="ruleColumns" height="100%" mobile-cards :phone-cols="['plugin', 'capability', 'enabled']">
+        <c-table row-key="id" :data="rules" :columns="ruleColumns" fill mobile-cards :phone-cols="['plugin', 'capability', 'enabled']">
           <template #trigger="{ row }">
             <t-tag variant="light">{{ dict(triggerDict, row.trigger_type) }}</t-tag>
           </template>
@@ -34,7 +35,7 @@
         </c-table>
       </t-tab-panel>
       <t-tab-panel value="runs" :label="$t('tasks.tabRuns')">
-        <c-table row-key="id" :data="runs" :columns="runColumns" height="100%" mobile-cards :phone-cols="['plugin', 'status', 'started_at']">
+        <c-table row-key="id" :data="runs" :columns="runColumns" fill mobile-cards :phone-cols="['plugin', 'status', 'started_at']">
           <template #status="{ row }">
             <!-- 错误信息并入状态 tooltip -->
             <t-tooltip
@@ -54,14 +55,17 @@
         </c-table>
       </t-tab-panel>
     </c-tabs>
+    <template #footer>
     <c-pagination
       class="task-pagination"
       v-model="page"
       v-model:pageSize="pageSize"
       :total="tab === 'runs' ? runTotal : ruleTotal"
       @change="onPageChange"
-      @page-size-change="onPageChange"
     />
+
+    </template>
+    <template #overlays>
 
     <c-drawer v-model:visible="createVisible" :header="editingId ? $t('tasks.editTitle') : $t('tasks.createTitle')" width="560px" :confirm-btn="{ loading: creating }" @confirm="submit">
       <t-form>
@@ -82,6 +86,7 @@
               <t-select v-model="form.trigger_type" class="w-2xs" :disabled="editingAuto" :placeholder="$t('tasks.triggerPh')">
                 <t-option value="interval" :label="$t('tasks.triggerInterval')" />
                 <t-option value="daily" :label="$t('tasks.triggerDaily')" />
+                <t-option value="cron" label="Cron" />
                 <t-option value="once" :label="$t('tasks.triggerOnce')" />
               </t-select>
               <t-date-picker
@@ -122,15 +127,16 @@
         <template #icon><add-icon /></template>
       </t-button>
     </mobile-fab>
-  </div>
+    </template>
+  </page-layout>
 </template>
 
 <script setup lang="ts">
+import { PageLayout, PageHeader } from '@/components'
 import { CTabs } from '@/components/base'
 import { FormItem } from '@/components'
 import { CDrawer } from '@/components/base'
 import { CCard, CTable, CPagination, MobileFab } from '@/components/base'
-import PageHeader from '@/components/PageHeader.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AddIcon, RefreshIcon } from 'tdesign-icons-vue-next'
@@ -147,6 +153,8 @@ const { isPhone } = useIsMobile()
 
 const tab = ref('rules')
 const rules = ref<TaskRule[]>([])
+const scheduleTimezone = ref('Asia/Shanghai')
+const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
 const runs = ref<TaskRun[]>([])
 const plugins = ref<{ id: number; name: string; label?: string }[]>([])
 const capabilities = ref<{ id: string; label: string }[]>([])
@@ -260,7 +268,8 @@ const ruleColumns = computed(() => [
   { colKey: 'instance', title: t('tasks.colInstance'), width: 120, align: 'center', ellipsis: true, cell: (_h: any, { row }: any) => row.instance || (row.target_scope === 'account_ids' ? '-' : t('tasks.allInstances')) },
   { colKey: 'capability', title: t('tasks.colTask'), align: 'center' },
   { colKey: 'trigger', title: t('tasks.colTrigger'), width: 100, align: 'center' },
-  { colKey: 'trigger_value', title: t('tasks.colTriggerValue'), width: 150, align: 'center', cell: (_h: any, { row }: any) => fmtTriggerValue(row) },
+  { colKey: 'trigger_value', title: t('tasks.colTriggerValue'), width: 190, align: 'center', cell: (_h: any, { row }: any) => ['daily', 'cron'].includes(row.trigger_type) ? `${row.trigger_value} (${scheduleTimezone.value})` : fmtTriggerValue(row) },
+  { colKey: 'next_run_at', title: t('tasks.nextRun', { zone: browserTimezone }), width: 190, align: 'center', cell: (_h: any, { row }: any) => fmtTime(row.next_run_at) },
   { colKey: 'accounts', title: t('tasks.colAccounts'), width: 160, align: 'center' },
   { colKey: 'enabled', title: t('tasks.colStatus'), width: 90, align: 'center' },
   { colKey: 'op', title: t('common.colOp'), width: 190, align: 'center' },
@@ -281,11 +290,13 @@ const runColumns = computed(() => [
 const triggerPh = computed(() => ({
   interval: '1h',
   daily: '09:00',
+  cron: '0 9 * * *',
 }[form.trigger_type] ?? ''))
 const triggerHint = computed(() => ({
   interval: t('tasks.hintInterval'),
-  daily: t('tasks.hintDaily'),
-  once: t('tasks.hintOnce'),
+  daily: t('tasks.hintDaily', { zone: scheduleTimezone.value }),
+  cron: t('tasks.hintCron', { zone: scheduleTimezone.value }),
+  once: t('tasks.hintOnce', { zone: browserTimezone }),
 }[form.trigger_type] ?? ''))
 
 // "2026-10-01 12:10" → 本地时区 RFC3339（后端按 RFC3339 计算下次触发）
@@ -309,10 +320,16 @@ function fmtTriggerValue(row: TaskRule): string {
 }
 
 // 规则分页拉取（与执行历史各自独立分页）
-async function loadRules() {
-  const r = await taskApi.rules(page.value, pageSize.value)
+async function loadRules(): Promise<void> {
+  const r = await taskApi.rules(rulePage.value, rulePageSize.value)
+  const lastPage = Math.max(1, Math.ceil(r.total / rulePageSize.value))
+  if (rulePage.value > lastPage) {
+    rulePage.value = lastPage
+    return loadRules()
+  }
   rules.value = r.rules ?? []
   ruleTotal.value = r.total ?? 0
+  scheduleTimezone.value = r.timezone
 }
 
 // 分页翻页：按当前 tab 刷新对应列表
@@ -334,7 +351,7 @@ async function load() {
 async function refreshRuns() {
   runsLoading.value = true
   try {
-    const rn = await taskApi.runs(page.value, pageSize.value)
+    const rn = await taskApi.runs(runPage.value, runPageSize.value)
     runs.value = rn.runs ?? []
     runTotal.value = rn.total ?? 0
   } finally {
@@ -400,29 +417,6 @@ onMounted(load)
 </script>
 
 <style scoped>
-.page-header,
-.task-pagination {
-  flex-shrink: 0;
-}
-.task-tabs {
-  /* 占满剩余空间；min-height:0 允许收缩以触发表格内部滚动 */
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-:deep(.t-tabs__content) {
-  flex: 1;
-  min-height: 0;
-}
-:deep(.t-tab-panel),
-:deep(.task-tabs .t-table) {
-  /* 把 height:100% 的高度链一路传到表格滚动容器 */
-  height: 100%;
-}
-.task-pagination {
-  margin-top: 12px;
-}
 .trigger-box {
   width: 100%;
 }
@@ -441,4 +435,3 @@ onMounted(load)
   line-height: 1.5;
 }
 </style>
-

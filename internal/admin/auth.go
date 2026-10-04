@@ -8,14 +8,24 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 )
 
 // ctxKeyRole 请求上下文里的当前角色键。
 type ctxKeyRole struct{}
+
+func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if roleOf(r) == "admin" {
+		return true
+	}
+	http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+	return false
+}
 
 // roleOf 从上下文取角色，缺省 guest。
 func roleOf(r *http.Request) string {
@@ -59,7 +69,8 @@ func (s *Server) createUser(username, password string) bool {
 	if err != nil {
 		return false
 	}
-	return s.db.Create(&model.User{Username: username, PasswordHash: string(hash), Role: "admin"}).Error == nil
+	result := s.db.Exec(`INSERT INTO users (username, password_hash, role, created_at, updated_at) SELECT ?, ?, 'admin', ?, ? WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')`, username, string(hash), time.Now().UTC(), time.Now().UTC())
+	return result.Error == nil && result.RowsAffected == 1
 }
 
 // auth 管理员鉴权：只认 JWT Bearer（解析 role，免 bcrypt）。
@@ -114,12 +125,21 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !readBody(w, r, &body) {
 		return
 	}
+	if len(body.Username) > 32 || !s.limiter.allow(r, body.Username) {
+		w.Header().Set("Retry-After", "60")
+		http.Error(w, `{"error":"too many login attempts"}`, http.StatusTooManyRequests)
+		return
+	}
 	if !s.verifyPassword(body.Username, body.Password) {
 		http.Error(w, `{"error":"invalid credentials"}`, http.StatusUnauthorized)
 		return
 	}
 	role := s.roleOfUser(body.Username)
-	token := s.signJWT(body.Username, role)
+	token, err := s.signJWT(body.Username, role)
+	if err != nil {
+		http.Error(w, `{"error":"session unavailable"}`, http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"token": token, "role": role})
 }
 
@@ -238,8 +258,11 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
 		return
 	}
-	s.db.Model(&model.User{}).Where("username = ?", username).
-		Update("password_hash", string(hash))
+	if err := s.db.Model(&model.User{}).Where("username = ?", username).
+		Updates(map[string]interface{}{"password_hash": string(hash), "auth_version": gorm.Expr("auth_version + 1")}).Error; err != nil {
+		http.Error(w, `{"error":"password update failed"}`, http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"changed": true})
 }
 
@@ -249,6 +272,9 @@ func validateCredentials(username, password string) string {
 	}
 	if len(password) < 6 {
 		return "密码至少 6 位"
+	}
+	if len(password) > 72 {
+		return "密码不超过 72 字节"
 	}
 	return ""
 }

@@ -4,7 +4,10 @@ package admin
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
@@ -74,15 +77,54 @@ type instanceBody struct {
 	Settings json.RawMessage `json:"settings"`
 }
 
-// normalize 清洗输入：名称必填、base_url 去尾斜杠、settings 须为 JSON 对象。
+// validHost 校验 URL 语义 host：域名 / IPv4 / IPv6 / localhost / 短主机名（自托管内网合法）。
+func validHost(host string) bool {
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if host == "" || len(host) > 253 || strings.Trim(host, "0123456789.") == "" {
+		return false
+	}
+	for _, label := range strings.Split(strings.TrimSuffix(host, "."), ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// validBaseURL 允许内网、IPv6 与基础路径，禁止 URL 内夹带凭据、查询和片段。
+func validBaseURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || !validHost(u.Hostname()) || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
+		return false
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return false
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return false
+		}
+	}
+	return true
+}
+
+// normalize 清洗输入：名称必填、base_url 解析校验、settings 须为 JSON 对象。
 func (b *instanceBody) normalize() (string, bool) {
 	b.Name = strings.TrimSpace(b.Name)
 	b.BaseURL = strings.TrimRight(strings.TrimSpace(b.BaseURL), "/")
 	if b.Name == "" {
 		return "name required", false
 	}
-	if !strings.HasPrefix(b.BaseURL, "http://") && !strings.HasPrefix(b.BaseURL, "https://") {
-		return "base_url required (http:// or https://)", false
+	if !validBaseURL(b.BaseURL) {
+		return "base_url required (http:// or https:// with valid host)", false
 	}
 	if len(b.Settings) == 0 {
 		b.Settings = json.RawMessage("{}")

@@ -9,7 +9,7 @@ services:
     environment:
       # 首次启动引导管理员（之后以数据库为准，改密码后本变量失效）
       CPH_ADMIN_USERNAME: admin
-      CPH_ADMIN_PASSWORD: change-me
+      CPH_ADMIN_PASSWORD: ${CPH_ADMIN_PASSWORD:?Set a unique administrator password before starting}
       # 可选：首启引导调用密钥
       # CPH_SEED_API_KEY: cph-xxxx
     volumes:

@@ -1,5 +1,5 @@
 {
-  "version": "1.5.0",
+  "version": "1.5.2",
   "release_url": "https://github.com/ShadowSmallBaby/ClawProxyHub/releases",
   "changelog": {
     "title": {
@@ -8,16 +8,28 @@
     },
     "items": [
       {
-        "zh": "管理后台全面移动端适配：手机可完整使用，可安装为 PWA",
-        "en": "The dashboard is now fully mobile-friendly and installable as a PWA"
+        "zh": "补齐三协议工具与结构化输出转换，保留图片 detail、同协议参数、引用注解及拒绝结构，修复 SSE 分帧与最终快照恢复",
+        "en": "Improved tool and structured-output conversion across three protocols; preserved image detail, native options, annotations and refusal structures; fixed SSE framing and final snapshot recovery"
       },
       {
-        "zh": "桌面端布局固定：侧栏/头部锁定，内容区稳定滚动不漂移",
-        "en": "Desktop layout fixed: pinned sidebar/header, stable scrolling content area"
+        "zh": "任务支持自定义时区，默认北京时间；时区与每日随机偏移统一保存，手机端也可操作",
+        "en": "Task scheduling now supports configurable timezones, defaulting to Asia/Shanghai, with a shared save action for timezone and daily jitter on desktop and mobile"
       },
       {
-        "zh": "在线编辑器暗色观感修复：选中/光标/补全清晰可见，恢复 Ctrl+Z",
-        "en": "Online editor dark theme fixes: visible selection/cursor/autocomplete, Ctrl+Z restored"
+        "zh": "统一固定页头、内容滚动与底部分页，补齐账号、实例、分组、代理、路由、密钥、凭证及插件列表分页",
+        "en": "Consistent fixed headers, scrolling content and pagination, with pagination added to accounts, instances, groups, proxies, routes, keys, OAuth credentials and installed plugins"
+      },
+      {
+        "zh": "修复流式响应中断、工具调用与取消处理，网关继续兼容旧插件",
+        "en": "Fixes for interrupted streams, tool calls and cancellation while preserving gateway compatibility with older plugins"
+      },
+      {
+        "zh": "完善凭据加密、密钥授权与登录会话管理，增强插件安装及备份恢复可靠性",
+        "en": "Improved credential encryption, API key permissions and login session management, with more reliable plugin installation and backup restore"
+      },
+      {
+        "zh": "修复登录表单间距和任务调度阻塞，发布构建支持 SQLite 并复用前端产物",
+        "en": "Fixes for login form spacing and blocked task scheduling; release builds enable SQLite support and reuse the web build"
       }
     ]
   }

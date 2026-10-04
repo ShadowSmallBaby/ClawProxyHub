@@ -1,5 +1,6 @@
 // 通用组件统一出口。
 export { default as PageHeader } from './PageHeader.vue'
+export { default as PageLayout } from './PageLayout.vue'
 export { default as FormItem } from './FormItem.vue'
 export { default as SysInfoCard } from './SysInfoCard.vue'
 export { default as EllipsisCell } from './EllipsisCell.vue'

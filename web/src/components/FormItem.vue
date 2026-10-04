@@ -1,6 +1,6 @@
 <!-- FormItem — 表单行：label + 必填角标 + 提示角标（悬浮 tooltip），内容走默认插槽。 -->
 <template>
-  <div class="s-form-item">
+  <div class="s-form-item" :class="{ 'is-stacked': stacked }">
     <div class="s-form-label">
       <span>{{ label }}</span>
       <span v-if="mark" class="s-form-mark">*</span>
@@ -22,6 +22,7 @@ defineProps<{
   tip?: string
   // 必填角标
   mark?: boolean
+  stacked?: boolean
 }>()
 </script>
 
@@ -54,6 +55,14 @@ defineProps<{
   flex: 1;
   min-width: 0;
 }
+.s-form-item.is-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.is-stacked .s-form-label {
+  width: auto;
+}
 /* 手机端：标签置顶 + 内容撑满 */
 @media (max-width: 767px) {
   .s-form-item {
@@ -66,6 +75,7 @@ defineProps<{
   }
   .s-form-control :deep(.t-input),
   .s-form-control :deep(.t-select),
+  .s-form-control :deep(.t-auto-complete),
   .s-form-control :deep(.t-input-number),
   .s-form-control :deep(.t-input__wrap),
   .s-form-control :deep(.t-textarea) {

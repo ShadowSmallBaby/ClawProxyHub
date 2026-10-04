@@ -3,6 +3,7 @@ package setting
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -102,40 +103,80 @@ const defaultLuaUpdateMode = "manual"
 
 // Store 设置存储。
 type Store struct {
-	db    *gorm.DB
-	mu    sync.RWMutex
-	cache map[string]string
+	db      *gorm.DB
+	mu      sync.RWMutex
+	cache   map[string]string
+	missing map[string]bool
 }
 
 func New(db *gorm.DB) *Store {
-	return &Store{db: db, cache: map[string]string{}}
+	return &Store{db: db, cache: map[string]string{}, missing: map[string]bool{}}
 }
 
 // Get 读设置，缺省返回 def。
 func (s *Store) Get(key, def string) string {
-	s.mu.RLock()
-	v, ok := s.cache[key]
-	s.mu.RUnlock()
-	if ok {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if v, ok := s.cache[key]; ok {
 		return v
+	}
+	if s.missing[key] {
+		return def
 	}
 	var rec model.Setting
 	if err := s.db.Where("key = ?", key).First(&rec).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			s.missing[key] = true
+		}
 		return def
 	}
-	s.mu.Lock()
 	s.cache[key] = rec.Value
-	s.mu.Unlock()
 	return rec.Value
 }
 
-// Set 写设置（upsert + 刷新缓存）。
-func (s *Store) Set(key, value string) {
-	s.db.Exec(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`, key, value)
+// Set 写成功后才更新缓存。
+func (s *Store) Set(key, value string) error {
+	return s.SetMany(map[string]string{key: value})
+}
+
+// SetMany 原子保存一组设置，失败时缓存与数据库均不变。
+func (s *Store) SetMany(values map[string]string) error {
+	if zone, ok := values[KeyTimezone]; ok {
+		if err := ValidateTimezone(zone); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
-	s.cache[key] = value
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if zone, ok := values[KeyTimezone]; ok {
+			var previous model.Setting
+			err := tx.Where("key = ?", KeyTimezone).First(&previous).Error
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			if previous.Value != zone {
+				// 时区与日历规则失效一并提交，固定间隔和一次性任务保持原时间点。
+				if err := tx.Model(&model.TaskRule{}).Where("trigger_type IN ?", []string{"daily", "cron"}).Update("next_run_at", nil).Error; err != nil {
+					return err
+				}
+			}
+		}
+		for key, value := range values {
+			if err := tx.Exec(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`, key, value).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for key, value := range values {
+		s.cache[key] = value
+		delete(s.missing, key)
+	}
+	return nil
 }
 
 // FirstTokenTimeout 网关首字超时；非法值回退默认。
@@ -308,4 +349,13 @@ func (s *Store) EnsureDefault(key, def string) {
 	if err := s.db.Where("key = ?", key).First(&rec).Error; err != nil {
 		s.Set(key, def)
 	}
+}
+
+// RetentionDays 运行和任务日志使用独立保留期，默认 30 天；0 表示永久。
+func (s *Store) RetentionDays(key string) int {
+	n, err := strconv.Atoi(s.Get(key, "30"))
+	if err != nil || n < 0 {
+		return 30
+	}
+	return n
 }

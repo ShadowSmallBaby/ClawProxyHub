@@ -2,6 +2,7 @@
 package sdk
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -37,7 +38,7 @@ type HTTPResponse struct {
 	Body   []byte // 原始响应体（流式响应为已读部分）
 }
 
-var defaultSensitive = []string{"api-key", "authorization", "cookie", "x-api-key", "set-cookie"}
+var defaultSensitive = []string{"api-key", "authorization", "cookie", "x-api-key", "set-cookie", "x-ima-cookie"}
 
 // redactHeaders 打码敏感头（日志用；多值头以 "; " 合并）。
 func redactHeaders(h http.Header, sensitive []string) map[string]string {
@@ -48,7 +49,7 @@ func redactHeaders(h http.Header, sensitive []string) map[string]string {
 	out := map[string]string{}
 	for k, vs := range h {
 		v := strings.Join(vs, "; ")
-		if mask[strings.ToLower(k)] {
+		if mask[strings.ToLower(k)] || sensitiveHeader(k) {
 			v = redactValue(v)
 		}
 		out[k] = v
@@ -56,15 +57,32 @@ func redactHeaders(h http.Header, sensitive []string) map[string]string {
 	return out
 }
 
-// redactValue 值打码：保留前 4 后 4 字符，中间 …（短值全打码）。
-func redactValue(v string) string {
-	if len(v) <= 12 {
-		return "***"
+// redactValue 敏感值统一隐藏。
+func redactValue(v string) string { return "***" }
+
+func sensitiveHeader(key string) bool {
+	key = strings.ToLower(key)
+	for _, part := range []string{"authorization", "cookie", "token", "secret", "password", "api-key", "api_key", "session"} {
+		if strings.Contains(key, part) {
+			return true
+		}
 	}
-	return v[:4] + "…" + v[len(v)-4:]
+	return false
 }
 
-// HTTPPost 发送 JSON POST（debug 级统一日志：原始请求/原始响应，可直接复制复现）。
+// logURL 不记录查询值或 URL 内的认证信息。
+func logURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "[invalid URL]"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
+// HTTPPost 发送 JSON POST，debug 日志仅记录脱敏后的地址、请求头与响应状态。
 // 响应体全量读回（调用方解析），错误一并返回。
 func (h *Host) HTTPPost(ctx context.Context, r HTTPRequest, client *http.Client) (*HTTPResponse, error) {
 	if r.Method == "" {
@@ -83,22 +101,24 @@ func (h *Host) HTTPPost(ctx context.Context, r HTTPRequest, client *http.Client)
 	h.logRequest(r, req.Header)
 	resp, err := doHTTP(client, req)
 	if err != nil {
-		h.LogFields("debug", "http 响应错误: "+r.Method+" "+r.URL, map[string]string{"action": "http", "detail": err.Error()})
+		h.LogFields("debug", "http 响应错误: "+r.Method+" "+logURL(r.URL), map[string]string{"action": "http", "detail": err.Error()})
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, readErr := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, (32<<20)+1))
+	if len(body) > 32<<20 {
+		return nil, fmt.Errorf("upstream response exceeds 32 MiB")
+	}
 	hr := &HTTPResponse{Status: resp.StatusCode, Header: resp.Header, Body: body}
 	h.logResponse(r, hr, readErr)
-	return hr, nil
+	return hr, readErr
 }
 
 // HTTPStream 发送流式请求并逐行回调 SSE（event, data）或原始行。
-// debug 级记录请求 + 完整响应流（拼接后一次性落日志）。
+// debug 日志不记录响应正文。
 //
 // Deprecated: 用 StreamSSE（行级 SSEParser + 统一日志 + 可选 Proxy 自建 client）。
-func (h *Host) HTTPStream(ctx context.Context, r HTTPRequest, client *http.Client,
-	onEvent func(event, data string) error) (*HTTPResponse, error) {
+func (h *Host) HTTPStream(ctx context.Context, r HTTPRequest, client *http.Client, onEvent func(string, string) error) (*HTTPResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, r.Method, r.URL, bytes.NewReader(r.Body))
 	if err != nil {
 		return nil, err
@@ -106,86 +126,78 @@ func (h *Host) HTTPStream(ctx context.Context, r HTTPRequest, client *http.Clien
 	for k, v := range r.Headers {
 		req.Header.Set(k, v)
 	}
+	if client == nil {
+		client = UpstreamClient(ProxyURL(r.Proxy))
+	}
 	h.logRequest(r, req.Header)
 	resp, err := doHTTP(client, req)
 	if err != nil {
-		h.LogFields("debug", "http 流响应错误: "+r.Method+" "+r.URL, map[string]string{"action": "http", "detail": err.Error()})
 		return nil, err
 	}
 	defer resp.Body.Close()
 	hr := &HTTPResponse{Status: resp.StatusCode, Header: resp.Header}
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		hr.Body = body
+		hr.Body = readLimited(resp.Body, 8192)
 		h.logResponse(r, hr, nil)
 		return hr, nil
 	}
-	// SSE 逐行扫描：event:/data: 行按空行分块；同时拼接原始流供日志
-	var rawStream bytes.Buffer
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 1<<20)
 	var event string
-	var datas []string
+	var data []string
+	size := 0
 	flush := func() error {
-		if event == "" && len(datas) == 0 {
+		if event == "" && len(data) == 0 {
 			return nil
 		}
-		rawStream.WriteString("event: " + event + "\ndata: " + strings.Join(datas, "\n") + "\n\n")
-		e := onEvent(event, strings.Join(datas, "\n"))
+		err := onEvent(event, strings.Join(data, "\n"))
 		event = ""
-		datas = nil
-		return e
+		data = nil
+		size = 0
+		return err
 	}
-	buf := make([]byte, 64*1024)
-	var carry []byte
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			rawStream.Write(buf[:n])
-			carry = append(carry, buf[:n]...)
-			for {
-				block, rest, ok := splitBlock(carry)
-				if !ok {
-					break
-				}
-				carry = rest
-				ev, ds := parseBlock(block)
-				event = ev
-				datas = ds
-				if err := flush(); err != nil {
-					h.Log("debug", "cph-http 流结束(回调中断): "+r.Method+" "+r.URL+"\n"+rawStream.String())
-					return hr, err
-				}
-			}
+	for scanner.Scan() {
+		line := scanner.Text()
+		size += len(line)
+		if size > 1<<20 {
+			return hr, fmt.Errorf("SSE frame too large")
 		}
-		if readErr != nil {
-			if len(carry) > 0 {
-				ev, ds := parseBlock(string(carry))
-				event, datas = ev, ds
-				_ = flush()
+		if line == "" {
+			if err = flush(); err != nil {
+				return hr, err
 			}
-			break
+		} else if v, ok := strings.CutPrefix(line, "event:"); ok {
+			event = strings.TrimSpace(v)
+		} else if v, ok := strings.CutPrefix(line, "data:"); ok {
+			data = append(data, strings.TrimSpace(v))
 		}
 	}
-	h.logResponse(r, &HTTPResponse{Status: resp.StatusCode, Header: resp.Header, Body: rawStream.Bytes()}, nil)
+	if err = scanner.Err(); err != nil {
+		return hr, err
+	}
+	if err = flush(); err != nil {
+		return hr, err
+	}
+	h.logResponse(r, hr, nil)
 	return hr, nil
 }
 
-// logRequest / logResponse debug 级日志（请求/响应完整，敏感头中的凭据值打码）。
-// 走 LogFields（action=http），message 带 URL 作出处，body 在 detail 里便于排查。
+// logRequest / logResponse 记录 HTTP 概览与脱敏头，不保留正文。
 func (h *Host) logRequest(r HTTPRequest, actual http.Header) {
-	h.LogFields("debug", "http 请求: "+r.Method+" "+r.URL, map[string]string{
+	h.LogFields("debug", "http 请求: "+r.Method+" "+logURL(r.URL), map[string]string{
 		"action": "http",
-		"detail": "headers: " + jsonObject(redactHeaders(actual, r.Sensitive)) + "\nbody: " + string(r.Body),
+		"detail": "headers: " + jsonObject(redactHeaders(actual, r.Sensitive)) + "\nbody: [omitted]",
 	})
 }
 
 func (h *Host) logResponse(r HTTPRequest, hr *HTTPResponse, readErr error) {
 	note := ""
 	if readErr != nil {
-		note = "\n(读响应体出错: " + readErr.Error() + ")"
+		note = "\n(response body read failed)"
 	}
-	h.LogFields("debug", "http 响应: "+r.Method+" "+r.URL+" status="+strconv.Itoa(hr.Status), map[string]string{
+	h.LogFields("debug", "http 响应: "+r.Method+" "+logURL(r.URL)+" status="+strconv.Itoa(hr.Status), map[string]string{
 		"action": "http",
-		"detail": "headers: " + jsonObject(redactHeaders(hr.Header, r.Sensitive)) + "\nbody: " + string(hr.Body) + note,
+		"detail": "headers: " + jsonObject(redactHeaders(hr.Header, r.Sensitive)) + "\nbody: [omitted]" + note,
 	})
 }
 
@@ -203,7 +215,7 @@ func ProxyURL(p *pb.ProxyConfig) string {
 	}
 	u := &url.URL{
 		Scheme: orStr(p.GetScheme(), "http"),
-		Host:   fmt.Sprintf("%s:%d", p.GetHost(), p.GetPort()),
+		Host:   net.JoinHostPort(strings.Trim(p.GetHost(), "[]"), strconv.Itoa(int(p.GetPort()))),
 	}
 	if p.GetUsername() != "" {
 		u.User = url.UserPassword(p.GetUsername(), p.GetPassword())

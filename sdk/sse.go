@@ -3,8 +3,10 @@
 package sdk
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -38,7 +40,7 @@ func (h *Host) StreamSSE(ctx context.Context, r HTTPRequest, client *http.Client
 	h.logRequest(r, req.Header)
 	resp, err := doHTTP(client, req)
 	if err != nil {
-		h.LogFields("debug", "http 流响应错误: "+r.Method+" "+r.URL, map[string]string{"action": "http", "detail": err.Error()})
+		h.LogFields("debug", "http 流响应错误: "+r.Method+" "+logURL(r.URL), map[string]string{"action": "http", "detail": err.Error()})
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -48,9 +50,9 @@ func (h *Host) StreamSSE(ctx context.Context, r HTTPRequest, client *http.Client
 		h.logResponse(r, hr, nil)
 		return hr, nil
 	}
-	raw := scanSSELines(resp.Body, parser)
-	h.logResponse(r, &HTTPResponse{Status: resp.StatusCode, Header: resp.Header, Body: []byte(raw)}, nil)
-	return hr, nil
+	readErr := scanSSELines(resp.Body, parser)
+	h.logResponse(r, hr, readErr)
+	return hr, readErr
 }
 
 // StreamRaw 异形帧上游的逃生口：发请求 + 打码日志 + 按 Proxy 自建 client，
@@ -74,14 +76,14 @@ func (h *Host) StreamRaw(ctx context.Context, r HTTPRequest, client *http.Client
 	h.logRequest(r, req.Header)
 	resp, err := doHTTP(client, req)
 	if err != nil {
-		h.LogFields("debug", "http 流响应错误: "+r.Method+" "+r.URL, map[string]string{"action": "http", "detail": err.Error()})
+		h.LogFields("debug", "http 流响应错误: "+r.Method+" "+logURL(r.URL), map[string]string{"action": "http", "detail": err.Error()})
 		return nil, err
 	}
 	defer resp.Body.Close()
 	hr := &HTTPResponse{Status: resp.StatusCode, Header: resp.Header}
-	cw := &capWriter{cap: 1 << 20}
-	cbErr := onStream(resp.StatusCode, io.TeeReader(resp.Body, cw))
-	hr.Body = cw.buf.Bytes()
+	capture := &capWriter{cap: 64 << 10}
+	cbErr := onStream(resp.StatusCode, io.TeeReader(resp.Body, capture))
+	hr.Body = capture.buf.Bytes()
 	h.logResponse(r, hr, nil)
 	return hr, cbErr
 }
@@ -105,55 +107,105 @@ func (c *capWriter) Write(p []byte) (int, error) {
 
 // ScanSSE 逐行扫描一个已打开的 SSE body 并驱动 parser（不发请求、不记日志）。
 // 供已自行发起请求的调用方复用；新代码优先用 StreamSSE（带统一日志）。
-func ScanSSE(body io.Reader, parser SSEParser) error {
-	scanSSELines(body, parser)
+func ScanSSE(body io.Reader, parser SSEParser) error { return scanSSELines(body, parser) }
+
+// ScanSSEWithLimit 为已约定较大帧的上游保留独立事件上限。
+func ScanSSEWithLimit(body io.Reader, parser SSEParser, maxEventBytes int) error {
+	if maxEventBytes <= 0 {
+		maxEventBytes = 1 << 20
+	}
+	return scanSSELimit(body, parser, maxEventBytes)
+}
+
+// 按事件组装 data，终态合法性由各协议 parser 的 Finish 检查。
+func scanSSELines(body io.Reader, parser SSEParser) error {
+	return scanSSELimit(body, parser, 1<<20)
+}
+
+func scanSSELimit(body io.Reader, parser SSEParser, maxEventBytes int) error {
+	err := ReadSSE(body, maxEventBytes, func(line string) error { parser.Feed(line); return nil })
+	if err != nil {
+		parser.FinishWithError(502, err.Error())
+		return err
+	}
+	parser.Finish()
 	return nil
 }
 
-// scanSSELines 逐行读 body 喂 parser，返回原始流（供日志）。
-// 无 data 事件=空流(502)，非 EOF 断流(502)，正常结束 Finish。
-func scanSSELines(body io.Reader, parser SSEParser) string {
-	var rawStream strings.Builder
-	tmp := make([]byte, 64*1024)
-	var pending string
+// ReadSSE 合并多行 data；回调返回 io.EOF 可正常提前结束。
+func ReadSSE(body io.Reader, maxEventBytes int, emit func(string) error) error {
+	if maxEventBytes <= 0 {
+		maxEventBytes = 1 << 20
+	}
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, min(64*1024, maxEventBytes)), maxEventBytes)
 	sawEvent := false
-	for {
-		n, err := body.Read(tmp)
-		if n > 0 {
-			rawStream.Write(tmp[:n])
-			scanned := pending + string(tmp[:n])
-			pending = ""
-			for {
-				i := strings.IndexByte(scanned, '\n')
-				if i < 0 {
-					break
-				}
-				line := strings.TrimSuffix(scanned[:i], "\r")
-				scanned = scanned[i+1:]
-				if strings.HasPrefix(line, "data:") && !strings.Contains(line, "[DONE]") {
-					sawEvent = true
-				}
-				parser.Feed(line)
+	var data []string
+	size := 0
+	flush := func() error {
+		if len(data) > 0 {
+			if err := emit("data: " + strings.Join(data, "\n")); err != nil {
+				return err
 			}
-			pending = scanned
+			sawEvent = true
 		}
-		if err != nil {
-			if len(pending) > 0 {
-				parser.Feed(pending)
+		if err := emit(""); err != nil {
+			return err
+		}
+		data, size = nil, 0
+		return nil
+	}
+	first := true
+	for scanner.Scan() {
+		line := scanner.Text()
+		if first {
+			line = strings.TrimPrefix(line, "\ufeff")
+			first = false
+		}
+		if line == "" {
+			if err := flush(); err != nil {
+				if err == io.EOF {
+					return nil
+				}
+				return err
 			}
-			if err != io.EOF {
-				parser.FinishWithError(502, "upstream stream broken: "+err.Error())
-				return rawStream.String()
+			continue
+		}
+		if strings.HasPrefix(line, "data:") || line == "data" {
+			value := strings.TrimPrefix(strings.TrimPrefix(line, "data"), ":")
+			value = strings.TrimPrefix(value, " ")
+			size += len(value) + 1
+			if size > maxEventBytes {
+				err := fmt.Errorf("upstream SSE event exceeds %d bytes", maxEventBytes)
+				return err
 			}
-			break
+			data = append(data, value)
+			continue
+		}
+		if err := emit(line); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	// 兼容缺少末尾空行的上游；读取失败时不补发残缺事件。
+	if len(data) > 0 {
+		if err := flush(); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
 		}
 	}
 	if !sawEvent {
-		parser.FinishWithError(502, "upstream returned an empty stream")
-		return rawStream.String()
+		err := fmt.Errorf("upstream returned an empty stream")
+		return err
 	}
-	parser.Finish()
-	return rawStream.String()
+	return nil
 }
 
 // readLimited 最多读 limit 字节（内部用；shared.ReadLimited 的等价物）。

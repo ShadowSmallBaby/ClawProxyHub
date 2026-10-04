@@ -8,6 +8,29 @@ import (
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
+func TestParserFinalUsageAfterCumulativeUsage(t *testing.T) {
+	fin := lastFinish(t, collect([]string{
+		`data: {"choices":[{"delta":{"content":"hi"}}],"usage":{"prompt_tokens":10,"completion_tokens":1}}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":7}}`,
+		`data: [DONE]`,
+	}))
+	if fin.Usage.OutputTokens != 7 {
+		t.Fatalf("final usage lost: %v", fin.Usage)
+	}
+}
+
+func TestParserRefusalText(t *testing.T) {
+	events := collect([]string{
+		`data: {"choices":[{"delta":{"refusal":"Cannot help."}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	})
+	if events[0].GetContentDelta().GetText() != "Cannot help." || lastFinish(t, events).FinishReason != "content_filter" {
+		t.Fatalf("refusal lost: %v", events)
+	}
+}
+
 func collect(lines []string) []*pb.StreamEvent {
 	var out []*pb.StreamEvent
 	p := NewParser(func(ev *pb.StreamEvent) { out = append(out, ev) })

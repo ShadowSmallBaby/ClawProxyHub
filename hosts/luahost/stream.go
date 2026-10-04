@@ -10,7 +10,11 @@ import (
 
 // newStreamTable 构造 stream 对象；每个方法收一个事件 table，转 StreamEvent 推给核心。
 func newStreamTable(L *lua.LState, srv pb.ClawPlugin_ChatServer) *lua.LTable {
-	send := func(ev *pb.StreamEvent) { _ = srv.Send(ev) }
+	send := func(ev *pb.StreamEvent) {
+		if err := srv.Send(ev); err != nil {
+			L.RaiseError("stream send: %v", err)
+		}
+	}
 	t := L.NewTable()
 	set := func(name string, fn lua.LGFunction) { L.SetField(t, name, L.NewFunction(fn)) }
 
@@ -23,7 +27,9 @@ func newStreamTable(L *lua.LState, srv pb.ClawPlugin_ChatServer) *lua.LTable {
 	})
 	set("content_delta", func(L *lua.LState) int {
 		send(&pb.StreamEvent{Event: &pb.StreamEvent_ContentDelta{ContentDelta: &pb.ContentDelta{
-			Text: strField(L.CheckTable(1), "text"),
+			Text:        strField(L.CheckTable(1), "text"),
+			Refusal:     lua.LVAsBool(L.CheckTable(1).RawGetString("refusal")),
+			Annotations: strField(L.CheckTable(1), "annotations"), Source: strField(L.CheckTable(1), "source"), BlockId: strField(L.CheckTable(1), "block_id"),
 		}}})
 		return 0
 	})

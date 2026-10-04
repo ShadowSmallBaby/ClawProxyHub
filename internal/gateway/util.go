@@ -126,7 +126,7 @@ func imagePart(url string) *pb.ContentPart {
 // 否则保留完整有序内容。
 func finishParts(parts []*pb.ContentPart) []*pb.ContentPart {
 	for _, p := range parts {
-		if p.Type != "text" || p.CacheControl != "" {
+		if p.Type != "text" || p.CacheControl != "" || p.Annotations != "" {
 			return parts
 		}
 	}

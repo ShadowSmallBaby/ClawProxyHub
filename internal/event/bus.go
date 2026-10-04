@@ -2,7 +2,11 @@
 // 非阻塞投递：订阅者 chan 满则丢弃该事件，不阻塞发布方。
 package event
 
-import "sync"
+import (
+	"log"
+	"sync"
+	"sync/atomic"
+)
 
 // Topic 事件主题。
 type Topic string
@@ -21,8 +25,9 @@ type Event struct {
 
 // Bus 进程内事件总线。
 type Bus struct {
-	mu   sync.RWMutex
-	subs map[Topic][]chan Event
+	dropped atomic.Uint64
+	mu      sync.RWMutex
+	subs    map[Topic][]chan Event
 }
 
 func New() *Bus {
@@ -47,6 +52,15 @@ func (b *Bus) Publish(ev Event) {
 		select {
 		case ch <- ev:
 		default:
+			b.RecordDrop()
 		}
 	}
 }
+
+func (b *Bus) RecordDrop() {
+	n := b.dropped.Add(1)
+	if n == 1 || n%100 == 0 {
+		log.Printf("[event] dropped %d events", n)
+	}
+}
+func (b *Bus) Dropped() uint64 { return b.dropped.Load() }

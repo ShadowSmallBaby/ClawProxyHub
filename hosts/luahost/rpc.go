@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	lua "github.com/yuin/gopher-lua"
 
@@ -15,7 +16,9 @@ import (
 
 // call1 取一个 VM 调约定函数（NRet=1），返回 (结果表, 是否存在该函数, 错误)。
 // 顶层 recover 兜底：任何 Go 侧 panic（含 VM 构建）转成错误而非崩溃 host 进程；panic 后 VM 状态可能损坏，不回收。
-func (h *luahost) call1(name string, build func(L *lua.LState) []lua.LValue) (result *lua.LTable, present bool, err error) {
+func (h *luahost) call1(ctx context.Context, name string, build func(L *lua.LState) []lua.LValue) (result *lua.LTable, present bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	if h.pool == nil {
 		return nil, false, nil
 	}
@@ -25,7 +28,7 @@ func (h *luahost) call1(name string, build func(L *lua.LState) []lua.LValue) (re
 			fmt.Fprintf(os.Stderr, "[luahost] panic in %s(): %v\n", name, r)
 			result, present, err = nil, true, fmt.Errorf("panic in %s(): %v", name, r)
 			if vm != nil {
-				vm.L.Close()
+				h.pool.discard(vm)
 				vm = nil
 			}
 		}
@@ -33,7 +36,7 @@ func (h *luahost) call1(name string, build func(L *lua.LState) []lua.LValue) (re
 			h.pool.put(vm)
 		}
 	}()
-	v, gerr := h.pool.get()
+	v, gerr := h.pool.get(ctx)
 	if gerr != nil {
 		return nil, false, gerr
 	}
@@ -49,12 +52,15 @@ func (h *luahost) call1(name string, build func(L *lua.LState) []lua.LValue) (re
 	ret := L.Get(-1)
 	L.Pop(1)
 	t, _ := ret.(*lua.LTable)
+	if t != nil {
+		t = goToLua(L, luaToGo(t)).(*lua.LTable)
+	}
 	return t, true, nil
 }
 
 // Handshake 优先调 plugin.handshake(req)（与 Go 插件在运行时声明能力同构）；缺失回退 manifest.json。
 func (h *luahost) Handshake(ctx context.Context, req *pb.HandshakeRequest) (*pb.HandshakeResponse, error) {
-	t, present, err := h.call1("handshake", func(L *lua.LState) []lua.LValue {
+	t, present, err := h.call1(ctx, "handshake", func(L *lua.LState) []lua.LValue {
 		r := L.NewTable()
 		r.RawSetString("protocol_version", lua.LNumber(req.ProtocolVersion))
 		r.RawSetString("core_version", lua.LString(req.CoreVersion))
@@ -94,12 +100,14 @@ func (h *luahost) Handshake(ctx context.Context, req *pb.HandshakeRequest) (*pb.
 // Chat 传入 stream 对象（typed 方法 → srv.Send），调 plugin.chat(req, stream)。
 // 顶层 recover 兜底：chat 内任何 Go 侧 panic 转成 task_failed，不崩溃 host 进程。
 func (h *luahost) Chat(req *pb.ChatRequest, srv pb.ClawPlugin_ChatServer) (err error) {
+	ctx, cancel := context.WithTimeout(srv.Context(), 10*time.Minute)
+	defer cancel()
 	var vm *luaVM
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "[luahost] panic in chat(): %v\n", r)
 			if vm != nil {
-				vm.L.Close()
+				h.pool.discard(vm)
 				vm = nil
 			}
 			err = srv.Send(failed(500, fmt.Sprintf("panic in chat(): %v", r)))
@@ -108,7 +116,7 @@ func (h *luahost) Chat(req *pb.ChatRequest, srv pb.ClawPlugin_ChatServer) (err e
 			h.pool.put(vm)
 		}
 	}()
-	v, gerr := h.pool.get()
+	v, gerr := h.pool.get(ctx)
 	if gerr != nil {
 		return srv.Send(failed(500, gerr.Error()))
 	}
@@ -127,7 +135,7 @@ func (h *luahost) Chat(req *pb.ChatRequest, srv pb.ClawPlugin_ChatServer) (err e
 
 // ListModels 调 plugin.models(cred) → {models={...}}。
 func (h *luahost) ListModels(ctx context.Context, cred *pb.CredentialBlob) (*pb.ModelList, error) {
-	t, present, err := h.call1("models", func(L *lua.LState) []lua.LValue { return []lua.LValue{credArg(L, cred)} })
+	t, present, err := h.call1(ctx, "models", func(L *lua.LState) []lua.LValue { return []lua.LValue{credArg(L, cred)} })
 	if err != nil {
 		return &pb.ModelList{Error: &pb.Error{Code: 502, Message: err.Error()}}, nil
 	}
@@ -139,7 +147,7 @@ func (h *luahost) ListModels(ctx context.Context, cred *pb.CredentialBlob) (*pb.
 
 // Login 调 plugin.login(req) → {blob, profile, next, error}。
 func (h *luahost) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginResult, error) {
-	t, present, err := h.call1("login", func(L *lua.LState) []lua.LValue { return []lua.LValue{loginReqToTable(L, req)} })
+	t, present, err := h.call1(ctx, "login", func(L *lua.LState) []lua.LValue { return []lua.LValue{loginReqToTable(L, req)} })
 	if err != nil {
 		return &pb.LoginResult{Error: &pb.Error{Code: 502, Message: err.Error()}}, nil
 	}
@@ -151,7 +159,7 @@ func (h *luahost) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginRes
 
 // Refresh 调 plugin.refresh(cred) → {blob, profile, error}。
 func (h *luahost) Refresh(ctx context.Context, cred *pb.CredentialBlob) (*pb.RefreshResult, error) {
-	t, present, err := h.call1("refresh", func(L *lua.LState) []lua.LValue { return []lua.LValue{credArg(L, cred)} })
+	t, present, err := h.call1(ctx, "refresh", func(L *lua.LState) []lua.LValue { return []lua.LValue{credArg(L, cred)} })
 	if err != nil {
 		return &pb.RefreshResult{Error: &pb.Error{Code: 502, Message: err.Error()}}, nil
 	}
@@ -163,7 +171,7 @@ func (h *luahost) Refresh(ctx context.Context, cred *pb.CredentialBlob) (*pb.Ref
 
 // GetProfile 调 plugin.profile(cred) → AccountProfile。
 func (h *luahost) GetProfile(ctx context.Context, cred *pb.CredentialBlob) (*pb.AccountProfile, error) {
-	t, present, err := h.call1("profile", func(L *lua.LState) []lua.LValue { return []lua.LValue{credArg(L, cred)} })
+	t, present, err := h.call1(ctx, "profile", func(L *lua.LState) []lua.LValue { return []lua.LValue{credArg(L, cred)} })
 	if err != nil || !present {
 		return &pb.AccountProfile{}, nil
 	}
@@ -173,7 +181,7 @@ func (h *luahost) GetProfile(ctx context.Context, cred *pb.CredentialBlob) (*pb.
 // ListTaskCapabilities 调 plugin.tasks() → {capabilities={{id,label,kind,per_account,default_schedule},...}}；
 // 脚本未声明 tasks() 回空（未声明任务能力，与 Go 插件 Unimplemented 兜底同构）。
 func (h *luahost) ListTaskCapabilities(ctx context.Context, req *pb.TaskCapabilitiesRequest) (*pb.TaskCapabilities, error) {
-	t, present, err := h.call1("tasks", func(L *lua.LState) []lua.LValue { return nil })
+	t, present, err := h.call1(ctx, "tasks", func(L *lua.LState) []lua.LValue { return nil })
 	if err != nil {
 		return nil, err
 	}
@@ -202,10 +210,11 @@ func (h *luahost) ListTaskCapabilities(ctx context.Context, req *pb.TaskCapabili
 // RunTask 调 plugin.task(req) → {summary, changed, blob, detail_json, notification, error}。
 // credential_id 从凭据信封带入 req.context（脚本侧一般只读 blob）。脚本未实现回 501。
 func (h *luahost) RunTask(ctx context.Context, req *pb.RunTaskRequest) (*pb.RunTaskResponse, error) {
-	t, present, err := h.call1("task", func(L *lua.LState) []lua.LValue {
+	t, present, err := h.call1(ctx, "task", func(L *lua.LState) []lua.LValue {
 		r := L.NewTable()
 		r.RawSetString("capability_id", lua.LString(req.CapabilityId))
 		if req.Credential != nil {
+			bindCredential(L, req.Credential)
 			r.RawSetString("credential", credToTable(L, req.Credential))
 		}
 		if len(req.Context) > 0 {
@@ -247,6 +256,7 @@ func credArg(L *lua.LState, c *pb.CredentialBlob) *lua.LTable {
 	if c == nil {
 		return L.NewTable()
 	}
+	bindCredential(L, c)
 	return credToTable(L, c)
 }
 

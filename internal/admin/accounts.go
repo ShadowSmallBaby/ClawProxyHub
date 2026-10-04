@@ -4,6 +4,7 @@ package admin
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/textutil"
 	"net/http"
 	"time"
 
@@ -33,36 +34,56 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 		return
 	}
-	if body.DisplayName != "" {
-		s.db.Model(&acct).Update("display_name", body.DisplayName)
-	}
-	if body.InstanceID > 0 && body.InstanceID != acct.InstanceID {
-		inst, err := account.ResolveInstance(s.db, acct.PluginID, body.InstanceID, s.multiInstance(acct.PluginID))
-		if err != nil {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
-			return
+	invalid := fmt.Errorf("分组不存在或与账号插件/实例不一致")
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var current model.Account
+		if err := tx.First(&current, id).Error; err != nil {
+			return err
 		}
-		// 分组归属实例：换实例前须先移出旧实例的分组（本次请求给了 group_ids 时以其为准校验）
-		if body.GroupIDs == nil && len(accountGroupIDs(s.db, acct.ID)) > 0 {
-			http.Error(w, `{"error":"账号仍在旧实例的分组中，请先移出分组再更换实例"}`, http.StatusBadRequest)
-			return
+		if body.InstanceID > 0 && body.InstanceID != current.InstanceID {
+			inst, err := account.ResolveInstance(tx, current.PluginID, body.InstanceID, true)
+			if err != nil {
+				return invalid
+			}
+			if body.GroupIDs == nil && len(accountGroupIDs(tx, id)) > 0 {
+				return invalid
+			}
+			current.InstanceID = inst.ID
 		}
-		s.db.Model(&acct).Update("instance_id", inst.ID)
-		acct.InstanceID = inst.ID
-	}
-	if body.GroupIDs != nil {
-		// 分组必须属于同一插件且同一实例
+		groups := map[int64]bool{}
 		for _, gid := range body.GroupIDs {
 			var g model.Group
-			if err := s.db.First(&g, gid).Error; err != nil || g.PluginID != acct.PluginID || g.InstanceID != acct.InstanceID {
-				http.Error(w, `{"error":"分组不存在或与账号插件/实例不一致"}`, http.StatusBadRequest)
-				return
+			if err := tx.First(&g, gid).Error; err != nil || g.PluginID != current.PluginID || g.InstanceID != current.InstanceID {
+				return invalid
+			}
+			groups[gid] = true
+		}
+		updates := map[string]interface{}{"instance_id": current.InstanceID}
+		if body.DisplayName != "" {
+			updates["display_name"] = body.DisplayName
+		}
+		if err := tx.Model(&current).Updates(updates).Error; err != nil {
+			return err
+		}
+		if body.GroupIDs != nil {
+			if err := tx.Where("account_id = ?", id).Delete(&model.AccountGroup{}).Error; err != nil {
+				return err
+			}
+			for gid := range groups {
+				if err := tx.Create(&model.AccountGroup{AccountID: id, GroupID: gid}).Error; err != nil {
+					return err
+				}
 			}
 		}
-		s.db.Where("account_id = ?", id).Delete(&model.AccountGroup{})
-		for _, gid := range body.GroupIDs {
-			s.db.Create(&model.AccountGroup{AccountID: id, GroupID: gid})
+		return nil
+	})
+	if err != nil {
+		status := http.StatusInternalServerError
+		if err == invalid {
+			status = http.StatusBadRequest
 		}
+		http.Error(w, `{"error":"account update failed; no changes saved"}`, status)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -113,6 +134,9 @@ func (s *Server) resumeAccount(w http.ResponseWriter, r *http.Request) {
 func (s *Server) accountModels(w http.ResponseWriter, r *http.Request) {
 	id := parseInt(r.PathValue("id"))
 	if r.URL.Query().Get("refresh") == "1" {
+		if !requireAdmin(w, r) {
+			return
+		}
 		models, err := s.accounts.SyncModels(r.Context(), id)
 		if err != nil {
 			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadGateway)
@@ -175,14 +199,18 @@ func (s *Server) testAccount(w http.ResponseWriter, r *http.Request) {
 			{Role: "user", Text: question},
 		},
 	}
-	cred := account.BuildCred(s.db, s.accounts.DataDir(), &acct, 0)
+	cred, err := account.BuildCred(s.db, s.accounts.DataDir(), &acct, 0)
+	if err != nil {
+		http.Error(w, `{"error":"credential unavailable"}`, http.StatusInternalServerError)
+		return
+	}
 
 	// 信封请求（诊断展示用）：清掉凭据再序列化
 	req.Credential = nil
 	reqJSON, _ := protojson.Marshal(req)
 	req.Credential = cred
 
-	events, err := s.plugins.Chat(req, pluginName, cred)
+	events, err := s.plugins.Chat(r.Context(), req, pluginName, cred)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadGateway)
 		return
@@ -234,7 +262,7 @@ func (s *Server) accountDetail(w http.ResponseWriter, r *http.Request) {
 		t := acct.PausedUntil.Format(time.RFC3339)
 		pauseUntil = &t
 	}
-	manualPause := acct.PausedUntil != nil && acct.PausedUntil.After(time.Now().AddDate(50, 0, 0))
+	manualPause := acct.PausedUntil != nil && acct.PausedUntil.After(time.Now().AddDate(50, 0, 0)) // 宽松阈值：低于写入侧 100 年哨兵即视为手动
 
 	out := map[string]interface{}{
 		"id":              acct.ID,
@@ -258,12 +286,7 @@ func (s *Server) accountDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func truncStr(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
-}
+func truncStr(s string, n int) string { return textutil.Truncate(s, n) }
 
 // jsonOrNull 原样透出存储的 JSON 快照（异常时回空对象）。
 func jsonOrNull(s string) json.RawMessage {

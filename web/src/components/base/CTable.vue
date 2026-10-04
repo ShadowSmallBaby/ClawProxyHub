@@ -1,7 +1,7 @@
 <!-- CTable — 统一二次封装表格：行悬停背景提亮 + 斑马纹关闭，集中管理边框/圆角。
      移动端：传 mobile-cards 时按列定义渲染为卡片列表（复用各列 slot），桌面仍是表格。 -->
 <template>
-  <div v-if="mobileCards && isMobile" class="c-cards" :class="{ 'is-loading': loading, 'is-scroll': cardScroll }">
+  <div v-if="mobileCards && isMobile" class="c-cards" :class="{ 'is-loading': loading, 'is-fill': fill }">
     <div v-if="loading" class="c-cards-loading"><t-loading size="small" /></div>
     <div v-else-if="!data?.length" class="c-cards-empty"><t-empty /></div>
     <div v-for="(row, i) in data" v-else :key="rowKeyOf(row, i)" class="c-card-row">
@@ -24,7 +24,7 @@
       </t-link>
     </div>
   </div>
-  <t-table v-else v-bind="$attrs" :data="data" :columns="columns" :loading="loading" :row-key="rowKey" class="c-table">
+  <t-table v-else v-bind="$attrs" :data="data" :columns="columns" :loading="loading" :row-key="rowKey" :height="fill ? '100%' : height" class="c-table" :class="{ 'is-fill': fill }">
     <template v-for="(_, name) in $slots" #[name]="slotProps">
       <slot :name="name" v-bind="slotProps ?? {}" />
     </template>
@@ -50,6 +50,9 @@ const props = defineProps<{
   // 行唯一键：字段名，或按行计算（动态列表无稳定 id 时用）
   rowKey?: string | ((row: Record<string, any>, index: number) => string | number)
   loading?: boolean
+  // 填满页面主体，表格和移动卡片均在内部滚动。
+  fill?: boolean
+  height?: string | number
   // 移动端改卡片渲染（桌面不受影响）
   mobileCards?: boolean
   // 手机端只展示这些列（colKey），其余折叠；不传则全展示
@@ -59,7 +62,6 @@ const props = defineProps<{
 }>()
 
 const { isMobile, isPhone } = useIsMobile()
-const cardScroll = computed(() => props.mobileCards && isPhone.value)
 
 const rowKey = computed(() => props.rowKey ?? 'id')
 
@@ -132,9 +134,12 @@ function cellText(col: Column, row: Record<string, any>): string {
   gap: 10px;
 }
 /* 手机端：卡片区占满剩余高度并内部滚动，页头/分页钉住 */
-.c-cards.is-scroll {
-  flex: 1;
+.c-table.is-fill,
+.c-cards.is-fill {
+  height: 100%;
   min-height: 0;
+}
+.c-cards.is-fill {
   overflow-y: auto;
 }
 .c-cards-loading,

@@ -1,27 +1,29 @@
 <template>
-  <div class="page">
-    <page-header v-if="!isPhone">
+  <page-layout :body-key="`${page}:${pageSize}`">
+    <template v-if="!isPhone" #header>
+      <page-header>
 
-      <t-space>
-        <t-button variant="outline" @click="openSources">{{ $t('plugins.sources') }}</t-button>
-        <t-button variant="outline" :loading="marketLoading" @click="openMarket">{{ $t('plugins.market') }}</t-button>
-        <t-button v-if="!isPhone" variant="outline" @click="openEditor(null)">{{ $t('plugins.editorNew') }}</t-button>
-        <t-upload
-          :auto-upload="false"
-          :show-upload-progress="false"
-          accept=".cphplugin,.zip"
-          :request-method="uploadInstall"
-          @fail="onUploadFail"
-        >
-          <t-button theme="primary">{{ $t('plugins.upload') }}</t-button>
-        </t-upload>
-      </t-space>
-    </page-header>
+        <t-space>
+          <t-button variant="outline" @click="openSources">{{ $t('plugins.sources') }}</t-button>
+          <t-button variant="outline" :loading="marketLoading" @click="openMarket">{{ $t('plugins.market') }}</t-button>
+          <t-button v-if="!isPhone" variant="outline" @click="openEditor(null)">{{ $t('plugins.editorNew') }}</t-button>
+          <t-upload
+            :auto-upload="false"
+            :show-upload-progress="false"
+            accept=".cphplugin,.zip"
+            :request-method="uploadInstall"
+            @fail="onUploadFail"
+          >
+            <t-button theme="primary">{{ $t('plugins.upload') }}</t-button>
+          </t-upload>
+        </t-space>
+      </page-header>
+    </template>
 
     <!-- 已安装（磁盘为准，含已停止的：内容不变，只多一个状态标签） -->
     <t-empty v-if="!plugins.length" :description="$t('plugins.emptyInstalled')" />
     <div class="plugin-grid">
-      <c-card v-for="p in plugins" :key="p.name">
+      <c-card v-for="p in pageItems" :key="p.name">
         <template #header>
           <div class="plugin-head">
             <entity-icon :icon="p.icon" :name="p.label || p.name" />
@@ -60,6 +62,10 @@
       </c-card>
     </div>
 
+    <template #footer>
+      <c-pagination v-model="page" v-model:pageSize="pageSize" :total="total" />
+    </template>
+    <template #overlays>
     <!-- 市场：多源时按源下拉懒加载，默认 official -->
     <c-drawer v-model:visible="marketVisible" :header="$t('plugins.market')" :footer="false" width="420px" close-on-overlay-click>
       <t-select v-if="sources.length > 1" v-model="marketSourceName" style="width: 100%; margin-bottom: 12px" @change="loadMarket">
@@ -209,14 +215,17 @@
         </t-button>
       </t-upload>
     </mobile-fab>
-  </div>
+    </template>
+  </page-layout>
 </template>
 
 <script setup lang="ts">
+import { PageLayout, PageHeader } from '@/components'
+import { CPagination } from '@/components/base'
+import { useClientPagination } from '@/composables'
 import { CCard, CDrawer, CTable, MobileFab } from '@/components/base'
 import { FormItem } from '@/components'
 import EntityIcon from '@/components/EntityIcon.vue'
-import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -640,6 +649,8 @@ async function stop(name: string) {
 }
 
 onMounted(load)
+
+const { page, pageSize, total, items: pageItems } = useClientPagination(plugins)
 </script>
 
 <style scoped>
@@ -648,7 +659,7 @@ onMounted(load)
 .plugin-sub { font-size: 12px; color: var(--td-text-color-secondary); display: flex; align-items: center; gap: 6px; }
 .proto-tag { font-family: ui-monospace, monospace; }
 .methods-title { font-size: 13px; color: var(--td-text-color-secondary); margin-bottom: 4px; }
-.plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 14px; }
+.plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(350px, 100%), 1fr)); gap: 14px; }
 .plugin-grid :deep(.c-card) { display: flex; flex-direction: column; height: 100%; }
 .plugin-grid :deep(.c-card .t-card__body) { display: flex; flex-direction: column; flex: 1; }
 .plugin-ops { margin-top: auto; padding-top: 4px; }

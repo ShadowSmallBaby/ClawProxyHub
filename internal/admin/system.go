@@ -3,7 +3,7 @@ package admin
 
 import (
 	"archive/zip"
-	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/database"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/version"
@@ -79,112 +80,175 @@ func absPath(p string) string {
 
 // exportBackup GET /admin/system/backup — zip：cph.db（VACUUM INTO 一致性快照）+ secret.key（凭据加解密密钥）。
 func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
-	if roleOf(r) != "admin" {
-		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+	if !requireAdmin(w, r) {
 		return
 	}
-	tmp, err := os.CreateTemp("", "cph-backup-*.db")
+	dir, err := os.MkdirTemp("", "cph-backup-")
 	if err != nil {
-		http.Error(w, `{"error":"temp file"}`, http.StatusInternalServerError)
+		http.Error(w, "backup unavailable", 500)
 		return
 	}
-	tmpPath := tmp.Name()
-	tmp.Close()
-	os.Remove(tmpPath) // VACUUM INTO 要求目标不存在
-	defer os.Remove(tmpPath)
-	// 单引号转义路径（VACUUM INTO 不接受绑定参数的实现兼容）
-	if err := s.db.Exec("VACUUM INTO '" + strings.ReplaceAll(filepath.ToSlash(tmpPath), "'", "''") + "'").Error; err != nil {
-		http.Error(w, `{"error":"snapshot failed: `+err.Error()+`"}`, http.StatusInternalServerError)
+	defer os.RemoveAll(dir)
+	key, err := account.BackupKey(s.dataDir)
+	if err != nil {
+		http.Error(w, "backup key unavailable", 500)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition",
-		fmt.Sprintf(`attachment; filename="cph-backup-%s.zip"`, time.Now().Format("20060102-150405")))
-	zw := zip.NewWriter(w)
-	defer zw.Close()
-	addFile := func(name, src string) error {
-		f, err := os.Open(src)
+	snapshot := filepath.Join(dir, "cph.db")
+	if err = s.db.WithContext(r.Context()).Exec("VACUUM INTO '" + strings.ReplaceAll(filepath.ToSlash(snapshot), "'", "''") + "'").Error; err != nil {
+		http.Error(w, "snapshot failed", 500)
+		return
+	}
+	archive, err := os.Create(filepath.Join(dir, "backup.zip"))
+	if err != nil {
+		http.Error(w, "backup unavailable", 500)
+		return
+	}
+	defer archive.Close()
+	zw := zip.NewWriter(archive)
+	add := func(name string, reader io.Reader) error {
+		wr, err := zw.Create(name)
 		if err != nil {
 			return err
 		}
-		defer f.Close()
-		st, _ := f.Stat()
-		hdr := &zip.FileHeader{Name: name, Method: zip.Deflate, Modified: time.Now()}
-		if st != nil {
-			hdr.Modified = st.ModTime()
-		}
-		wr, err := zw.CreateHeader(hdr)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(wr, f)
+		_, err = io.Copy(wr, reader)
 		return err
 	}
-	if err := addFile("cph.db", tmpPath); err != nil {
+	dbFile, err := os.Open(snapshot)
+	if err != nil {
+		http.Error(w, "snapshot unavailable", 500)
 		return
 	}
-	if key := filepath.Join(s.dataDir, "secret.key"); fileExists(key) {
-		addFile("secret.key", key)
+	err = add("cph.db", dbFile)
+	dbFile.Close()
+	if err == nil {
+		err = add("secret.key", strings.NewReader(string(key)))
 	}
-	meta := fmt.Sprintf(`{"version":"%s","exported_at":"%s"}`, version.Core, time.Now().Format(time.RFC3339))
-	if wr, err := zw.Create("meta.json"); err == nil {
-		wr.Write([]byte(meta))
+	if err == nil {
+		meta, _ := json.Marshal(map[string]string{"version": version.Core, "exported_at": time.Now().Format(time.RFC3339)})
+		err = add("meta.json", strings.NewReader(string(meta)))
 	}
+	closeErr := zw.Close()
+	if err != nil || closeErr != nil {
+		http.Error(w, "backup archive failed", 500)
+		return
+	}
+	if _, err = archive.Seek(0, 0); err != nil {
+		http.Error(w, "backup unavailable", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="cph-backup-%s.zip"`, time.Now().Format("20060102-150405")))
+	io.Copy(w, archive)
 }
 
-// importBackup POST /admin/system/restore — multipart file=<zip>；校验后写入 <data>/restore/，重启时换入。
+// importBackup 只发布已校验的独立暂存目录，数据库与可选密钥作为一个集合替换。
 func (s *Server) importBackup(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	s.restoreMu.Lock()
+	defer s.restoreMu.Unlock()
 	r.Body = http.MaxBytesReader(w, r.Body, 512<<20)
-	f, _, err := r.FormFile("file")
+	f, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, `{"error":"请选择备份 zip 文件"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"invalid backup upload"}`, 400)
 		return
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(f)
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	zr, err := zip.NewReader(f, header.Size)
 	if err != nil {
-		http.Error(w, `{"error":"读取上传失败"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"invalid ZIP"}`, 400)
 		return
 	}
-	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
-	if err != nil {
-		http.Error(w, `{"error":"不是合法的 zip 备份"}`, http.StatusBadRequest)
+	if err = os.MkdirAll(s.dataDir, 0700); err != nil {
+		http.Error(w, "staging unavailable", 500)
 		return
 	}
-	files := map[string][]byte{}
+	stage, err := os.MkdirTemp(s.dataDir, ".restore-upload-")
+	if err != nil {
+		http.Error(w, "staging unavailable", 500)
+		return
+	}
+	defer os.RemoveAll(stage)
+	seen := make(map[string]bool)
+	fail := func(err error) { http.Error(w, `{"error":"invalid or incompatible backup"}`, http.StatusBadRequest) }
+	var total uint64
 	for _, zf := range zr.File {
-		name := filepath.Base(zf.Name)
+		if zf.UncompressedSize64 > 512<<20 || total > (512<<20)-zf.UncompressedSize64 {
+			fail(fmt.Errorf("backup too large"))
+			return
+		}
+		total += zf.UncompressedSize64
+		name := zf.Name
 		if name != "cph.db" && name != "secret.key" {
 			continue
 		}
-		rc, err := zf.Open()
-		if err != nil {
-			continue
+		if seen[name] || zf.Mode()&os.ModeSymlink != 0 {
+			fail(fmt.Errorf("duplicate entry"))
+			return
 		}
-		files[name], _ = io.ReadAll(rc)
-		rc.Close()
-	}
-	dbRaw, ok := files["cph.db"]
-	if !ok || !bytes.HasPrefix(dbRaw, []byte("SQLite format 3\x00")) {
-		http.Error(w, `{"error":"备份包缺少 cph.db 或不是 SQLite 数据库"}`, http.StatusBadRequest)
-		return
-	}
-	dir := filepath.Join(s.dataDir, "restore")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		http.Error(w, `{"error":"创建暂存目录失败"}`, http.StatusInternalServerError)
-		return
-	}
-	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), content, 0o600); err != nil {
-			http.Error(w, `{"error":"写入暂存失败: `+err.Error()+`"}`, http.StatusInternalServerError)
+		seen[name] = true
+		limit := int64(512 << 20)
+		if name == "secret.key" {
+			limit = 32
+		}
+		input, e := zf.Open()
+		if e != nil {
+			fail(e)
+			return
+		}
+		output, e := os.OpenFile(filepath.Join(stage, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if e != nil {
+			input.Close()
+			fail(e)
+			return
+		}
+		n, e := io.Copy(output, io.LimitReader(input, limit+1))
+		input.Close()
+		if e == nil {
+			e = output.Sync()
+		}
+		ce := output.Close()
+		if e != nil || ce != nil || n > limit || (name == "secret.key" && n != 32) {
+			fail(fmt.Errorf("invalid archive entry"))
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"ok": true, "with_key": files["secret.key"] != nil,
-		"message": "备份已暂存，重启服务后自动换入（当前库会备份为 cph.db.bak-<时间>）",
-	})
+	if !seen["cph.db"] {
+		fail(fmt.Errorf("missing database"))
+		return
+	}
+	key, err := account.BackupKey(s.dataDir)
+	if err != nil {
+		fail(err)
+		return
+	}
+	if seen["secret.key"] {
+		incoming, e := os.ReadFile(filepath.Join(stage, "secret.key"))
+		if e != nil {
+			fail(e)
+			return
+		}
+		if os.Getenv("CPH_SECRET_KEY") != "" && string(incoming) != string(key) {
+			fail(fmt.Errorf("CPH_SECRET_KEY mismatch"))
+			return
+		}
+		key = incoming
+	}
+	if err = database.ValidateBackup(r.Context(), filepath.Join(stage, "cph.db"), key); err != nil {
+		fail(err)
+		return
+	}
+	if err = database.PublishRestore(stage, s.dataDir); err != nil {
+		http.Error(w, `{"error":"backup not staged"}`, 500)
+		return
+	}
+	writeJSON(w, 200, map[string]interface{}{"ok": true, "with_key": seen["secret.key"], "message": "Backup staged; restart to restore"})
 }
 
 func fileExists(p string) bool {

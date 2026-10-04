@@ -146,23 +146,3 @@ body,
     min-height: 0;
   }
 }
-
-/* 手机端滚动布局：挂到 tabs 上，让内容区成为 flex 滚动容器（卡片列表内部滚动） */
-@media (max-width: 767px) {
-  .phone-scroll {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-  }
-  .phone-scroll .t-tabs__content,
-  .phone-scroll .t-tab-panel {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-    /* 透明背景：与页面底色一致，卡片间隔可分辨 */
-    background: transparent;
-  }
-}
-

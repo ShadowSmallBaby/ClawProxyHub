@@ -3,62 +3,118 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"net/url"
+
+	"strings"
 	"time"
 
-	"golang.org/x/net/proxy"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
+	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
+	"gorm.io/gorm"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 )
 
-// listProxies GET /admin/proxies
+// validProxyScheme 校验出站代理协议白名单。
+func validProxyScheme(scheme string) bool {
+	switch scheme {
+	case "http", "https", "socks5":
+		return true
+	}
+	return false
+}
+
+// proxyBody 出站代理请求体（password 落库前加密，列表永不回显）。
+type proxyBody struct {
+	Name     string `json:"name"`
+	Scheme   string `json:"scheme"`
+	Host     string `json:"host"`
+	Port     int32  `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// validate 校验协议白名单、端口范围与非空 host（域名/IP/短主机名/IPv6 均合法，允许内网）。
+func (b *proxyBody) validate() bool {
+	if b.Scheme == "" {
+		b.Scheme = "http"
+	}
+	host := strings.TrimSpace(b.Host)
+	if !validProxyScheme(b.Scheme) || host == "" || len(host) > 255 || b.Port < 1 || b.Port > 65535 {
+		return false
+	}
+	return validHost(strings.Trim(host, "[]"))
+}
+
+// listProxies GET /admin/proxies — 白名单 DTO：密码只暴露"是否已设置"，不回明文/密文。
 func (s *Server) listProxies(w http.ResponseWriter, r *http.Request) {
 	var proxies []model.Proxy
 	if err := s.db.Order("id").Find(&proxies).Error; err != nil {
 		http.Error(w, `{"error":"db"}`, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"proxies": proxies})
+	type proxyView struct {
+		ID          int64  `json:"id"`
+		Name        string `json:"name"`
+		Scheme      string `json:"scheme"`
+		Host        string `json:"host"`
+		Port        int32  `json:"port"`
+		Username    string `json:"username"`
+		HasPassword bool   `json:"has_password"`
+	}
+	out := make([]proxyView, 0, len(proxies))
+	for _, px := range proxies {
+		out = append(out, proxyView{ID: px.ID, Name: px.Name, Scheme: px.Scheme, Host: px.Host,
+			Port: px.Port, Username: px.Username, HasPassword: px.Password != "" || len(px.PasswordCipher) > 0})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"proxies": out})
 }
 
 // createProxy POST /admin/proxies — body: {name, scheme, host, port, username, password}
 func (s *Server) createProxy(w http.ResponseWriter, r *http.Request) {
-	var body model.Proxy
-	if !readBody(w, r, &body) || body.Host == "" || body.Port == 0 {
+	var body proxyBody
+	if !readBody(w, r, &body) || !body.validate() {
 		http.Error(w, `{"error":"host and port required"}`, http.StatusBadRequest)
 		return
 	}
-	if body.Scheme == "" {
-		body.Scheme = "http"
+	sealed, err := account.EncryptCredential(s.accounts.DataDir(), []byte(body.Password))
+	if err != nil {
+		http.Error(w, `{"error":"password encryption failed"}`, http.StatusInternalServerError)
+		return
 	}
-	if err := s.db.Create(&body).Error; err != nil {
+	rec := model.Proxy{Name: body.Name, Scheme: body.Scheme, Host: strings.TrimSpace(body.Host),
+		Port: body.Port, Username: body.Username, PasswordCipher: sealed}
+	if err := s.db.Create(&rec).Error; err != nil {
 		http.Error(w, `{"error":"create failed"}`, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"id": body.ID})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"id": rec.ID})
 }
 
 // updateProxy PUT /admin/proxies/{id} — body: {name, scheme, host, port, username, password}
 // password 空字符串 = 保留原密码（前端不回显密码，避免误清空）。
 func (s *Server) updateProxy(w http.ResponseWriter, r *http.Request) {
 	id := parseInt(r.PathValue("id"))
-	var body model.Proxy
-	if !readBody(w, r, &body) || body.Host == "" || body.Port == 0 {
+	var body proxyBody
+	if !readBody(w, r, &body) || !body.validate() {
 		http.Error(w, `{"error":"host and port required"}`, http.StatusBadRequest)
 		return
 	}
-	if body.Scheme == "" {
-		body.Scheme = "http"
-	}
 	fields := map[string]interface{}{
-		"name": body.Name, "scheme": body.Scheme, "host": body.Host,
+		"name": body.Name, "scheme": body.Scheme, "host": strings.TrimSpace(body.Host),
 		"port": body.Port, "username": body.Username,
 	}
 	if body.Password != "" {
-		fields["password"] = body.Password
+		sealed, err := account.EncryptCredential(s.accounts.DataDir(), []byte(body.Password))
+		if err != nil {
+			http.Error(w, `{"error":"password encryption failed"}`, http.StatusInternalServerError)
+			return
+		}
+		fields["password_cipher"] = sealed
+		fields["password"] = ""
 	}
 	if err := s.db.Model(&model.Proxy{}).Where("id = ?", id).Updates(fields).Error; err != nil {
 		http.Error(w, `{"error":"update failed"}`, http.StatusInternalServerError)
@@ -70,10 +126,78 @@ func (s *Server) updateProxy(w http.ResponseWriter, r *http.Request) {
 // deleteProxy DELETE /admin/proxies/{id}（分组绑定随之解除）
 func (s *Server) deleteProxy(w http.ResponseWriter, r *http.Request) {
 	id := parseInt(r.PathValue("id"))
-	s.db.Where("proxy_id = ?", id).Delete(&model.GroupProxy{})
-	s.db.Where("proxy_id = ?", id).Delete(&model.AccountProxy{})
-	s.db.Delete(&model.Proxy{}, id)
+	if id <= 0 {
+		http.Error(w, `{"error":"invalid proxy id"}`, http.StatusBadRequest)
+		return
+	}
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var px model.Proxy
+		if err := tx.First(&px, id).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("proxy_id = ?", id).Delete(&model.GroupProxy{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("proxy_id = ?", id).Delete(&model.AccountProxy{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&px).Error
+	})
+	if err != nil {
+		http.Error(w, `{"error":"proxy not deleted"}`, http.StatusBadRequest)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+}
+
+var errInvalidProxyBinding = errors.New("invalid proxy binding")
+
+// replaceProxyBindings 全部验证成功后事务替换，空集合表示显式解除绑定。
+func (s *Server) replaceProxyBindings(scope string, id int64, ids []int64) error {
+	if id <= 0 || ids == nil {
+		return errInvalidProxyBinding
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		if scope == "account" {
+			err = tx.First(&model.Account{}, id).Error
+		} else {
+			err = tx.First(&model.Group{}, id).Error
+		}
+		if err != nil {
+			return err
+		}
+		unique := make(map[int64]bool)
+		for _, pid := range ids {
+			if pid <= 0 {
+				return errInvalidProxyBinding
+			}
+			if err := tx.First(&model.Proxy{}, pid).Error; err != nil {
+				return err
+			}
+			unique[pid] = true
+		}
+		if scope == "account" {
+			if err := tx.Where("account_id = ?", id).Delete(&model.AccountProxy{}).Error; err != nil {
+				return err
+			}
+			for pid := range unique {
+				if err := tx.Create(&model.AccountProxy{AccountID: id, ProxyID: pid}).Error; err != nil {
+					return err
+				}
+			}
+		} else {
+			if err := tx.Where("group_id = ?", id).Delete(&model.GroupProxy{}).Error; err != nil {
+				return err
+			}
+			for pid := range unique {
+				if err := tx.Create(&model.GroupProxy{GroupID: id, ProxyID: pid}).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 }
 
 // testProxy POST /admin/proxies/{id}/test — 经该代理拨到中立目标，验证连通性与时延。
@@ -86,10 +210,20 @@ func (s *Server) testProxy(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 			return
 		}
-	} else if !readBody(w, r, &px) || px.Host == "" || px.Port == 0 {
-		http.Error(w, `{"error":"host and port required"}`, http.StatusBadRequest)
+	} else {
+		var body proxyBody
+		if !readBody(w, r, &body) || !body.validate() {
+			http.Error(w, `{"error":"invalid proxy"}`, http.StatusBadRequest)
+			return
+		}
+		px = model.Proxy{Scheme: body.Scheme, Host: body.Host, Port: body.Port, Username: body.Username, Password: body.Password}
+	}
+	config, err := account.ProxyConfig(s.accounts.DataDir(), &px)
+	if err != nil {
+		http.Error(w, `{"error":"proxy decryption failed"}`, http.StatusInternalServerError)
 		return
 	}
+	px.Password = config.Password
 	start := time.Now()
 	if err := probeProxy(r.Context(), &px); err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "error": err.Error()})
@@ -101,36 +235,12 @@ func (s *Server) testProxy(w http.ResponseWriter, r *http.Request) {
 // probeProxy 经代理向中立目标发起一次 HTTP 请求，成功即代理可用。
 // http/https 走 Transport.Proxy；socks5 用 x/net/proxy 拨号器接管连接建立。
 func probeProxy(ctx context.Context, px *model.Proxy) error {
-	const target = "https://www.gstatic.com/generate_204" // 全球可达、返回 204、无正文
-	tr := &http.Transport{}
-	switch px.Scheme {
-	case "socks5":
-		var auth *proxy.Auth
-		if px.Username != "" {
-			auth = &proxy.Auth{User: px.Username, Password: px.Password}
-		}
-		dialer, err := proxy.SOCKS5("tcp", fmt.Sprintf("%s:%d", px.Host, px.Port), auth, proxy.Direct)
-		if err != nil {
-			return fmt.Errorf("socks5 dialer: %w", err)
-		}
-		cd, ok := dialer.(proxy.ContextDialer)
-		if !ok {
-			return fmt.Errorf("socks5 dialer not context-aware")
-		}
-		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return cd.DialContext(ctx, network, addr)
-		}
-	default: // http / https
-		u := &url.URL{Scheme: px.Scheme, Host: fmt.Sprintf("%s:%d", px.Host, px.Port)}
-		if px.Username != "" {
-			u.User = url.UserPassword(px.Username, px.Password)
-		}
-		tr.Proxy = http.ProxyURL(u)
-	}
-	client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
-	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	config := &pb.ProxyConfig{Scheme: px.Scheme, Host: strings.Trim(px.Host, "[]"), Port: px.Port, Username: px.Username, Password: px.Password}
+	client := sdk.UpstreamClient(sdk.ProxyURL(config))
+	defer client.CloseIdleConnections()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, target, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.gstatic.com/generate_204", nil)
 	if err != nil {
 		return err
 	}
@@ -139,8 +249,8 @@ func probeProxy(ctx context.Context, px *model.Proxy) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 500 {
-		return fmt.Errorf("upstream status %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("unexpected probe status %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -154,9 +264,13 @@ func (s *Server) bindGroupProxies(w http.ResponseWriter, r *http.Request) {
 	if !readBody(w, r, &body) {
 		return
 	}
-	s.db.Where("group_id = ?", gid).Delete(&model.GroupProxy{})
-	for _, pid := range body.ProxyIDs {
-		s.db.Create(&model.GroupProxy{GroupID: gid, ProxyID: pid})
+	if err := s.replaceProxyBindings("group", gid, body.ProxyIDs); err != nil {
+		code := http.StatusInternalServerError
+		if errors.Is(err, errInvalidProxyBinding) || errors.Is(err, gorm.ErrRecordNotFound) {
+			code = http.StatusBadRequest
+		}
+		http.Error(w, `{"error":"proxy bindings not saved"}`, code)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -182,9 +296,13 @@ func (s *Server) bindAccountProxies(w http.ResponseWriter, r *http.Request) {
 	if !readBody(w, r, &body) {
 		return
 	}
-	s.db.Where("account_id = ?", aid).Delete(&model.AccountProxy{})
-	for _, pid := range body.ProxyIDs {
-		s.db.Create(&model.AccountProxy{AccountID: aid, ProxyID: pid})
+	if err := s.replaceProxyBindings("account", aid, body.ProxyIDs); err != nil {
+		code := http.StatusInternalServerError
+		if errors.Is(err, errInvalidProxyBinding) || errors.Is(err, gorm.ErrRecordNotFound) {
+			code = http.StatusBadRequest
+		}
+		http.Error(w, `{"error":"proxy bindings not saved"}`, code)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
