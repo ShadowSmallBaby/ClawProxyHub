@@ -29,10 +29,10 @@
         <h2>{{ $t('login.welcome') }}</h2>
         <p class="login-sub">{{ $t('login.sub') }}</p>
         <t-form @submit="onLogin">
-          <form-item :label="$t('login.username')">
+          <form-item :label="$t('login.username')" stacked>
             <t-input v-model="username" :placeholder="$t('login.usernamePh')" clearable @enter="onLogin" />
           </form-item>
-          <form-item :label="$t('login.password')">
+          <form-item :label="$t('login.password')" stacked>
             <t-input
               v-model="password"
               type="password"
@@ -58,6 +58,7 @@ import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { setToken } from '@/api/client'
 import { authApi } from '@/api/auth'
+import { FormItem } from '@/components'
 import { branding, brandLogo, brandCustom, ensureBranding } from '@/utils/branding'
 
 const { t } = useI18n()
@@ -102,6 +103,7 @@ async function onLogin() {
 .login-wrap {
   height: 100%;
   display: flex;
+  overflow-y: auto;
 }
 
 /* ---------- 左侧品牌区 ---------- */
@@ -242,6 +244,9 @@ async function onLogin() {
   text-align: center;
   font-size: 13px;
   color: var(--td-text-color-secondary);
+}
+.login-submit {
+  margin-top: 16px;
 }
 
 /* ---------- 窄屏：隐藏品牌区 ---------- */

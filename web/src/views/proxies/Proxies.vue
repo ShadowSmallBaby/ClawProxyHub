@@ -1,20 +1,27 @@
 <template>
-  <div class="page">
-    <page-header v-if="!isPhone">
+  <page-layout :body-key="`${page}:${pageSize}`" :scroll="false">
+    <template v-if="!isPhone" #header>
+      <page-header>
       
-      <t-button theme="primary" @click="openCreate">{{ $t('proxies.create') }}</t-button>
-    </page-header>
-    <c-table row-key="ID" :data="proxies" :columns="columns" :loading="loading" mobile-cards>
+        <t-button theme="primary" @click="openCreate">{{ $t('proxies.create') }}</t-button>
+      </page-header>
+    </template>
+    <c-table fill row-key="id" :data="pageItems" :columns="columns" :loading="loading" mobile-cards>
       <template #op="{ row }">
         <t-space size="small">
-          <t-link theme="primary" :loading="testingId === row.ID" @click="test(row)">{{ $t('proxies.test') }}</t-link>
+          <t-link theme="primary" :loading="testingId === row.id" @click="test(row)">{{ $t('proxies.test') }}</t-link>
           <t-link theme="default" @click="openEdit(row)">{{ $t('common.edit') }}</t-link>
-          <t-popconfirm :content="$t('proxies.confirmDelete')" @confirm="remove(row.ID)">
+          <t-popconfirm :content="$t('proxies.confirmDelete')" @confirm="remove(row.id)">
             <t-link theme="danger">{{ $t('common.delete') }}</t-link>
           </t-popconfirm>
         </t-space>
       </template>
     </c-table>
+    <template #footer>
+      <c-pagination v-model="page" v-model:pageSize="pageSize" :total="total" />
+    </template>
+    <template #overlays>
+
 
     <c-drawer v-model:visible="createVisible" :header="editingId ? $t('proxies.edit') : $t('proxies.create')" :confirm-btn="{ loading: creating }" @confirm="submit">
       <t-form>
@@ -49,14 +56,17 @@
         <template #icon><add-icon /></template>
       </t-button>
     </mobile-fab>
-  </div>
+    </template>
+  </page-layout>
 </template>
 
 <script setup lang="ts">
+import { PageLayout, PageHeader } from '@/components'
+import { CPagination } from '@/components/base'
+import { useClientPagination } from '@/composables'
 import { CDrawer } from '@/components/base'
 import { FormItem } from '@/components'
 import { CCard, CTable, MobileFab } from '@/components/base'
-import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -79,12 +89,12 @@ function resetForm() {
 }
 
 const columns = computed(() => [
-  { colKey: 'ID', title: t('common.colId'), width: 70 },
-  { colKey: 'Name', title: t('common.colName'), align: 'center' },
-  { colKey: 'Scheme', title: t('proxies.colScheme'), width: 90, align: 'center' },
-  { colKey: 'Host', title: t('proxies.colHost'), align: 'center' },
-  { colKey: 'Port', title: t('proxies.colPort'), width: 90, align: 'center' },
-  { colKey: 'Username', title: t('proxies.colUser'), width: 120, align: 'center' },
+  { colKey: 'id', title: t('common.colId'), width: 70 },
+  { colKey: 'name', title: t('common.colName'), align: 'center' },
+  { colKey: 'scheme', title: t('proxies.colScheme'), width: 90, align: 'center' },
+  { colKey: 'host', title: t('proxies.colHost'), align: 'center' },
+  { colKey: 'port', title: t('proxies.colPort'), width: 90, align: 'center' },
+  { colKey: 'username', title: t('proxies.colUser'), width: 120, align: 'center' },
   { colKey: 'op', title: t('common.colOp'), width: 180, align: 'center' },
 ])
 
@@ -105,25 +115,25 @@ function openCreate() {
 
 // openEdit 回填已有代理（密码不回显，留空提交则保留原值）
 function openEdit(row: Proxy) {
-  editingId.value = row.ID
-  form.name = row.Name; form.scheme = row.Scheme; form.host = row.Host
-  form.port = row.Port; form.username = row.Username; form.password = ''
+  editingId.value = row.id
+  form.name = row.name; form.scheme = row.scheme; form.host = row.host
+  form.port = row.port; form.username = row.username; form.password = ''
   createVisible.value = true
 }
 
 // submit 新建 / 编辑分流：editingId>0 走 PUT
 async function submit() {
-  if (!form.host || !form.port) {
+  if (!form.host.trim() || form.port < 1 || form.port > 65535) {
     MessagePlugin.warning(t('proxies.errForm'))
     return
   }
   creating.value = true
   try {
     if (editingId.value > 0) {
-      await proxyApi.update(editingId.value, { Name: form.name, Scheme: form.scheme, Host: form.host, Port: form.port, Username: form.username, password: form.password })
+      await proxyApi.update(editingId.value, { name: form.name, scheme: form.scheme, host: form.host, port: form.port, username: form.username, password: form.password })
       MessagePlugin.success(t('common.saved'))
     } else {
-      await proxyApi.create({ Name: form.name, Scheme: form.scheme, Host: form.host, Port: form.port, Username: form.username, password: form.password })
+      await proxyApi.create({ name: form.name, scheme: form.scheme, host: form.host, port: form.port, username: form.username, password: form.password })
       MessagePlugin.success(t('common.created'))
     }
     createVisible.value = false
@@ -137,9 +147,9 @@ async function submit() {
 
 // test 经该代理拨中立目标，回显连通性与时延
 async function test(row: Proxy) {
-  testingId.value = row.ID
+  testingId.value = row.id
   try {
-    const r = await proxyApi.test(row.ID)
+    const r = await proxyApi.test(row.id)
     if (r.ok) {
       MessagePlugin.success(t('proxies.testOk', { ms: r.latency_ms ?? 0 }))
     } else {
@@ -158,4 +168,6 @@ async function remove(id: number) {
 }
 
 onMounted(load)
+
+const { page, pageSize, total, items: pageItems } = useClientPagination(proxies)
 </script>

@@ -1,5 +1,6 @@
 <template>
-  <div class="editor-page">
+  <page-layout :scroll="false" class="editor-page">
+    <template #header>
     <div class="editor-topbar">
       <t-button variant="text" shape="square" @click="goBack">
         <template #icon><arrow-left-icon /></template>
@@ -10,7 +11,9 @@
         <t-button theme="primary" :loading="saving" @click="save">{{ $t('plugins.editorSave') }}</t-button>
       </t-space>
     </div>
-    <code-editor v-model="lua" height="calc(100vh - 160px)" />
+    </template>
+    <code-editor v-model="lua" height="100%" />
+    <template #overlays>
 
     <!-- 保存表单：新建时填写插件名/显示名/icon，确认后创建 -->
     <c-drawer
@@ -37,10 +40,12 @@
       </t-form>
       <t-alert theme="info" :message="t('plugins.editorCreateHint')" style="margin-top: 12px" />
     </c-drawer>
-  </div>
+    </template>
+  </page-layout>
 </template>
 
 <script setup lang="ts">
+import { PageLayout } from '@/components'
 // 全屏 Lua 插件编辑页：编辑态保存即重载；新建态保存弹建档表单（名称/显示名由代码侧
 // PLUGIN_NAME/PLUGIN_LABEL 回显只读，仅 icon 可编辑）后创建。
 import { computed, ref, watch } from 'vue'

@@ -1,10 +1,12 @@
 <template>
-  <div class="page">
-    <page-header v-if="!isPhone">
+  <page-layout :body-key="`${page}:${pageSize}`" :scroll="false">
+    <template v-if="!isPhone" #header>
+      <page-header>
       
-      <t-button theme="primary" @click="createVisible = true">{{ $t('keys.create') }}</t-button>
-    </page-header>
-    <c-table row-key="id" :data="keys" :columns="columns" :loading="loading" mobile-cards :phone-cols="['name', 'enabled', 'last_used_at']">
+        <t-button theme="primary" @click="createVisible = true">{{ $t('keys.create') }}</t-button>
+      </page-header>
+    </template>
+    <c-table fill row-key="id" :data="pageItems" :columns="columns" :loading="loading" mobile-cards :phone-cols="['name', 'enabled', 'last_used_at']">
       <template #key="{ row }">
         <span class="key-mask">
           {{ row.key_mask }}
@@ -22,18 +24,23 @@
             {{ routeName(rid) }}
           </t-tag>
         </template>
-        <t-tag v-else size="small" theme="primary" variant="light">{{ $t('keys.allRoutes') }}</t-tag>
+        <t-tag v-else size="small" theme="primary" variant="light">{{ $t(row.route_scope === 'restricted' ? 'keys.noRoutes' : 'keys.allRoutes') }}</t-tag>
       </template>
       <template #op="{ row }">
         <t-space size="small">
           <t-link theme="primary" @click="openRename(row)">{{ $t('common.edit') }}</t-link>
-          <t-link theme="primary" @click="bindVisible = row.id">{{ $t('keys.bindRoutes') }}</t-link>
+          <t-link theme="primary" @click="openBind(row)">{{ $t('keys.bindRoutes') }}</t-link>
           <t-popconfirm :content="$t('keys.confirmDelete')" @confirm="remove(row.id)">
             <t-link theme="danger">{{ $t('common.delete') }}</t-link>
           </t-popconfirm>
         </t-space>
       </template>
     </c-table>
+    <template #footer>
+      <c-pagination v-model="page" v-model:pageSize="pageSize" :total="total" />
+    </template>
+    <template #overlays>
+
 
     <!-- 创建密钥 -->
     <c-drawer v-model:visible="createVisible" :header="$t('keys.create')" :confirm-btn="{ loading: creating }" @confirm="submitCreate">
@@ -51,7 +58,11 @@
     </c-drawer>
 
     <c-drawer v-model:visible="bindVisibleBool" :header="$t('keys.bindTitle')" @confirm="bind">
-      <bind-select v-model="bindRoutes" :options="routeOptions" :placeholder="$t('keys.bindPh')" />
+      <t-radio-group v-model="bindScope">
+        <t-radio value="all">{{ $t('keys.allRoutes') }}</t-radio>
+        <t-radio value="restricted">{{ $t('keys.selectedRoutes') }}</t-radio>
+      </t-radio-group>
+      <bind-select v-if="bindScope === 'restricted'" v-model="bindRoutes" :options="routeOptions" :placeholder="$t('keys.bindPh')" />
     </c-drawer>
 
     <!-- 改名 -->
@@ -68,17 +79,21 @@
         <template #icon><add-icon /></template>
       </t-button>
     </mobile-fab>
-  </div>
+    </template>
+  </page-layout>
 </template>
 
 <script setup lang="ts">
+import { PageLayout, PageHeader } from '@/components'
+import { CPagination } from '@/components/base'
+import { useClientPagination } from '@/composables'
 import { CDrawer } from '@/components/base'
 import { FormItem } from '@/components'
 import { CCard, CTable, MobileFab } from '@/components/base'
-import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'
 import { useDialogVisible } from '@/composables'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { copyText } from '@/utils/common'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { FileCopyIcon, AddIcon } from 'tdesign-icons-vue-next'
@@ -102,17 +117,25 @@ const bindRoutes = ref<number[]>([])
 const renameVisible = ref<number | null>(null)
 const renameName = ref('')
 
-// 行内明文缓存（keyID → 明文，复制用）
-const plainKeys = ref<Record<number, string>>({})
+const bindScope = ref<'all' | 'restricted'>('all')
+watch(newKeyVisible, (visible) => { if (!visible) newKey.value = '' })
 
-// 复制小图标 → 调 reveal（带缓存）→ 复制到粘贴板
+function openBind(row: KeyInfo) {
+  bindScope.value = row.route_scope
+  bindRoutes.value = [...(row.route_ids ?? [])]
+  bindVisible.value = row.id
+}
+
+// 明文只在复制操作期间持有。
 async function copyKey(row: KeyInfo) {
   try {
-    if (!plainKeys.value[row.id]) {
-      const resp = await keyApi.reveal(row.id)
-      plainKeys.value[row.id] = resp.key
+    const resp = await keyApi.reveal(row.id)
+    if (!await copyText(resp.key)) {
+      newKey.value = resp.key
+      newKeyVisible.value = true
+      MessagePlugin.warning(t('keys.copyFailed'))
+      return
     }
-    await navigator.clipboard.writeText(plainKeys.value[row.id])
     MessagePlugin.success(t('keys.copiedPlain'))
   } catch (e: any) {
     MessagePlugin.error(e.message || t('keys.copyFailed'))
@@ -191,18 +214,20 @@ async function remove(id: number) {
 
 async function bind() {
   if (bindVisible.value === null) return
-  await keyApi.routes(bindVisible.value, bindRoutes.value)
+  await keyApi.routes(bindVisible.value, bindScope.value === 'all' ? [] : bindRoutes.value, bindScope.value)
   MessagePlugin.success(t('common.updated'))
   bindVisible.value = null
   await load()
 }
 
-function copy() {
-  navigator.clipboard.writeText(newKey.value)
-  MessagePlugin.success(t('keys.copied'))
+async function copy() {
+  if (await copyText(newKey.value)) MessagePlugin.success(t('keys.copied'))
+  else MessagePlugin.warning(t('keys.copyFailed'))
 }
 
 onMounted(load)
+
+const { page, pageSize, total, items: pageItems } = useClientPagination(keys)
 </script>
 
 <style scoped>

@@ -1,5 +1,5 @@
 <template>
-  <div class="page">
+  <page-layout>
     <c-card :title="$t('profile.title')" class="card" :bordered="false">
       <t-descriptions :column="1" bordered size="small">
         <t-descriptions-item :label="$t('profile.username')">{{ me?.username || '-' }}</t-descriptions-item>
@@ -30,10 +30,11 @@
         </form-item>
       </t-form>
     </c-drawer>
-  </div>
+  </page-layout>
 </template>
 
 <script setup lang="ts">
+import { PageLayout } from '@/components'
 import { CDrawer } from '@/components/base'
 import FormItem from '@/components/FormItem.vue'
 import { CCard, CTable } from '@/components/base'

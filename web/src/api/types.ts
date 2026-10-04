@@ -172,6 +172,7 @@ export interface KeyInfo {
   last_used_at: string // 最后调用（空 = 从未）
   key_mask: string // 掩码（cph-****abcd）
   route_ids: number[] | null
+  route_scope: 'all' | 'restricted'
 }
 
 export interface GroupInfo {

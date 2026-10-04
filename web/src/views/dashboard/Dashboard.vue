@@ -1,5 +1,5 @@
 <template>
-  <div class="page">
+  <page-layout>
     
 
     <!-- 统计卡片 -->
@@ -67,10 +67,11 @@
         </c-card>
       </t-col>
     </t-row>
-  </div>
+  </page-layout>
 </template>
 
 <script setup lang="ts">
+import { PageLayout } from '@/components'
 import { CCard, CTable } from '@/components/base'
 import StatCards from './parts/StatCards.vue'
 import QuotaCarousel from './parts/QuotaCarousel.vue'

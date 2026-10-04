@@ -1,6 +1,7 @@
 // 通用逻辑 hooks 统一出口。
 export { useTheme } from './useTheme'
 export { usePagination } from './usePagination'
+export { useClientPagination } from './useClientPagination'
 export { useDialogVisible, useDialog } from './useDialogVisible'
 export { useChart } from './useChart'
 export { useLocale, useLocalizedText } from './useLocale'

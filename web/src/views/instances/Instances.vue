@@ -1,22 +1,16 @@
 <template>
-  <div class="page">
-    <page-header v-if="!isPhone">
-      <filter-bar>
-        <t-select v-model="filterPlugin" clearable :placeholder="$t('instances.filterPlugin')" class="w-md" @change="load">
-          <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
-        </t-select>
-        <t-button theme="primary" :disabled="!multiPlugins.length" @click="openCreate">{{ $t('instances.add') }}</t-button>
-      </filter-bar>
-    </page-header>
-
-    <!-- 手机端：插件筛选收进底部抽屉 -->
-    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('instances.filterPlugin')" :footer="false">
-      <t-select v-model="filterPlugin" clearable :placeholder="$t('instances.filterPlugin')" @change="load">
-        <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
-      </t-select>
-    </c-drawer>
-
-    <c-table row-key="id" :data="list" :columns="columns" :loading="loading" mobile-cards>
+  <page-layout :body-key="`${page}:${pageSize}`" :scroll="false">
+    <template v-if="!isPhone" #header>
+      <page-header>
+        <filter-bar>
+          <t-select v-model="filterPlugin" clearable :placeholder="$t('instances.filterPlugin')" class="w-md" @change="load">
+            <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
+          </t-select>
+          <t-button theme="primary" :disabled="!multiPlugins.length" @click="openCreate">{{ $t('instances.add') }}</t-button>
+        </filter-bar>
+      </page-header>
+    </template>
+    <c-table fill row-key="id" :data="pageItems" :columns="columns" :loading="loading" mobile-cards>
       <template #base_url="{ row }">
         <span class="mono">{{ row.base_url || '-' }}</span>
       </template>
@@ -27,6 +21,19 @@
         </t-space>
       </template>
     </c-table>
+    <template #footer>
+      <c-pagination v-model="page" v-model:pageSize="pageSize" :total="total" />
+    </template>
+    <template #overlays>
+
+    <!-- 手机端：插件筛选收进底部抽屉 -->
+    <c-drawer v-if="isPhone" v-model:visible="filterOpen" :header="$t('instances.filterPlugin')" :footer="false">
+      <t-select v-model="filterPlugin" clearable :placeholder="$t('instances.filterPlugin')" @change="load">
+        <t-option v-for="p in plugins" :key="p.id" :value="p.id" :label="p.label || p.name" />
+      </t-select>
+    </c-drawer>
+
+
 
     <instance-form-dialog v-model:visible="dialogVisible" :plugin="dialogPlugin" :plugins="multiPlugins" :instance="editing" @saved="load" />
     <delete-impact-dialog
@@ -46,12 +53,15 @@
         <template #icon><add-icon /></template>
       </t-button>
     </mobile-fab>
-  </div>
+    </template>
+  </page-layout>
 </template>
 
 <script setup lang="ts">
+import { PageLayout, PageHeader } from '@/components'
+import { CPagination } from '@/components/base'
+import { useClientPagination } from '@/composables'
 import { CCard, CTable, MobileFab , CDrawer, FilterBar } from '@/components/base'
-import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'
 import { pluginLabelOf } from '@/utils/lookup'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -129,6 +139,9 @@ function askRemove(row: InstanceInfo) {
 }
 
 onMounted(load)
+
+const { page, pageSize, total, items: pageItems, reset: resetPage } = useClientPagination(list)
+watch(filterPlugin, resetPage)
 </script>
 
 <style scoped>

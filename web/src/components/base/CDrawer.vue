@@ -26,6 +26,7 @@
           <t-button
             :theme="confirmBtn?.theme ?? 'primary'"
             :loading="confirmBtn?.loading"
+            :disabled="confirmBtn?.disabled"
             @click="emit('confirm')"
           >{{ confirmBtn?.content ?? t('common.ok') }}</t-button>
         </span>
@@ -46,6 +47,7 @@ interface ConfirmBtn {
   loading?: boolean
   content?: string
   theme?: 'primary' | 'danger' | 'default'
+  disabled?: boolean
 }
 
 // footer 用 undefined 豁免 Vue Boolean 转换，否则确认按钮不渲染

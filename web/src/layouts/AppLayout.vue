@@ -83,12 +83,12 @@ const currentPage = computed(
   min-width: 0;
   overflow: hidden;
 }
-/* 内容区域：占满剩余高度，仅纵向滚动（筛选条/表格等宽度交给 flex-wrap 换行消化） */
+/* 页面自行管理主体滚动，避免外层滚动带走页头和分页。 */
 .content {
   flex: 1;
   height: 0;
   min-width: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
+  min-height: 0;
+  overflow: hidden;
 }
 </style>

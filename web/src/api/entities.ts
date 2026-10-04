@@ -29,10 +29,14 @@ export const pluginApi = {
   marketplace: (source: string) =>
     api.get<{ plugins: MarketEntry[]; source?: string }>(`/admin/plugins/marketplace?source=${encodeURIComponent(source)}`),
   // 市场安装：NDJSON 进度流，每个阶段事件回调一次；出错抛 Error；signal 可中途取消下载
-  installMarket: (name: string, author: string, source: string, onProgress: (p: InstallProgress) => void, signal?: AbortSignal) =>
-    requestStream('POST', '/admin/plugins/install-market', { name, author, source }, (ev) => {
+  installMarket: async (name: string, author: string, source: string, onProgress: (p: InstallProgress) => void, signal?: AbortSignal) => {
+    let installed = false
+    await requestStream('POST', '/admin/plugins/install-market', { name, author, source }, (ev) => {
       if (ev.phase) onProgress(ev as InstallProgress)
-    }, signal),
+      if (ev.installed) installed = true
+    }, signal)
+    if (!installed) throw new Error('Installation stream ended before completion')
+  },
   // t-upload 自定义上传：multipart 直发安装端点
   uploadInstall: async (raw: File) => {
     const form = new FormData()
@@ -126,14 +130,15 @@ export const groupApi = {
 // ---------- 代理 ----------
 
 export interface Proxy {
-  ID: number
-  Name: string
-  Scheme: string
-  Host: string
-  Port: number
-  Username: string
+  id: number
+  name: string
+  scheme: string
+  host: string
+  port: number
+  username: string
+  has_password: boolean
 }
-export type ProxyBody = Pick<Proxy, 'Name' | 'Scheme' | 'Host' | 'Port' | 'Username'> & { password?: string }
+export type ProxyBody = Pick<Proxy, 'name' | 'scheme' | 'host' | 'port' | 'username'> & { password?: string }
 
 export const proxyApi = {
   list: () => api.get<{ proxies: Proxy[] }>('/admin/proxies'),
@@ -161,7 +166,7 @@ export const keyApi = {
   remove: (id: number) => api.del(`/admin/keys/${id}`),
   reveal: (id: number) => api.get<{ key: string }>(`/admin/keys/${id}/reveal`),
   toggle: (id: number) => api.post(`/admin/keys/${id}/toggle`),
-  routes: (id: number, route_ids: number[]) => api.put(`/admin/keys/${id}/routes`, { route_ids }),
+  routes: (id: number, route_ids: number[], route_scope: 'all' | 'restricted') => api.put(`/admin/keys/${id}/routes`, { route_ids, route_scope }),
 }
 
 // ---------- OAuth 凭据 ----------
@@ -188,7 +193,7 @@ export const oauthApi = {
 
 export const taskApi = {
   rules: (page: number, pageSize: number) =>
-    api.get<{ rules: TaskRule[]; total: number }>(`/admin/task-rules?page=${page}&page_size=${pageSize}`),
+    api.get<{ rules: TaskRule[]; total: number; timezone: string }>(`/admin/task-rules?page=${page}&page_size=${pageSize}`),
   runs: (page: number, pageSize: number) =>
     api.get<{ runs: TaskRun[]; total: number }>(`/admin/task-runs?page=${page}&page_size=${pageSize}`),
   createRule: (body: Record<string, unknown>) => api.post('/admin/task-rules', body),

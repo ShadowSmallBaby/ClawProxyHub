@@ -57,7 +57,10 @@ async function onSetup() {
   loading.value = true
   try {
     await authApi.setup(username.value, password.value)
-    setToken(`${username.value}:${password.value}`) // 初始化完成即登录
+    const session = await authApi.login(username.value, password.value)
+    setToken(session.token)
+    password.value = ''
+    confirm.value = ''
     MessagePlugin.success(t('setup.done'))
     router.replace('/')
   } catch (e: any) {

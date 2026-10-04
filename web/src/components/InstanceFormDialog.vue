@@ -48,6 +48,7 @@ import { MessagePlugin } from 'tdesign-vue-next'
 import { CDrawer } from './base'
 import FormItem from './FormItem.vue'
 import { instanceApi } from '@/api/entities'
+import { validBaseURL } from '@/utils/url'
 import type { InstanceInfo, PluginInfo } from '@/api/types'
 
 const props = defineProps<{
@@ -85,7 +86,7 @@ watch(() => props.visible, (v) => {
 
 // host 清洗：去空格、剥离误粘的协议头、去尾随斜线
 function normalizeHost() {
-  let h = form.host.replace(/\s+/g, '')
+  let h = form.host.trim()
   const m = /^(https?:\/\/)(.*)$/i.exec(h)
   if (m) {
     form.scheme = m[1].toLowerCase()
@@ -137,14 +138,7 @@ async function submit() {
       MessagePlugin.warning(t('instances.baseUrlRequired'))
       return
     }
-    // host 格式：域名（含 .）或 IP[:port]（含 . 或为 localhost）；纯数字/单词字母拦下
-    const h = form.host
-    const hasPort = /:[0-9]{1,5}$/.test(h)
-    const hostPart = hasPort ? h.slice(0, h.lastIndexOf(':')) : h
-    const isDomain = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/.test(hostPart)
-    const isIPv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostPart)
-    const isLocalhost = hostPart === 'localhost'
-    if (!isDomain && !isIPv4 && !isLocalhost) {
+    if (!validBaseURL(baseURL.value)) {
       MessagePlugin.warning(t('instances.baseUrlInvalid'))
       return
     }

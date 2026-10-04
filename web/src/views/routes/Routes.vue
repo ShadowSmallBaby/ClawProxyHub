@@ -1,10 +1,12 @@
 <template>
-  <div class="page">
-    <page-header v-if="!isPhone">
+  <page-layout :body-key="`${page}:${pageSize}`" :scroll="false">
+    <template v-if="!isPhone" #header>
+      <page-header>
       
-      <t-button theme="primary" @click="openCreate">{{ $t('routes.create') }}</t-button>
-    </page-header>
-    <c-table row-key="ID" :data="routes" :columns="columns" :loading="loading" mobile-cards :phone-cols="['Name', 'strategy']">
+        <t-button theme="primary" @click="openCreate">{{ $t('routes.create') }}</t-button>
+      </page-header>
+    </template>
+    <c-table fill row-key="ID" :data="pageItems" :columns="columns" :loading="loading" mobile-cards :phone-cols="['Name', 'strategy']">
       <template #strategy="{ row }">
         <t-tag variant="light">{{ dict(strategyDict, row.Strategy) }}</t-tag>
       </template>
@@ -37,6 +39,11 @@
         </t-space>
       </template>
     </c-table>
+    <template #footer>
+      <c-pagination v-model="page" v-model:pageSize="pageSize" :total="total" />
+    </template>
+    <template #overlays>
+
 
     <c-drawer v-model:visible="dialogVisible" :header="editingID ? $t('routes.editTitle') : $t('routes.create')" width="760px" :confirm-btn="{ loading: saving }" @confirm="save">
       <t-form>
@@ -115,14 +122,17 @@
         <template #icon><add-icon /></template>
       </t-button>
     </mobile-fab>
-  </div>
+    </template>
+  </page-layout>
 </template>
 
 <script setup lang="ts">
+import { PageLayout, PageHeader } from '@/components'
+import { CPagination } from '@/components/base'
+import { useClientPagination } from '@/composables'
 import { CDrawer } from '@/components/base'
 import { FormItem } from '@/components'
 import { CCard, CTable, MobileFab } from '@/components/base'
-import PageHeader from '@/components/PageHeader.vue'
 import { useAsync, useIsMobile } from '@/composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -315,6 +325,8 @@ async function remove(id: number) {
 }
 
 onMounted(load)
+
+const { page, pageSize, total, items: pageItems } = useClientPagination(routes)
 </script>
 
 <style scoped>

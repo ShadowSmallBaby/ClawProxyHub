@@ -84,9 +84,15 @@
       <t-tab-panel value="task" :label="$t('settings.task')">
         <div class="panel">
           <div class="s-form">
-            <form-item :label="$t('settings.taskJitter')" :tip="$t('settings.taskJitterHelp')">
-              <t-input-number v-model="taskForm.task_daily_jitter" :min="0" :max="45" :suffix="$t('settings.taskJitterUnit')" theme="column" class="w-sm" @change="save({ task_daily_jitter: taskForm.task_daily_jitter })" />
+            <form-item :label="$t('settings.timezone')" :tip="$t('settings.timezoneHelp')">
+              <t-auto-complete v-model="taskForm.timezone" :options="timezoneOptions" filterable class="w-md" placeholder="Asia/Shanghai" :disabled="saving" />
             </form-item>
+            <form-item :label="$t('settings.taskJitter')" :tip="$t('settings.taskJitterHelp')">
+              <t-input-number v-model="taskForm.task_daily_jitter" :min="0" :max="45" :suffix="$t('settings.taskJitterUnit')" theme="column" class="w-sm" />
+            </form-item>
+            <div class="save-row">
+              <t-button theme="primary" :loading="saving" @click="saveTask">{{ $t('common.save') }}</t-button>
+            </div>
           </div>
         </div>
       </t-tab-panel>
@@ -187,7 +193,7 @@
       <t-button theme="default" shape="circle" size="large" @click="openSys">
         <template #icon><desktop-icon /></template>
       </t-button>
-      <t-button v-if="['gateway', 'network', 'system'].includes(tab)" theme="success" shape="circle" size="large" :loading="saving" @click="saveCurrent">
+      <t-button v-if="['gateway', 'network', 'task', 'system'].includes(tab)" theme="success" shape="circle" size="large" :loading="saving" :aria-label="$t('common.save')" @click="saveCurrent">
         <template #icon><save-icon /></template>
       </t-button>
     </mobile-fab>
@@ -201,7 +207,7 @@
 </template>
 
 <script setup lang="ts">
-import { CTabs, MobileFab } from '@/components/base'
+import { CDrawer, CTabs, MobileFab } from '@/components/base'
 import { FormItem, SysInfoCard } from '@/components'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -246,12 +252,20 @@ const currentTabLabel = computed(() => tabOptions.value.find((o) => o.value === 
 function saveCurrent() {
   if (tab.value === 'gateway') save({ first_event_timeout: gwForm.first_event_timeout, first_token_timeout: gwForm.first_token_timeout, max_retries: gwForm.max_retries, user_agent: gwForm.user_agent.trim(), browser_user_agent: gwForm.browser_user_agent.trim(), context_truncate_enabled: gwForm.context_truncate_enabled, context_truncate_ratio: gwForm.context_truncate_ratio, context_bytes_per_token: gwForm.context_bytes_per_token })
   else if (tab.value === 'network') save({ github_proxy: netForm.github_proxy.trim() })
+  else if (tab.value === 'task') saveTask()
   else if (tab.value === 'system') saveSite()
+}
+function saveTask() {
+  return save({ timezone: taskForm.timezone.trim(), task_daily_jitter: taskForm.task_daily_jitter })
 }
 const gwForm = reactive({ first_event_timeout: 60, first_token_timeout: 120, max_retries: 3, user_agent: '', browser_user_agent: '', context_truncate_enabled: true, context_truncate_ratio: 0.9, context_bytes_per_token: 3.5 })
 const netForm = reactive({ github_proxy: '' })
 const logForm = reactive({ log_retention_days: 0, run_level: 'error' })
-const taskForm = reactive({ task_daily_jitter: 30 })
+const taskForm = reactive({ task_daily_jitter: 30, timezone: 'Asia/Shanghai' })
+const timezoneOptions = computed(() => [
+  { text: 'Asia/Shanghai', label: t('settings.timezoneShanghai') },
+  ...['UTC', 'Asia/Hong_Kong', 'Asia/Tokyo', 'Asia/Singapore', 'Asia/Kolkata', 'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Los_Angeles', 'Australia/Sydney'],
+])
 const siteForm = reactive({ site_name: '', site_abbr: '', site_logo: '' })
 const pluginForm = reactive({ plugin_lua_enabled: true, plugin_lua_isolation: true, plugin_lua_update_mode: 'manual' })
 const saving = ref(false)
@@ -279,6 +293,7 @@ async function load() {
   logForm.log_retention_days = r.settings?.log_retention_days ?? 0
   logForm.run_level = r.settings?.run_level ?? 'error'
   taskForm.task_daily_jitter = r.settings?.task_daily_jitter ?? 30
+  taskForm.timezone = r.settings?.timezone ?? 'Asia/Shanghai'
   siteForm.site_name = r.settings?.site_name ?? ''
   siteForm.site_abbr = r.settings?.site_abbr ?? ''
   siteForm.site_logo = r.settings?.site_logo ?? ''

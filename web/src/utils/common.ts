@@ -27,9 +27,21 @@ export function parseJSON<T>(raw: string | null | undefined, fallback: T): T {
 // 剪贴板复制
 export async function copyText(text: string): Promise<boolean> {
   try {
-    await navigator.clipboard.writeText(text)
-    return true
-  } catch {
-    return false
-  }
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch { /* 非安全上下文或权限拒绝时提供传统复制。 */ }
+  const input = document.createElement('textarea')
+  input.value = text
+  input.setAttribute('readonly', '')
+  input.style.position = 'fixed'
+  input.style.opacity = '0'
+  document.body.appendChild(input)
+  const focused = document.activeElement as HTMLElement | null
+  try {
+    input.select()
+    return document.execCommand('copy')
+  } catch { return false }
+  finally { input.remove(); focused?.focus() }
 }

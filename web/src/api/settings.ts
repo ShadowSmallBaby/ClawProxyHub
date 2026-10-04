@@ -11,6 +11,7 @@ export interface AdminSettings {
   log_retention_days?: number
   run_level?: string
   task_daily_jitter?: number
+  timezone?: string
   context_truncate_enabled?: boolean
   context_truncate_ratio?: number
   context_bytes_per_token?: number

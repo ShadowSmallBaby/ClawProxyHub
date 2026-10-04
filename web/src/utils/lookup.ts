@@ -32,5 +32,5 @@ export function groupOptionsOf(groups: GroupInfo[]) {
 
 // 代理下拉：scheme://host:port
 export function proxyOptionsOf(proxies: Proxy[]) {
-  return proxies.map((px) => ({ value: px.ID, label: `${px.Scheme}://${px.Host}:${px.Port}` }))
+  return proxies.map((px) => ({ value: px.id, label: `${px.scheme}://${px.host}:${px.port}` }))
 }
