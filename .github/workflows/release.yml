@@ -48,17 +48,21 @@ jobs:
           ref: ${{ needs.resolve.outputs.tag }}
           submodules: false
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Build web UI
         working-directory: web
         run: |
-          npm ci
-          npx vite build
+          pnpm install --frozen-lockfile
+          pnpm run build-fast
 
       - uses: actions/upload-artifact@v4
         with:
