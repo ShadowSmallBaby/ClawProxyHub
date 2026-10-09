@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -73,15 +74,18 @@ func (s *Server) withGitHubProxy(raw string) string {
 // MarketEntry 市场 index.json 的单条目。
 // 同名插件以 author+name 判定同插件（name 不保证全局唯一）。
 type MarketEntry struct {
-	Name        string            `json:"name"`
-	Version     string            `json:"version"`
-	Author      string            `json:"author,omitempty"`
-	Label       map[string]string `json:"label"` // 品牌名（多语言，zh 优先）
-	PublishedAt string            `json:"published_at,omitempty"`
-	DownloadURL string            `json:"download_url"`
-	SHA256      string            `json:"sha256"`
-	Source      string            `json:"source,omitempty"`  // 来源插件源名（聚合时由核心填入，索引里不含）
-	Runtime     string            `json:"runtime,omitempty"` // 空=Go 插件；"lua"=脚本插件
+	Name            string              `json:"name"`
+	Version         string              `json:"version"`
+	Author          string              `json:"author,omitempty"`
+	Label           map[string]string   `json:"label"` // 品牌名（多语言，zh 优先）
+	PublishedAt     string              `json:"published_at,omitempty"`
+	DownloadURL     string              `json:"download_url"`
+	SHA256          string              `json:"sha256"`
+	Source          string              `json:"source,omitempty"`  // 来源插件源名（聚合时由核心填入，索引里不含）
+	Runtime         string              `json:"runtime,omitempty"` // 空=Go 插件；"lua"=脚本插件
+	ReleaseManifest *releaseArtifact    `json:"release_manifest,omitempty"`
+	ProtocolVersion int32               `json:"protocol_version,omitempty"`
+	Platforms       map[string][]string `json:"platforms,omitempty"`
 }
 
 // marketView 市场条目 + 本机安装状态（前端直接消费）。
@@ -157,9 +161,13 @@ func (s *Server) installMarket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dl := *entry // 下载 URL 套 GitHub 代理（索引里的原始地址保持干净）
-	dl.DownloadURL = s.withGitHubProxy(entry.DownloadURL)
 	pw := newProgressWriter(w)
+	pw.send(map[string]string{"phase": "downloading"})
+	dl, err := resolveMarketArtifact(r.Context(), *entry, runtime.GOOS+"-"+runtime.GOARCH, s.withGitHubProxy)
+	if err != nil {
+		pw.send(map[string]string{"error": err.Error()})
+		return
+	}
 	// r.Context() 随客户端断开而取消：前端点「取消」abort fetch → 连接断 → 下载中断
 	zipPath, err := downloadToTemp(r.Context(), &dl, func(received, total int64) {
 		pw.send(map[string]interface{}{"phase": "downloading", "received": received, "total": total})
@@ -169,6 +177,10 @@ func (s *Server) installMarket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer os.Remove(zipPath)
+	if runtime.GOOS == "android" && zipManifestRuntime(zipPath) != "lua" {
+		pw.send(map[string]string{"error": "Install native plugins from the Android app's Plugins tab"})
+		return
+	}
 	name, err := s.installZip(r.Context(), zipPath, entry.Source, func(phase string) {
 		pw.send(map[string]string{"phase": phase})
 	})
@@ -203,10 +215,12 @@ func (p *progressWriter) send(v interface{}) {
 
 // installUpload POST /admin/plugins/install-upload — multipart 上传 .cphplugin。
 func (s *Server) installUpload(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 129<<20)
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
 		http.Error(w, `{"error":"invalid upload"}`, http.StatusBadRequest)
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	file, _, err := r.FormFile("package")
 	if err != nil {
 		http.Error(w, `{"error":"missing package field"}`, http.StatusBadRequest)
@@ -226,6 +240,10 @@ func (s *Server) installUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tmp.Close()
+	if runtime.GOOS == "android" && zipManifestRuntime(tmp.Name()) != "lua" {
+		writeJSON(w, 400, map[string]string{"error": "Install native plugins from the Android app's Plugins tab"})
+		return
+	}
 	name, err := s.installZip(r.Context(), tmp.Name(), "", nil)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -240,10 +258,6 @@ func (s *Server) installUpload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) installZip(ctx context.Context, zipPath, source string, onPhase func(string)) (string, error) {
 	if source == setting.OfficialSourceName {
 		source = ""
-	}
-	// lua 插件安装网关：设置里关闭 Lua 时拒装（覆盖市场/上传两条路径）
-	if zipManifestRuntime(zipPath) == "lua" && !s.settings.LuaEnabled() {
-		return "", fmt.Errorf("Lua 插件安装已在系统设置中禁用")
 	}
 	name, err := s.plugins.InstallZip(ctx, zipPath, source, onPhase)
 	if err != nil {
@@ -278,27 +292,6 @@ func zipManifestRuntime(zipPath string) string {
 		return mf.Runtime
 	}
 	return ""
-}
-
-// uploadLuahost POST /admin/plugins/luahost-upload — 手动上传共享 luahost 二进制（multipart file），
-// 覆盖 data/hosts 下当前平台 luahost（打 .manual 标记，不再被内置字节自动刷新）并重启在跑的 lua 插件。
-func (s *Server) uploadLuahost(w http.ResponseWriter, r *http.Request) {
-	file, _, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, `{"error":"missing file"}`, http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, 128<<20)) // 128MB 上限
-	if err != nil || len(data) == 0 {
-		http.Error(w, `{"error":"read file"}`, http.StatusBadRequest)
-		return
-	}
-	if err := s.plugins.ReplaceLuahost(data); err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // stopPlugin POST /admin/plugins/{name}/stop — 停止并写持久化状态（重启核心保持停止）。

@@ -20,11 +20,14 @@ const keyJWTSecret = "auth.jwt_secret"
 const jwtTTL = 7 * 24 * time.Hour
 
 type jwtClaims struct {
-	Sub     string `json:"sub"`
-	Role    string `json:"role"`
-	Iat     int64  `json:"iat"`
-	Exp     int64  `json:"exp"`
-	Version *int64 `json:"ver"`
+	Scoped  bool     `json:"scoped,omitempty"`
+	Scopes  []string `json:"scopes,omitempty"`
+	Nonce   string   `json:"nonce,omitempty"`
+	Sub     string   `json:"sub"`
+	Role    string   `json:"role"`
+	Iat     int64    `json:"iat"`
+	Exp     int64    `json:"exp"`
+	Version *int64   `json:"ver"`
 }
 
 func (s *Server) jwtSecret() ([]byte, error) {
@@ -56,6 +59,10 @@ func (s *Server) jwtSecret() ([]byte, error) {
 func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func (s *Server) signJWT(username, role string) (string, error) {
+	return s.signSession(username, nil, jwtTTL)
+}
+
+func (s *Server) signSession(username string, scopes []string, ttl time.Duration) (string, error) {
 	var user model.User
 	q := s.db.Where("username = ?", username)
 	if username == "" {
@@ -69,7 +76,11 @@ func (s *Server) signJWT(username, role string) (string, error) {
 		return "", err
 	}
 	now := time.Now()
-	payload, err := json.Marshal(jwtClaims{Sub: user.Username, Role: user.Role, Iat: now.Unix(), Exp: now.Add(jwtTTL).Unix(), Version: &user.AuthVersion})
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(jwtClaims{Sub: user.Username, Role: user.Role, Iat: now.Unix(), Exp: now.Add(ttl).Unix(), Version: &user.AuthVersion, Scoped: scopes != nil, Scopes: scopes, Nonce: hex.EncodeToString(nonce)})
 	if err != nil {
 		return "", err
 	}
@@ -80,6 +91,9 @@ func (s *Server) signJWT(username, role string) (string, error) {
 }
 
 func (s *Server) parseJWT(token string) (*jwtClaims, error) {
+	if s.legacyDeviceOwner(s.db) {
+		return nil, errors.New("device setup required")
+	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, errors.New("malformed token")

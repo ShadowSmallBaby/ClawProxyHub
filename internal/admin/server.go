@@ -5,6 +5,8 @@ package admin
 import (
 	"encoding/base64"
 	"encoding/json"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/action"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/extension"
 	"io"
 	"net/http"
 	"strconv"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/module"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/plugin"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/setting"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/task"
@@ -23,25 +26,34 @@ import (
 
 // Server 管理后台。
 type Server struct {
-	jwtMu          sync.Mutex
-	jwtKey         []byte
-	limiter        loginLimiter
-	restoreMu      sync.Mutex
-	db             *gorm.DB
-	accounts       *account.Service
-	plugins        *plugin.Manager
-	engine         *task.Engine
-	settings       *setting.Store
-	marketplaceURL string
-	dataDir        string // 数据目录（备份含 secret.key / restore 暂存）
-	dbPath         string // SQLite 文件路径（系统信息体积 / 备份）
+	deviceSetup      bool
+	systemComponents func() []extension.SystemComponent
+	actions          *action.Registry
+	extensions       *extension.Manager
+	profile          string
+	moduleStates     func() []module.State
+	jwtMu            sync.Mutex
+	jwtKey           []byte
+	limiter          loginLimiter
+	restoreMu        sync.Mutex
+	db               *gorm.DB
+	accounts         *account.Service
+	plugins          *plugin.Manager
+	engine           *task.Engine
+	settings         *setting.Store
+	marketplaceURL   string
+	dataDir          string // 数据目录（备份含 secret.key / restore 暂存）
+	dbPath           string // SQLite 文件路径（系统信息体积 / 备份）
 }
 
 // New 创建管理后台；表空且配置了 CPH_ADMIN_PASSWORD 时自动引导建号。
-func New(db *gorm.DB, accounts *account.Service, plugins *plugin.Manager, engine *task.Engine, settings *setting.Store, marketplaceURL, dataDir, dbPath string) *Server {
+func New(db *gorm.DB, accounts *account.Service, plugins *plugin.Manager, engine *task.Engine, settings *setting.Store, marketplaceURL, dataDir, dbPath string, options ...Option) *Server {
 	s := &Server{
 		db: db, accounts: accounts, plugins: plugins, engine: engine,
 		settings: settings, marketplaceURL: marketplaceURL, dataDir: dataDir, dbPath: dbPath,
+	}
+	for _, option := range options {
+		option(s)
 	}
 	// 插件源初始化：源列表缺失时用官方地址（config 默认 = env 覆盖或官方地址）建 official 源，
 	// 旧版 marketplace_url 自建地址一并导入；生效顺序：启用源聚合 > 离线兜底
@@ -69,7 +81,10 @@ func (s *Server) Handler() http.Handler {
 
 	r := authed{mux: mux, s: s}
 	s.routeSession(r)
+	r.h("GET /admin/capabilities", s.capabilities)
 	s.routePlugins(r)
+	s.routeExtensions(r)
+	s.routeMCP(r)
 	s.routeAccounts(r)
 	s.routeInstances(r)
 	s.routeKeys(r)
@@ -95,6 +110,7 @@ func (s *Server) routeOAuth(r authed) {
 
 // routeSession 会话：改密 / 当前用户。
 func (s *Server) routeSession(r authed) {
+	r.h("POST /admin/tokens/scoped", s.issueScopedToken)
 	r.h("POST /admin/password", s.changePassword)
 	r.h("GET /admin/me", s.me)
 }
@@ -114,7 +130,6 @@ func (s *Server) routePlugins(r authed) {
 	r.h("GET /admin/plugins/marketplace", s.marketplace)
 	r.h("POST /admin/plugins/install-market", s.installMarket)
 	r.h("POST /admin/plugins/install-upload", s.installUpload)
-	r.h("POST /admin/plugins/luahost-upload", s.uploadLuahost)
 	r.h("GET /admin/plugin-sources", s.listPluginSources)
 	r.h("GET /admin/plugin-sources/probe", s.probePluginSource)
 	r.h("PUT /admin/plugin-sources", s.putPluginSources)
@@ -189,6 +204,9 @@ func (s *Server) routeTasks(r authed) {
 	r.h("PUT /admin/task-rules/{id}", s.updateTaskRule)
 	r.h("DELETE /admin/task-rules/{id}", s.deleteTaskRule)
 	r.h("POST /admin/task-rules/{id}/run", s.runTaskRule)
+	r.h("POST /admin/task-rules/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		extensionReply(w, s.engine.CancelRule(parseInt(r.PathValue("id"))))
+	})
 	r.h("GET /admin/task-runs", s.listTaskRuns)
 }
 

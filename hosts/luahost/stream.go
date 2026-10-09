@@ -1,6 +1,6 @@
 // stream.go — 传给 plugin.chat 的 stream 对象：typed 方法 → srv.Send(StreamEvent)，
 // 与 Go 插件的 stream.Send(&pb.StreamEvent{...}) 同构。脚本按事件类型调对应方法。
-package main
+package luahost
 
 import (
 	lua "github.com/yuin/gopher-lua"

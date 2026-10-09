@@ -2,11 +2,13 @@
 package admin
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/setting"
+	spec "github.com/ShadowSmallBaby/ClawProxyHub/sdk/extension"
 )
 
 // 站点品牌字段上限：logo 为 data URL（base64 后约 ×1.37），限 256KB。
@@ -32,6 +34,11 @@ func (s *Server) getBranding(w http.ResponseWriter, r *http.Request) {
 
 // getSettings GET /admin/settings
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
+	luaEnabled := false
+	if s.extensions != nil {
+		state, _ := s.extensions.State("lua-runtime")
+		luaEnabled = state.Enabled
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"settings": map[string]interface{}{
 			"first_token_timeout":      int(s.settings.FirstTokenTimeout().Seconds()),
@@ -49,9 +56,9 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 			"context_truncate_enabled": s.settings.ContextTruncateEnabled(),
 			"context_truncate_ratio":   s.settings.ContextTruncateRatio(),
 			"context_bytes_per_token":  s.settings.ContextBytesPerToken(),
-			"plugin_lua_enabled":       s.settings.LuaEnabled(),
-			"plugin_lua_isolation":     s.settings.LuaIsolation(),
-			"plugin_lua_update_mode":   s.settings.LuaUpdateMode(),
+			"plugin_lua_enabled":       luaEnabled,
+			"plugin_lua_isolation":     true,
+			"plugin_lua_update_mode":   "manual",
 			"site_name":                s.settings.Get(setting.KeySiteName, ""), // 原值：空 = 默认，前端用 placeholder 提示
 			"site_abbr":                s.settings.Get(setting.KeySiteAbbr, ""),
 			"site_logo":                s.settings.SiteLogo(),
@@ -190,21 +197,13 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		set(setting.KeyContextBytesPerToken, strconv.FormatFloat(*body.ContextBytesPerToken, 'g', -1, 64))
 	}
-	// 插件（lua 运行时）：启用总开关 / 隔离（本版锁定为开）/ 更新方式
-	if body.LuaEnabled != nil {
-		set(setting.KeyLuaEnabled, strconv.FormatBool(*body.LuaEnabled))
+	if body.LuaIsolation != nil && !*body.LuaIsolation {
+		extensionReply(w, fmt.Errorf("Lua Host requires isolated execution"))
+		return
 	}
-	if body.LuaIsolation != nil { // 本版锁定为开：无论传入何值都存 true（前端 disabled，此为服务端兜底）
-		set(setting.KeyLuaIsolation, strconv.FormatBool(true))
-	}
-	if body.LuaUpdateMode != nil {
-		switch *body.LuaUpdateMode {
-		case "manual", "online":
-			set(setting.KeyLuaUpdateMode, *body.LuaUpdateMode)
-		default:
-			http.Error(w, `{"error":"lua 更新方式需为 manual/online"}`, http.StatusBadRequest)
-			return
-		}
+	if body.LuaUpdateMode != nil && *body.LuaUpdateMode != "manual" {
+		extensionReply(w, fmt.Errorf("manage runtime updates through the runtime manager"))
+		return
 	}
 	// 站点品牌：空串 = 恢复默认（存空，读取时回退）
 	if body.SiteName != nil {
@@ -235,6 +234,30 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		set(setting.KeySiteLogo, logo)
 	}
+	// 旧客户端的开关代理到运行时管理，不再写入独立的系统配置。
+	if body.LuaEnabled != nil {
+		if !requireAdmin(w, r) {
+			return
+		}
+		if len(changes) > 0 {
+			extensionReply(w, fmt.Errorf("update runtime state separately from system settings"))
+			return
+		}
+		if s.extensions == nil {
+			extensionReply(w, fmt.Errorf("runtime management unavailable"))
+			return
+		}
+		if err := s.extensions.CheckManagement(r.Context(), spec.Manifest{ID: "lua-runtime", Kind: "runtime"}); err != nil {
+			extensionReply(w, err)
+			return
+		}
+		if _, exists := s.extensions.State("lua-runtime"); !exists && !*body.LuaEnabled {
+			extensionReply(w, nil)
+			return
+		}
+		extensionReply(w, s.extensions.SetEnabled(r.Context(), "lua-runtime", *body.LuaEnabled))
+		return
+	}
 	save := s.settings.SetMany
 	if s.engine != nil {
 		save = s.engine.SaveSettings
@@ -242,9 +265,6 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if err := save(changes); err != nil {
 		http.Error(w, `{"error":"settings update failed"}`, http.StatusInternalServerError)
 		return
-	}
-	if body.LuaEnabled != nil && !*body.LuaEnabled && s.plugins != nil {
-		s.plugins.StopLua()
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

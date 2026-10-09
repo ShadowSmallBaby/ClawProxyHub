@@ -1,5 +1,5 @@
 // account.go — 账号类 RPC 结果 table → proto：LoginResult / RefreshResult。
-package main
+package luahost
 
 import (
 	lua "github.com/yuin/gopher-lua"

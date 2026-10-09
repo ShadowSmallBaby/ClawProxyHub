@@ -12,21 +12,19 @@ func (s *Server) pluginScaffold(w http.ResponseWriter, r *http.Request) {
 }
 
 // createLocalPlugin POST /admin/plugins/local — multipart: {name, label, lua, icon?}
-// 新建自建插件（脚手架 manifest + 用户 main.lua + 可选 icon 落盘并启动）。
+// 新建自建插件（脚手架 manifest + 用户 main.lua + 可选 icon 落盘，不执行）。
 func (s *Server) createLocalPlugin(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
 	if err := r.ParseMultipartForm(8 << 20); err != nil {
 		http.Error(w, `{"error":"invalid upload"}`, http.StatusBadRequest)
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	name := r.FormValue("name")
 	label := r.FormValue("label")
 	lua := r.FormValue("lua")
 	if name == "" || lua == "" {
 		http.Error(w, `{"error":"name and lua required"}`, http.StatusBadRequest)
-		return
-	}
-	if !s.settings.LuaEnabled() {
-		http.Error(w, `{"error":"Lua 插件已在系统设置中禁用"}`, http.StatusForbidden)
 		return
 	}
 	var icon []byte
@@ -43,9 +41,9 @@ func (s *Server) createLocalPlugin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	created, err := s.plugins.CreateLocalPlugin(r.Context(), name, label, lua, icon)
+	created, err := s.plugins.CreateLocalWorkspace(name, label, lua, icon)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	s.db.Exec(`INSERT OR IGNORE INTO plugins (name, version, author, protocol_version, manifest_json, source) VALUES (?,?,?,?,?,?)`,
@@ -63,13 +61,13 @@ func (s *Server) getPluginSource(w http.ResponseWriter, r *http.Request) {
 	}
 	content, err := s.plugins.ReadLocalSource(r.PathValue("name"), file)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusForbidden)
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"content": content})
 }
 
-// putPluginSource PUT /admin/plugins/{name}/source — body: {file, content} 保存并热更（重启进程）。
+// putPluginSource PUT /admin/plugins/{name}/source — body: {file, content} 仅保存，执行通过独立动作授权。
 func (s *Server) putPluginSource(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		File    string `json:"file"`
@@ -79,12 +77,8 @@ func (s *Server) putPluginSource(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"file required"}`, http.StatusBadRequest)
 		return
 	}
-	if !s.settings.LuaEnabled() {
-		http.Error(w, `{"error":"Lua 插件已在系统设置中禁用"}`, http.StatusForbidden)
-		return
-	}
-	if err := s.plugins.WriteLocalSource(r.Context(), r.PathValue("name"), body.File, body.Content); err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+	if err := s.plugins.SaveLocalSource(r.PathValue("name"), body.File, body.Content); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	s.plugins.RefreshCatalog(r.Context())

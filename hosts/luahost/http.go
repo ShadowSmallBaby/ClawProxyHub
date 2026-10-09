@@ -1,6 +1,6 @@
 // http.go — cph.http：出站请求。luahost 是受信 Go 宿主进程，直接用 net/http；Lua 侧无裸 socket。
 // request 一次性取回；stream 走 SSE，format="openai" 时由宿主解析并驱动 stream 对象。
-package main
+package luahost
 
 import (
 	"bytes"

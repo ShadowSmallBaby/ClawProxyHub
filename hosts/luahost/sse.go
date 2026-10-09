@@ -1,5 +1,5 @@
 // sse.go — 复用 SDK 解析器，保留工具身份、用量和失败终态。
-package main
+package luahost
 
 import (
 	"encoding/json"

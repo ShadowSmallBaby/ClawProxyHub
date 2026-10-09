@@ -18,18 +18,27 @@ import (
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
 )
 
+// AndroidArtifact 描述由 Android 主应用校验、解压和加载的原生库包。
+type AndroidArtifact struct {
+	Format  string            `json:"format"`
+	Library string            `json:"library"`
+	ABI     string            `json:"abi"`
+	MinSDK  int               `json:"min_sdk"`
+	Files   map[string]string `json:"files"`
+}
+
 // PackageManifest 包内 manifest.json。
 type PackageManifest struct {
+	Android         *AndroidArtifact  `json:"android,omitempty"`
 	Name            string            `json:"name"`
 	Version         string            `json:"version"`
 	Author          string            `json:"author"`
 	Label           map[string]string `json:"label"` // 品牌名（多语言）
 	ProtocolVersion int32             `json:"protocol_version"`
 	MinCoreVersion  string            `json:"min_core_version"`
-	// Runtime 运行时：空=Go 插件（包内自带二进制）；"lua"=脚本插件（包内只含脚本，
-	// 安装时由核心注入内置 luahost 作为 plugin-<os>-<arch>）。
+	// Runtime 运行时：空=Go 插件（包内自带二进制）；"lua"=脚本插件，使用已安装的 Lua Host。
 	Runtime string `json:"runtime"`
-	// Entry 脚本入口（lua 固定 main.lua）；luahost 读同目录 main.lua，此字段仅声明。
+	// Entry 脚本入口（lua 固定 main.lua）；Lua Host 读同目录 main.lua，此字段仅声明。
 	Entry string `json:"entry"`
 	// Icon 插件图标：包内相对路径（如 "icon.png"，建议正方形 PNG 128–256px）。
 	// 安装时解出到插件目录，前端经 /assets/plugins/<name>/icon 读取。
@@ -46,6 +55,9 @@ func (m *Manager) Installed() []PackageManifest {
 		}
 		var mf PackageManifest
 		if json.Unmarshal(data, &mf) == nil && mf.Name != "" {
+			if mf.Android != nil && !m.runtimeAdapter().Available(dir) {
+				continue
+			}
 			out = append(out, mf)
 		}
 	}
@@ -135,8 +147,8 @@ func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string, onP
 	if pv := manifest.ProtocolVersion; pv != 0 && (pv < sdk.MinProtocolVersion || pv > sdk.ProtocolVersion) {
 		return "", fmt.Errorf("unsupported protocol %d", pv)
 	}
-	if manifest.Runtime == "lua" && m.host.settings != nil && m.db != nil && !m.host.settings.LuaEnabled() {
-		return "", fmt.Errorf("Lua runtime is disabled")
+	if manifest.Runtime == "lua" && !m.LuaAvailable() {
+		return "", fmt.Errorf("Lua Host is not installed or enabled")
 	}
 	target, err := installTarget(m.dir, namespace, manifest.Name)
 	if err != nil {
@@ -163,9 +175,6 @@ func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string, onP
 		if entries["main.lua"] == nil {
 			return "", fmt.Errorf("missing main.lua")
 		}
-		if _, err = m.ensureLuahost(); err != nil {
-			return "", err
-		}
 		for name, f := range entries {
 			if strings.HasSuffix(name, ".lua") {
 				dst := filepath.Join(stage, filepath.FromSlash(name))
@@ -191,6 +200,10 @@ func (m *Manager) InstallZip(ctx context.Context, zipPath, namespace string, onP
 	}
 	if err = extractTo(mf, filepath.Join(stage, "manifest.json")); err != nil {
 		return "", err
+	}
+	// 由实际运行时检查暂存脚本；Android Service 和扩展 Lua Host 不需要桌面共享文件。
+	if manifest.Runtime == "lua" && !m.runtimeAdapter().Available(stage) {
+		return "", fmt.Errorf("Lua runtime is unavailable")
 	}
 	if manifest.Icon != "" {
 		if !fs.ValidPath(manifest.Icon) || strings.Contains(manifest.Icon, "\\") {

@@ -13,6 +13,8 @@ import (
 	"gorm.io/gorm/clause"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/runlog"
@@ -28,7 +30,7 @@ type HostService struct {
 	db       *gorm.DB
 	settings *setting.Store
 	decrypt  func([]byte) ([]byte, error)
-	plugin   string // 绑定的插件名（store 命名空间）；空 = 未绑定的模板
+	plugin   string // 绑定的插件名（设置与 store 命名空间）；空 = 未绑定的模板
 }
 
 func NewHostService(db *gorm.DB) *HostService {
@@ -71,9 +73,9 @@ func (h *HostService) Log(ctx context.Context, e *pb.LogEntry) (*pb.Empty, error
 func (h *HostService) StoreGet(ctx context.Context, r *pb.StoreGetRequest) (*pb.StoreGetResponse, error) {
 	// 用 Find（而非 First）避免命中不到时 GORM 记 record-not-found 日志噪声。
 	var recs []model.PluginStore
-	if err := h.db.Where("plugin = ? AND key = ?", h.plugin, r.Key).Limit(1).Find(&recs).Error; err != nil {
+	if err := h.db.WithContext(ctx).Where("plugin = ? AND key = ?", h.plugin, r.Key).Limit(1).Find(&recs).Error; err != nil {
 		h.runLogger().Warn("plugin", "store", "store get 失败: "+r.Key, err.Error(), nil)
-		return &pb.StoreGetResponse{Found: false}, nil
+		return nil, fmt.Errorf("read plugin state: %w", err)
 	}
 	if len(recs) == 0 {
 		return &pb.StoreGetResponse{Found: false}, nil
@@ -84,11 +86,12 @@ func (h *HostService) StoreGet(ctx context.Context, r *pb.StoreGetRequest) (*pb.
 func (h *HostService) StorePut(ctx context.Context, r *pb.StorePutRequest) (*pb.Empty, error) {
 	rec := model.PluginStore{Plugin: h.plugin, Key: r.Key, Value: r.Value, UpdatedAt: time.Now()}
 	// UPSERT：(plugin,key) 冲突则更新 value/updated_at
-	if err := h.db.Clauses(clause.OnConflict{
+	if err := h.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "plugin"}, {Name: "key"}},
 		DoUpdates: clause.AssignmentColumns([]string{"value", "updated_at"}),
 	}).Create(&rec).Error; err != nil {
 		h.runLogger().Warn("plugin", "store", "store put 失败: "+r.Key, err.Error(), nil)
+		return nil, fmt.Errorf("write plugin state: %w", err)
 	}
 	return &pb.Empty{}, nil
 }
@@ -141,20 +144,35 @@ func (h *HostService) proxyByID(id int64) (*pb.ProxyConfig, error) {
 // instance_id>0 时返回合并视图：插件设置 ← 实例设置 ← {"base_url": 实例地址, "instance_name": 实例名}（后者覆盖前者）。
 // 另注入保留键 sdk.SettingBrowserUserAgent（全局浏览器 UA，非空才给）。
 func (h *HostService) GetSettings(ctx context.Context, r *pb.GetSettingsRequest) (*pb.GetSettingsResponse, error) {
+	pluginName := r.GetPlugin()
+	if h.plugin != "" {
+		if pluginName != "" && pluginName != h.plugin {
+			return nil, status.Error(codes.PermissionDenied, "settings belong to another plugin")
+		}
+		pluginName = h.plugin
+	}
+	if pluginName == "" || r.GetInstanceId() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "plugin name and non-negative instance_id required")
+	}
 	merged := map[string]json.RawMessage{}
 	var p model.Plugin
-	if err := h.db.Select("settings_json").Where("name = ?", r.Plugin).First(&p).Error; err == nil {
-		mergeJSON(merged, p.SettingsJSON)
+	if err := h.db.WithContext(ctx).Select("id", "settings_json").Where("name = ?", pluginName).Limit(1).Find(&p).Error; err != nil {
+		return nil, fmt.Errorf("read plugin settings: %w", err)
 	}
-	if r.InstanceId > 0 {
+	mergeJSON(merged, p.SettingsJSON)
+	if r.GetInstanceId() > 0 {
 		var inst model.Instance
-		if err := h.db.First(&inst, r.InstanceId).Error; err == nil {
-			mergeJSON(merged, inst.SettingsJSON)
-			if inst.BaseURL != "" {
-				merged["base_url"], _ = json.Marshal(inst.BaseURL)
-			}
-			merged["instance_name"], _ = json.Marshal(inst.Name)
+		if err := h.db.WithContext(ctx).Where("id = ? AND plugin_id = ?", r.InstanceId, p.ID).Limit(1).Find(&inst).Error; err != nil {
+			return nil, fmt.Errorf("read instance settings: %w", err)
 		}
+		if p.ID == 0 || inst.ID == 0 {
+			return nil, status.Error(codes.NotFound, "instance not found for this plugin")
+		}
+		mergeJSON(merged, inst.SettingsJSON)
+		if inst.BaseURL != "" {
+			merged["base_url"], _ = json.Marshal(inst.BaseURL)
+		}
+		merged["instance_name"], _ = json.Marshal(inst.Name)
 	}
 	if ua := h.settings.BrowserUserAgent(); ua != "" {
 		merged[sdk.SettingBrowserUserAgent], _ = json.Marshal(ua)

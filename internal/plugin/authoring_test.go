@@ -38,36 +38,41 @@ local PLUGIN_LABEL_EN = "OnlyEnglish"`
 	}
 }
 
-// TestLuaStringLiteral 从 `= "value" -- 注释` 形态提取引号内串。
-func TestLuaStringLiteral(t *testing.T) {
-	cases := map[string]string{
-		`= "hello"  -- c`: "hello",
-		`   =   "a b"`:    "a b",
-		`= ""`:            "",
-		`no quotes`:       "",
+// 工作区与编辑器使用相同的静态身份解析，注释、引号与未完成函数均不干扰保存。
+func TestWorkspaceStaticMetadataAndIncompleteSource(t *testing.T) {
+	m := NewManager(t.TempDir(), nil)
+	source := `--[[
+local PLUGIN_NAME = "commented-name"
+]]
+local PLUGIN_NAMES = 'different-variable'
+local PLUGIN_NAME = 'mine'
+local PLUGIN_LABEL_ZH = [=[长字符串]=]
+local PLUGIN_LABEL_EN = "Lua \"Editor\""
+error('must not execute')
+return {}`
+	if name, label := ParseLuaIdentity(source); name != "mine" || label != "长字符串" {
+		t.Fatalf("identity = %q/%q", name, label)
 	}
-	for in, want := range cases {
-		if got := luaStringLiteral(in); got != want {
-			t.Errorf("luaStringLiteral(%q) = %q, want %q", in, got, want)
-		}
+	if _, err := m.CreateLocalWorkspace("mine", "original", source, nil); err != nil {
+		t.Fatal(err)
 	}
-}
-
-// TestCutVarRest 精确匹配 `local <var>`，区分 PLUGIN_LABEL_ZH / _EN。
-func TestCutVarRest(t *testing.T) {
-	content := `local PLUGIN_LABEL_ZH = "中"
-local PLUGIN_LABEL_EN = "En"`
-	if got := luaStringLiteral(cutVarRest(content, "PLUGIN_LABEL_ZH")); got != "中" {
-		t.Errorf("ZH = %q, want 中", got)
+	incomplete := source + "\nfunction unfinished("
+	if err := m.SaveLocalSource("mine", "main.lua", incomplete); err != nil {
+		t.Fatal(err)
 	}
-	if got := luaStringLiteral(cutVarRest(content, "PLUGIN_LABEL_EN")); got != "En" {
-		t.Errorf("EN = %q, want En", got)
+	if saved, err := m.ReadLocalSource("mine", "main.lua"); err != nil || saved != incomplete {
+		t.Fatalf("saved = %q, %v", saved, err)
 	}
-	if cutVarRest(content, "PLUGIN_NAME") != "" {
-		t.Error("不存在的变量应返回空")
+	data, err := os.ReadFile(filepath.Join(m.localDir(), "mine", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := cutVarRest(`local PLUGIN_NAMES = "x"`, "PLUGIN_NAME"); got != "" {
-		t.Errorf("PLUGIN_NAME 误命中 PLUGIN_NAMES: rest=%q", got)
+	var manifest PackageManifest
+	if err = json.Unmarshal(data, &manifest); err != nil || manifest.Label["zh"] != "长字符串" || manifest.Label["en"] != `Lua "Editor"` {
+		t.Fatalf("labels = %v, %v", manifest.Label, err)
+	}
+	if err := m.SaveLocalSource("mine", "main.lua", "local PLUGIN_NAME = 'other'\nfunction unfinished("); err == nil {
+		t.Fatal("accepted identity change in incomplete source")
 	}
 }
 
@@ -163,5 +168,34 @@ local PLUGIN_LABEL_EN = ""`)
 	}
 	if mf.Label["en"] != "Old" {
 		t.Errorf("EN 为空时不应覆盖，got %q", mf.Label["en"])
+	}
+}
+
+// 保存与建档不需要 Lua Host，执行由另一个动作明确触发。
+func TestWorkspaceWithoutRuntime(t *testing.T) {
+	root := t.TempDir()
+	m := NewManager(root, nil)
+	source := `local PLUGIN_NAME = "offline"
+local PLUGIN_LABEL_ZH = "离线"
+return {}`
+	name, err := m.CreateLocalWorkspace("offline", `带"引号`, source, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, running := m.Get(name); running {
+		t.Fatal("workspace unexpectedly started")
+	}
+	if err = m.SaveLocalSource(name, "main.lua", source+"\n-- saved"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.ReadLocalSource(name, "main.lua")
+	if err != nil || got != source+"\n-- saved" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if _, err = m.CreateLocalWorkspace(name, "", source, nil); err == nil {
+		t.Fatal("replaced workspace")
+	}
+	if _, err = m.CreateLocalWorkspace("other", "", source, nil); err == nil {
+		t.Fatal("accepted identity mismatch")
 	}
 }

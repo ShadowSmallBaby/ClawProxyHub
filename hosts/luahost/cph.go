@@ -1,6 +1,6 @@
 // cph.go — 宿主能力 cph.*：脚本与外界的唯一通道。json / hash / time / random / log 在此，
-// http 见 http.go。全部经 registerCPH 注入为 Go 闭包。
-package main
+// http 见 http.go，设置与存储回调见 host.go。全部经 registerCPH 注入为 Go 闭包。
+package luahost
 
 import (
 	"crypto/hmac"
@@ -17,7 +17,7 @@ import (
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
 )
 
-// registerCPH 把 cph 命名空间注入全局环境。dir 预留给未来 require("lib.*")。
+// registerCPH 注入沙箱能力，设置回调的插件身份来自工作区清单。
 func registerCPH(L *lua.LState, host *sdk.Host, dir string) {
 	cph := L.NewTable()
 	L.SetField(cph, "http", newHTTPModule(L))
@@ -42,6 +42,8 @@ func registerCPH(L *lua.LState, host *sdk.Host, dir string) {
 		"hex":  cphRandHex,
 	}))
 	L.SetField(cph, "log", newLogModule(L, host))
+	L.SetField(cph, "settings", newSettingsModule(L, host, dir))
+	L.SetField(cph, "store", newStoreModule(L, host))
 	L.SetGlobal("cph", cph)
 }
 

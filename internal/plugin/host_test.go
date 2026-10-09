@@ -2,12 +2,17 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/setting"
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
@@ -64,5 +69,104 @@ func TestStorePersistence(t *testing.T) {
 	got, _ := h2.StoreGet(ctx, &pb.StoreGetRequest{Key: "cursor"})
 	if !got.Found || string(got.Value) != "99" {
 		t.Errorf("持久化读回失败：found=%v val=%q，want 99", got.Found, got.Value)
+	}
+}
+
+func testSettingsHost(t *testing.T) *HostService {
+	t.Helper()
+	db := testStoreDB(t)
+	for _, query := range []string{
+		`CREATE TABLE plugins (id INTEGER PRIMARY KEY, name TEXT UNIQUE, settings_json TEXT)`,
+		`CREATE TABLE instances (id INTEGER PRIMARY KEY, plugin_id INTEGER, name TEXT, base_url TEXT, settings_json TEXT)`,
+		`CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, updated_at DATETIME)`,
+		`INSERT INTO plugins VALUES (1, 'first', '{"shared":"plugin","global":true,"base_url":"ignored"}'), (2, 'second', '{"secret":"private"}')`,
+		`INSERT INTO instances VALUES (11, 1, 'site-a', 'https://a.example', '{"shared":"instance","base_url":"ignored-instance"}'), (12, 1, 'site-b', 'https://b.example', '{}'), (21, 2, 'private', 'https://private.example', '{"secret":"private-instance"}')`,
+	} {
+		if err := db.Exec(query).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?)`, setting.KeyBrowserUserAgent, "browser-ua").Error; err != nil {
+		t.Fatal(err)
+	}
+	return NewHostService(db).forPlugin("first")
+}
+
+func TestHostSettingsMergeIsolationAndUpdates(t *testing.T) {
+	host := testSettingsHost(t)
+	read := func(instanceID int64) map[string]interface{} {
+		t.Helper()
+		resp, err := host.GetSettings(context.Background(), &pb.GetSettingsRequest{InstanceId: instanceID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]interface{}
+		if err := json.Unmarshal(resp.Values, &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	if got := read(0); got["shared"] != "plugin" || got["global"] != true || got["_browser_user_agent"] != "browser-ua" {
+		t.Fatal(got)
+	}
+	if got := read(11); got["shared"] != "instance" || got["base_url"] != "https://a.example" || got["instance_name"] != "site-a" || got["global"] != true {
+		t.Fatal(got)
+	}
+	if got := read(12); got["shared"] != "plugin" || got["base_url"] != "https://b.example" {
+		t.Fatal(got)
+	}
+	for _, tc := range []struct {
+		req  *pb.GetSettingsRequest
+		code codes.Code
+	}{
+		{&pb.GetSettingsRequest{Plugin: "second"}, codes.PermissionDenied},
+		{&pb.GetSettingsRequest{Plugin: "first", InstanceId: 21}, codes.NotFound},
+		{&pb.GetSettingsRequest{InstanceId: 999}, codes.NotFound},
+		{&pb.GetSettingsRequest{InstanceId: -1}, codes.InvalidArgument},
+	} {
+		resp, err := host.GetSettings(context.Background(), tc.req)
+		if status.Code(err) != tc.code || resp != nil {
+			t.Fatalf("%v: response=%v error=%v", tc.req, resp, err)
+		}
+	}
+	if err := host.db.Exec(`UPDATE plugins SET settings_json = '{"shared":"updated"}' WHERE id = 1`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := read(12); got["shared"] != "updated" {
+		t.Fatalf("stale settings: %v", got)
+	}
+}
+
+func TestHostCallbacksReportDatabaseFailureAndCancellation(t *testing.T) {
+	host := testSettingsHost(t)
+	operations := map[string]func(context.Context) error{
+		"get": func(ctx context.Context) error {
+			_, err := host.StoreGet(ctx, &pb.StoreGetRequest{Key: "cursor"})
+			return err
+		},
+		"put": func(ctx context.Context) error {
+			_, err := host.StorePut(ctx, &pb.StorePutRequest{Key: "cursor", Value: []byte("next")})
+			return err
+		},
+		"settings": func(ctx context.Context) error { _, err := host.GetSettings(ctx, &pb.GetSettingsRequest{}); return err },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for name, call := range operations {
+		if err := call(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("%s lost cancellation: %v", name, err)
+		}
+	}
+	sqlDB, err := host.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for name, call := range operations {
+		if err := call(context.Background()); err == nil {
+			t.Fatalf("%s hid database failure", name)
+		}
 	}
 }

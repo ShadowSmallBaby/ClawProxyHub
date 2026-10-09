@@ -13,9 +13,11 @@ import (
 )
 
 // StartLogRetention 启动即清一次，之后每小时检查一次；ctx 取消退出。
-func StartLogRetention(ctx context.Context, db *gorm.DB, settings *setting.Store) {
+func StartLogRetention(ctx context.Context, db *gorm.DB, settings *setting.Store) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
-		sweepLogs(db, settings)
+		defer close(done)
+		sweepLogs(db.WithContext(ctx), settings)
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
 		for {
@@ -23,10 +25,11 @@ func StartLogRetention(ctx context.Context, db *gorm.DB, settings *setting.Store
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				sweepLogs(db, settings)
+				sweepLogs(db.WithContext(ctx), settings)
 			}
 		}
 	}()
+	return done
 }
 
 // sweepLogs 删除 created_at 早于保留窗口的日志。
@@ -38,6 +41,7 @@ func sweepLogs(db *gorm.DB, settings *setting.Store) {
 		{"request_logs", "created_at", settings.LogRetentionDays()},
 		{"run_logs", "created_at", settings.RetentionDays("logs.run_retention_days")},
 		{"task_runs", "finished_at", settings.RetentionDays("logs.task_retention_days")},
+		{"action_audits", "started_at", settings.RetentionDays("logs.run_retention_days")},
 	} {
 		if entry.days <= 0 {
 			continue

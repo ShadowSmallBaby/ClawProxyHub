@@ -1,19 +1,20 @@
-// Package web — 仪表盘静态资源：构建产物经 go:embed 嵌入单二进制。
+// Package web 提供内嵌仪表盘静态服务。
 package web
 
 import (
-	"embed"
 	"io/fs"
 	"net/http"
 	"strings"
 )
 
-//go:embed all:dist
-var distFS embed.FS
-
 // Handler SPA 静态服务：命中文件直出，其余路径 fallback 到 index.html。
 func Handler() http.Handler {
-	sub, _ := fs.Sub(distFS, "dist")
+	sub, _ := fs.Sub(distFS, distDir)
+	return HandlerFS(sub)
+}
+
+// HandlerFS 统一处理静态文件和 SPA 路由。
+func HandlerFS(sub fs.FS) http.Handler {
 	fileServer := http.FileServer(http.FS(sub))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")

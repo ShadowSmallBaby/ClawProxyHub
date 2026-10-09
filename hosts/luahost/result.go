@@ -1,5 +1,5 @@
 // result.go — 脚本返回 table → proto 结果：Manifest / AccountProfile 与通用辅助。
-package main
+package luahost
 
 import (
 	lua "github.com/yuin/gopher-lua"

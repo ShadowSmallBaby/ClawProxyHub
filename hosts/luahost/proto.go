@@ -1,5 +1,5 @@
 // proto.go — 入向 proto message → Lua table，与出向 table → ModelList。
-package main
+package luahost
 
 import (
 	lua "github.com/yuin/gopher-lua"
