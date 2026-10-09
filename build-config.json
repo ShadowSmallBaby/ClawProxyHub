@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "distributions": {
+    "full": {"frontend": "web-full", "packages": ["lua-runtime"]}
+  },
+  "android": {"frontend": "app-full", "packages": ["lua-runtime"]},
+  "frontends": {
+    "web-full": {"surface": "web", "out": "web/build-web", "packages": ["lua-editor"]},
+    "app-full": {"surface": "app", "out": "web/build-app", "packages": []}
+  },
+  "packages": {
+    "lua-runtime": {
+      "manifest": "hosts/luahost/manifest.json",
+      "builder": "go",
+      "module": "hosts/luahost",
+      "target": "./cmd",
+      "entry": "luahost",
+      "filename": "luahost-{version}-{os}-{arch}.cphhost",
+      "suffix": ".cphhost"
+    },
+    "lua-editor": {
+      "manifest": "extensions/lua-editor/manifest.json",
+      "builder": "extension",
+      "project": "extensions/lua-editor/build.json",
+      "inputs": [
+        "sdk/extension/ui.ts"
+      ],
+      "suffix": ".cphext"
+    },
+    "frontend.app": {
+      "manifest": "web/app-manifest.json",
+      "component": "frontend",
+      "builder": "app",
+      "profile": "app-full",
+      "filename": "app-{version}.cphui",
+      "suffix": ".cphui"
+    }
+  }
+}
