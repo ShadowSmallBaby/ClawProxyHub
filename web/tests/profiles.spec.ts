@@ -524,6 +524,7 @@ test('cleanup protects installed data and offers retained data cleanup after uni
   try {
     await connect(page, target, 4173, '/extensions')
     const card = page.locator('[data-extension="example"]')
+    await page.route('**/admin/actions/core.extensions.obsolete', route => route.fulfill({ json: { hash: bundled.sha256, tables: [] } }))
     await card.getByText('Clean up', { exact: true }).click()
     const drawer = page.locator('.c-drawer.t-drawer--open').filter({ hasText: 'Retained data' })
     await expect(drawer.getByRole('checkbox', { name: 'Cache', exact: true })).toBeChecked()
