@@ -33,7 +33,7 @@ func (f *fakeChatServer) Context() context.Context      { return context.Backgro
 
 // TestLoadAutoclaw 验证沙箱 VM 能加载 autoclaw main.lua，且约定函数齐全。
 func TestLoadAutoclaw(t *testing.T) {
-	vm, err := newVM(autoclawDir(), nil)
+	vm, err := newVM(context.Background(), autoclawDir(), nil)
 	if err != nil {
 		t.Fatalf("newVM: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestSafeRequire(t *testing.T) {
 		[]byte(`local u = require("lib.util"); local M = {}; function M.answer() return u.n end; return M`), 0o644)
 	_ = os.MkdirAll(filepath.Join(dir, "lib"), 0o755)
 	_ = os.WriteFile(filepath.Join(dir, "lib", "util.lua"), []byte(`return { n = 42 }`), 0o644)
-	vm, err := newVM(dir, nil)
+	vm, err := newVM(context.Background(), dir, nil)
 	if err != nil {
 		t.Fatalf("newVM: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestRequireRejectsEscape(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, "main.lua"),
 		[]byte(`local ok = pcall(require, "os"); local ok2 = pcall(require, "../secret"); local M = {}; M.blocked = (not ok) and (not ok2); return M`), 0o644)
-	vm, err := newVM(dir, nil)
+	vm, err := newVM(context.Background(), dir, nil)
 	if err != nil {
 		t.Fatalf("newVM: %v", err)
 	}

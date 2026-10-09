@@ -1,6 +1,4 @@
-// vm.go — VM 生命周期与复用池。newVM 建一个沙箱化的 LState，执行 main.lua 并捕获其
-// 返回的 module table（约定：脚本 `local M={}; ...; return M`）；约定函数是 M 的字段。
-// vmPool 复用 VM，避免每次 RPC 重编脚本。
+// VM 池限制并发并复用脚本；初始化和调用均受调用方上下文约束。
 package luahost
 
 import (
@@ -31,11 +29,7 @@ func (v *luaVM) fn(name string) lua.LValue {
 }
 
 // newVM 创建沙箱 VM，执行 main.lua 并捕获返回的 module table。
-func newVM(dir string, host *sdk.Host, contexts ...context.Context) (*luaVM, error) {
-	ctx := context.Background()
-	if len(contexts) > 0 {
-		ctx = contexts[0]
-	}
+func newVM(ctx context.Context, dir string, host *sdk.Host) (*luaVM, error) {
 	initCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	L := lua.NewState(lua.Options{SkipOpenLibs: true, CallStackSize: 256, RegistrySize: 1024, RegistryMaxSize: 32768})
@@ -90,11 +84,7 @@ func newVMPool(dir string, host *sdk.Host) *vmPool {
 	return &vmPool{dir: dir, host: host, slots: make(chan struct{}, 8)}
 }
 
-func (p *vmPool) get(contexts ...context.Context) (*luaVM, error) {
-	ctx := context.Background()
-	if len(contexts) > 0 {
-		ctx = contexts[0]
-	}
+func (p *vmPool) get(ctx context.Context) (*luaVM, error) {
 	select {
 	case p.slots <- struct{}{}:
 	case <-ctx.Done():
@@ -114,7 +104,7 @@ func (p *vmPool) get(contexts ...context.Context) (*luaVM, error) {
 		return v, nil
 	}
 	p.mu.Unlock()
-	v, err := newVM(p.dir, p.host, ctx)
+	v, err := newVM(ctx, p.dir, p.host)
 	if err != nil {
 		<-p.slots
 	}
