@@ -1,0 +1,13 @@
+// 本地可选的完整编辑器夹具；发行构建不携带扩展测试包。
+def extensionPackage = providers.gradleProperty('cphExtensionTestPackage')
+def fixture = tasks.register('copyExtensionTestPackage', Sync) {
+    if (extensionPackage.isPresent()) {
+        from(file(extensionPackage.get())) { rename { 'lua-editor.cphext' } }
+        doFirst { if (!file(extensionPackage.get()).isFile()) throw new GradleException('Build the Lua editor test package first') }
+    }
+    into layout.buildDirectory.dir('generated/extensionTests')
+}
+android.sourceSets.androidTest.assets.srcDir layout.buildDirectory.dir('generated/extensionTests').get().asFile
+tasks.configureEach {
+    if (name == 'mergeDebugAndroidTestAssets' || name == 'generateDebugAndroidTestLintModel' || name == 'lintAnalyzeDebugAndroidTest') dependsOn fixture
+}

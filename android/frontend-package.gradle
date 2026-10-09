@@ -1,0 +1,81 @@
+// App 界面与 APP 共用发行证书；输入为已构建资源，不依赖原生编译。
+def configFile = providers.gradleProperty('cphBuildConfig').map { file(it) }.getOrElse(rootProject.file('../build-config.json'))
+def config = new groovy.json.JsonSlurper().parse(configFile)
+def spec = config.packages['frontend.app']
+def profile = config.frontends[spec.profile]
+if (profile.surface != 'app' || profile.packages) throw new GradleException('App UI packages cannot preconfigure extensions')
+def manifestFile = rootProject.file('../' + spec.manifest)
+def frontend = rootProject.file('../' + profile.out)
+def version = rootProject.ext.cphProject.components.frontend.version
+def payload = layout.buildDirectory.dir('generated/frontend-package')
+def prepare = tasks.register('prepareAppFrontend', Sync) {
+ dependsOn 'prepareCphPackageSigning'
+ inputs.file(manifestFile).withPathSensitivity(PathSensitivity.RELATIVE)
+ inputs.files(rootProject.file('frontend-package.gradle'), rootProject.file('package-signing.gradle')).withPathSensitivity(PathSensitivity.RELATIVE)
+ inputs.properties([profile:spec.profile, version:version, packages:profile.packages])
+ inputs.property('certificate', cphSigningCertificate)
+ outputs.cacheIf { true }
+ from(frontend) { into 'frontend'; exclude '**/.*', '**/.*/**' }
+ into payload
+ doFirst {
+  def report = new groovy.json.JsonSlurper().parse(new File(frontend, 'profile.json'))
+  if (!new File(frontend, 'index.html').isFile() || report.profile != spec.profile || report.version != version || report.packages != profile.packages)
+   throw new GradleException("Build the configured frontend first: pnpm --dir web exec vite build --mode ${spec.profile}")
+ }
+ doLast {
+  def directory = payload.get().asFile
+  def hashes = new TreeMap()
+  fileTree(new File(directory, 'frontend')).files.each { resource ->
+   def name = directory.toPath().relativize(resource.toPath()).toString().replace('\\', '/')
+   hashes[name] = java.security.MessageDigest.getInstance('SHA-256').digest(resource.bytes).encodeHex().toString()
+  }
+  def metadata = new LinkedHashMap(new groovy.json.JsonSlurper().parse(manifestFile))
+  metadata.putAll([version:version, files:hashes])
+  signCphManifest(directory, metadata)
+ }
+}
+tasks.register('packageAppFrontend', Zip) {
+ dependsOn prepare
+ destinationDirectory = rootProject.layout.buildDirectory.dir('frontend-packages')
+ archiveFileName = spec.filename.replace('{version}', version)
+ preserveFileTimestamps = false; reproducibleFileOrder = true
+ from payload
+}
+
+// 测试资源复用当前 APP 证书，无需配置额外前端公钥。
+def fixtures = tasks.register('prepareFrontendTests') {
+ dependsOn 'prepareCphPackageSigning'
+ inputs.property('certificate', cphSigningCertificate)
+ inputs.file(rootProject.file('frontend-package.gradle')).withPathSensitivity(PathSensitivity.RELATIVE)
+ inputs.file(rootProject.file('package-signing.gradle')).withPathSensitivity(PathSensitivity.RELATIVE)
+ outputs.dir(layout.buildDirectory.dir('generated/updateTests'))
+ doLast {
+  def destination = layout.buildDirectory.dir('generated/updateTests').get().asFile
+  destination.mkdirs()
+  ['good':'1.0.0', 'pending':'1.0.1'].each { name, fixtureVersion ->
+   def directory = layout.buildDirectory.dir("intermediates/frontendTests/${name}").get().asFile
+   directory.mkdirs()
+   def html = "<!doctype html><p>${name}</p>".getBytes('UTF-8')
+   signCphManifest(directory, [id:'frontend.app', name:'Test App', version:fixtureVersion, kind:'frontend-trusted',
+       api:1, core:[min:'1.5.2'], permissions:['client.ui'], target:'client', activation:'restart',
+       files:['frontend/index.html':java.security.MessageDigest.getInstance('SHA-256').digest(html).encodeHex().toString()]])
+   def entries = ['manifest.json':new File(directory, 'manifest.json').bytes,
+                  'signature.json':new File(directory, 'signature.json').bytes, 'frontend/index.html':html]
+   def writeArchive = { String fileName, Map resources ->
+    new java.util.zip.ZipOutputStream(new FileOutputStream(new File(destination, fileName))).withCloseable { zip ->
+     resources.each { path, bytes ->
+      def entry = new java.util.zip.ZipEntry(path); entry.time = 0
+      zip.putNextEntry(entry); zip.write(bytes); zip.closeEntry()
+     }
+    }
+   }
+   writeArchive(name + '.cphui', entries)
+   if (name == 'good') writeArchive('tampered.cphui', entries + ['frontend/index.html':'tampered'.getBytes('UTF-8')])
+  }
+ }
+}
+tasks.configureEach {
+ if (name == 'mergeDebugAndroidTestAssets' || name == 'generateDebugAndroidTestLintModel' || name == 'lintAnalyzeDebugAndroidTest') dependsOn fixtures
+ if (name == 'processDebugUnitTestJavaRes' || name == 'processReleaseUnitTestJavaRes') dependsOn fixtures
+}
+android.sourceSets.test.resources.srcDir layout.buildDirectory.dir('generated/updateTests').get().asFile

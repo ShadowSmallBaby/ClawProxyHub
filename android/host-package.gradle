@@ -1,0 +1,61 @@
+// Host 更新与主 APK 共用签名，业务插件和运行时分开打包。
+def abi = providers.gradleProperty('cphABI').getOrElse('arm64-v8a')
+def configFile = rootProject.file('../build-config.json')
+def config = new groovy.json.JsonSlurper().parse(configFile)
+def manifestFile = rootProject.file('../' + config.packages['lua-runtime'].manifest)
+def hostManifest = new groovy.json.JsonSlurper().parse(manifestFile)
+def hostVersion = rootProject.ext.cphProject.components['lua-runtime'].version
+def minSdk = rootProject.ext.cphProject.components.android.min_sdk
+def payload = layout.buildDirectory.dir("generated/host-package/${abi}")
+def preparation = tasks.register('prepareLuaHost') {
+ dependsOn 'buildLuaNative', 'prepareCphPackageSigning'
+ inputs.file(manifestFile).withPathSensitivity(PathSensitivity.RELATIVE)
+ inputs.file(layout.buildDirectory.file("generated/hostNative/${abi}/libcphlua.so")).withPathSensitivity(PathSensitivity.RELATIVE)
+ inputs.property('abi', abi)
+ inputs.property('version', hostVersion)
+ inputs.property('minSdk', minSdk)
+ inputs.property('certificate', cphSigningCertificate)
+ inputs.file(rootProject.file('host-package.gradle')).withPathSensitivity(PathSensitivity.RELATIVE)
+ inputs.file(rootProject.file('package-signing.gradle')).withPathSensitivity(PathSensitivity.RELATIVE)
+ outputs.dir(payload)
+ outputs.cacheIf { true }
+ doLast {
+  def directory = payload.get().asFile
+  def libraryPath = "lib/${abi}/libcphlua.so"
+  def library = new File(directory, libraryPath); library.parentFile.mkdirs()
+  library.bytes = layout.buildDirectory.file("generated/hostNative/${abi}/libcphlua.so").get().asFile.bytes
+  def hashes = [(libraryPath):java.security.MessageDigest.getInstance('SHA-256').digest(library.bytes).encodeHex().toString()]
+  def metadata = new LinkedHashMap(hostManifest)
+  metadata.putAll([version:hostVersion, execution:'android-service', entry:libraryPath,
+      platforms:[abi == 'arm64-v8a' ? 'android/arm64' : 'android/amd64'], files:hashes,
+      android:[format:'cph-host-v1', library:libraryPath, abi:abi, min_sdk:minSdk,
+               files:hashes]])
+  signCphManifest(directory, metadata)
+ }
+}
+def packageHost = tasks.register('packageLuaHost', Zip) {
+ dependsOn preparation
+ destinationDirectory = rootProject.layout.buildDirectory.dir('host-packages')
+ archiveFileName = "luahost-${hostVersion}-android-${abi}.cphhost"
+ preserveFileTimestamps = false; reproducibleFileOrder = true
+ from payload
+ inputs.file(rootProject.file('verify_host_package.py')).withPathSensitivity(PathSensitivity.RELATIVE)
+ ['sdk/extension', 'internal/extension', 'cmd/cphext'].each { directory ->
+  inputs.files(fileTree(rootProject.file('../' + directory)) { include '*.go'; exclude '*_test.go' }).withPathSensitivity(PathSensitivity.RELATIVE)
+ }
+ inputs.files(rootProject.file('../go.mod'), rootProject.file('../go.sum')).withPathSensitivity(PathSensitivity.RELATIVE)
+ doLast {
+  providers.exec {
+   workingDir rootProject.file('..')
+   commandLine System.getenv('CPH_PYTHON') ?: 'python', rootProject.file('verify_host_package.py'),
+       '--package', archiveFile.get().asFile, '--certificate-sha256', cphSigningCertificate.get()
+  }.result.get().assertNormalExitValue()
+ }
+}
+def fixture = tasks.register('copyHostTestPackage', Copy) {
+ dependsOn packageHost
+ from(packageHost.flatMap { it.archiveFile }) { rename { 'luahost.cphhost' } }
+ into layout.buildDirectory.dir('generated/hostTests')
+}
+android.sourceSets.androidTest.assets.srcDir layout.buildDirectory.dir('generated/hostTests').get().asFile
+tasks.configureEach { if (name == 'mergeDebugAndroidTestAssets' || name == 'generateDebugAndroidTestLintModel' || name == 'lintAnalyzeDebugAndroidTest') dependsOn fixture }

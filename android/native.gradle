@@ -1,0 +1,54 @@
+// 主应用、Lua Host 与测试夹具复用宿主原生构建规则。
+def nativeConfigs = [[task:'buildGoNative', source:project.ext.cphNativeSource, library:project.ext.cphNativeLibrary,
+    workdir:project.ext.has('cphNativeWorkdir') ? project.ext.cphNativeWorkdir : rootProject.projectDir.parentFile,
+    tags:project.ext.has('cphNativeTags') ? project.ext.cphNativeTags : '',
+    ldflags:project.ext.has('cphNativeLdflags') ? project.ext.cphNativeLdflags : '-s -w']]
+if (project.ext.has('cphAdditionalNatives')) nativeConfigs.addAll(project.ext.cphAdditionalNatives)
+def abi = providers.gradleProperty('cphABI').getOrElse('arm64-v8a')
+def minSdk = rootProject.ext.cphProject.components.android.min_sdk
+def targets = ['arm64-v8a': ['arm64', "aarch64-linux-android${minSdk}"], 'x86_64': ['amd64', "x86_64-linux-android${minSdk}"]]
+if (!targets.containsKey(abi)) throw new GradleException("Unsupported Android ABI: ${abi}")
+def os = System.getProperty('os.name').toLowerCase()
+def host = os.contains('windows') ? 'windows-x86_64' : (os.contains('mac') ? 'darwin-x86_64' : 'linux-x86_64')
+def suffix = os.contains('windows') ? '.exe' : ''
+def python = System.getenv('CPH_PYTHON') ?: (os.contains('windows') ? 'python' : 'python3')
+def sdk = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
+if (!sdk) throw new GradleException('Set ANDROID_HOME or ANDROID_SDK_ROOT to the Android SDK directory')
+def clang = new File(sdk, "ndk/28.2.13676358/toolchains/llvm/prebuilt/${host}/bin/clang${suffix}")
+if (!clang.isFile()) throw new GradleException("NDK compiler missing: ${clang}")
+def nativeEnvironment = [GOOS:'android', GOARCH:targets[abi][0], CGO_ENABLED:'1', GOWORK:'off',
+    CC:'"' + clang.absolutePath.replace('\\', '/') + '" --target=' + targets[abi][1], CGO_LDFLAGS:'-Wl,-z,max-page-size=16384']
+def androidExtension = extensions.findByName('android')
+if (androidExtension != null) { androidExtension.defaultConfig.ndk.abiFilters.clear(); androidExtension.defaultConfig.ndk.abiFilters.add(abi) }
+nativeConfigs.each { config ->
+def nativeSource = config.source
+def libraryName = config.library
+def linkerFlags = config.ldflags ?: '-s -w'
+def nativeOutput = layout.buildDirectory.file("${config.output ?: 'generated/jniLibs'}/${abi}/lib${libraryName}.so")
+def buildGo = tasks.register(config.task, Exec) {
+    workingDir config.workdir
+    environment nativeEnvironment
+    def sourceFiles = providers.exec {
+        workingDir rootProject.projectDir.parentFile
+        environment nativeEnvironment
+        commandLine python, rootProject.file('../scripts/release_config.py').absolutePath,
+                '--module', config.workdir.absolutePath, '--target', nativeSource, '--tags=' + config.tags
+    }.standardOutput.asText.map { new groovy.json.JsonSlurper().parseText(it).collect { path -> new File(path) } }
+    inputs.files(sourceFiles).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootProject.file('../scripts/release_config.py')).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootProject.file('native.gradle')).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.property('goVersion', providers.exec { commandLine 'go', 'env', 'GOVERSION' }.standardOutput.asText.map { it.trim() })
+    inputs.property('compilerHost', System.getProperty('os.name') + '/' + System.getProperty('os.arch'))
+    inputs.properties([abi:abi, minSdk:minSdk, tags:config.tags, source:nativeSource, ndk:'28.2.13676358', flags:"-trimpath -buildmode=c-shared -ldflags=${linkerFlags} -Wl,-z,max-page-size=16384"])
+    outputs.file(nativeOutput)
+    outputs.file(nativeOutput.map { it.asFile.path.replaceAll(/\.so$/, '.h') })
+    outputs.cacheIf { true }
+    doFirst {
+        nativeOutput.get().asFile.parentFile.mkdirs()
+        commandLine 'go', 'build', '-trimpath', '-buildmode=c-shared', '-ldflags=' + linkerFlags,
+                '-tags=' + config.tags,
+                '-o', nativeOutput.get().asFile.absolutePath, nativeSource
+    }
+}
+if (androidExtension != null && config.preBuild != false) tasks.named('preBuild').configure { dependsOn buildGo }
+}

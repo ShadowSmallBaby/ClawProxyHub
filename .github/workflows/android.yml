@@ -1,0 +1,88 @@
+name: android-app-checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/android.yml'
+      - 'android/**'
+      - 'hosts/luahost/**'
+      - 'extensions/**'
+      - 'scripts/**'
+      - 'build-config.json'
+      - 'project.toml'
+      - 'project.go'
+      - 'version.json'
+      - 'internal/**'
+      - 'sdk/**'
+      - 'web/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'plugins'
+  workflow_dispatch:
+    inputs:
+      abi:
+        description: Android ABI
+        type: choice
+        options: [arm64-v8a]
+        default: arm64-v8a
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_ABI: ${{ inputs.abi || 'arm64-v8a' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # APP 内置市场目录快照来自子库；业务插件由子库 CI 构建。
+          submodules: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build app frontend
+        run: |
+          pnpm --dir web install --frozen-lockfile
+          pnpm --dir web test
+          pnpm --dir web run build:app
+      - uses: android-actions/setup-android@v3
+      - name: Install Android toolchain
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;28.2.13676358'
+      - name: Verify host runtime and SDK
+        run: |
+          go test ./internal/database ./internal/plugin ./internal/app ./internal/task ./sdk/...
+          go -C hosts/luahost test ./...
+      - name: Build and lint app with instrumentation fixtures
+        run: |
+          sh android/gradlew -p android --build-cache -PcphABI="$ANDROID_ABI" -PcphCompactApk=true :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug :app:packageAppFrontend
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-debug-${{ env.ANDROID_ABI }}
+          path: |
+            build/android/app/outputs/apk/debug/app-debug.apk
+            build/android/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            build/android/frontend-packages/*.cphui
+            build/android/app/reports/lint-results-debug.*
