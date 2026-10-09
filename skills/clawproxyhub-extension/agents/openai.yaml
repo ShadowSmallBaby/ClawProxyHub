@@ -1,0 +1,3 @@
+interface:
+  display_name: "ClawProxyHub 扩展开发"
+  short_description: "开发 ClawProxyHub 功能扩展，涵盖多平台 Go 后端、页面桥接与声明式存储"

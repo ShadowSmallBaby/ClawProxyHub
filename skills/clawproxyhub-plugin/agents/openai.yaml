@@ -1,0 +1,3 @@
+interface:
+  display_name: "ClawProxyHub 插件开发"
+  short_description: "辅助开发 ClawProxyHub Go/Lua 插件，涵盖多实例设置、持久化状态与打包"
