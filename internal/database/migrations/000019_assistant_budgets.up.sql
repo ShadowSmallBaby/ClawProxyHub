@@ -1,0 +1,6 @@
+CREATE TABLE assistant_budgets (
+ day TEXT PRIMARY KEY,
+ calls INTEGER NOT NULL DEFAULT 0,
+ tokens INTEGER NOT NULL DEFAULT 0,
+ cost_micro INTEGER NOT NULL DEFAULT 0
+);

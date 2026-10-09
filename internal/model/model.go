@@ -192,11 +192,12 @@ func (TaskRule) TableName() string { return "task_rules" }
 
 // TaskRun 任务执行历史。
 type TaskRun struct {
-	ID        int64 `gorm:"primaryKey;autoIncrement"`
-	RuleID    *int64
-	AccountID *int64
-	Status    string `gorm:"size:16"` // running/success/failed
-	Summary   string `gorm:"size:1024;default:''"`
+	ExecutionToken string `gorm:"column:execution_token"`
+	ID             int64  `gorm:"primaryKey;autoIncrement"`
+	RuleID         *int64
+	AccountID      *int64
+	Status         string `gorm:"size:16"` // running/success/failed
+	Summary        string `gorm:"size:1024;default:''"`
 	// 结构化明细快照（插件 RunTask 返回，如成长任务列表）
 	DetailJSON   string     `gorm:"column:detail_json;default:''"`
 	ErrorMessage string     `gorm:"column:error_message;size:1024;default:''"`

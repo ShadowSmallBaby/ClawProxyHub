@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/extstore"
 )
 
 // ValidateBackup 只读完整性检查，并验证每个加密字段能用待恢复的密钥解开。
@@ -192,6 +194,8 @@ func ApplyPendingRestore(dbPath, dataDir string) error {
 	pending := filepath.Join(dir, "cph.db")
 	journalPath := filepath.Join(dir, "journal.json")
 	targets := map[string]string{"db": dbPath, "wal": dbPath + "-wal", "shm": dbPath + "-shm", "key": filepath.Join(dataDir, "secret.key")}
+	extensionPath := filepath.Join(dataDir, "cph.ext.db")
+	targets["ext"], targets["extwal"], targets["extshm"] = extensionPath, extensionPath+"-wal", extensionPath+"-shm"
 	rollback := func(j restoreJournal) error {
 		if j.ID == "" || strings.ContainsAny(j.ID, "/\\.") {
 			return fmt.Errorf("invalid restore journal")
@@ -255,8 +259,17 @@ func ApplyPendingRestore(dbPath, dataDir string) error {
 	if err = ValidateBackup(context.Background(), pending, key); err != nil {
 		return err
 	}
+	hasExtensions := fileExists(filepath.Join(dir, "cph.ext.db"))
+	if hasExtensions {
+		if err = extstore.ValidateBackup(context.Background(), filepath.Join(dir, "cph.ext.db")); err != nil {
+			return err
+		}
+	}
 	j := restoreJournal{ID: fmt.Sprint(time.Now().UnixNano()), Originals: make(map[string]bool)}
 	for name, target := range targets {
+		if strings.HasPrefix(name, "ext") && !hasExtensions {
+			continue
+		}
 		if name == "key" && !hasKey {
 			continue
 		}
@@ -294,6 +307,11 @@ func ApplyPendingRestore(dbPath, dataDir string) error {
 	}
 	if err = copyRestoreFile(pending, dbPath); err != nil {
 		return fail(err)
+	}
+	if hasExtensions {
+		if err = copyRestoreFile(filepath.Join(dir, "cph.ext.db"), extensionPath); err != nil {
+			return fail(err)
+		}
 	}
 	if hasKey {
 		if err = copyRestoreFile(filepath.Join(dir, "secret.key"), targets["key"]); err != nil {

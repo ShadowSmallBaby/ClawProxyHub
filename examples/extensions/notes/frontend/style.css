@@ -1,0 +1,4 @@
+body { margin: 0; color: #1f3d9c; background: #ffffff; font: 14px system-ui, sans-serif; }
+body[data-dark="true"] { color: #f3f4f6; background: #1a2440; }
+main { padding: 16px; display: grid; gap: 12px; }
+article { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; border: 1px solid #94a3b840; border-radius: 8px; }
