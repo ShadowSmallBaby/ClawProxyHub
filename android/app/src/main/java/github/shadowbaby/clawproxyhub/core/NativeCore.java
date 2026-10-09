@@ -33,13 +33,12 @@ public final class NativeCore {
  private static synchronized void releaseSlot(int slot){if(slot>=0)slots[slot]=false;}
  static byte[] readBounded(java.io.InputStream input,int max)throws Exception{java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();byte[] buffer=new byte[16384];int read;while((read=input.read(buffer))!=-1){if(output.size()+read>max)throw new IllegalArgumentException("file too large");output.write(buffer,0,read);}return output.toByteArray();}
  public static String systemComponents() throws Exception {
-  JSONArray values=new JSONArray();
-  for(String name:new String[]{"core"}){
-   String pkg=context.getPackageName();JSONObject value=new JSONObject().put("id","android."+name).put("name",name.equals("core")?"ClawProxyHub":"Lua").put("package",pkg).put("version","").put("installed",false).put("available",false).put("execution","android-service");
-   try{PackageInfo info=context.getPackageManager().getPackageInfo(pkg,0);value.put("installed",true).put("version",info.versionName).put("available",context.getPackageManager().checkSignatures(context.getPackageName(),pkg)==PackageManager.SIGNATURE_MATCH && (name.equals("core")||hasLua()));}catch(PackageManager.NameNotFoundException ignored){}
-   values.put(value);
-  }
-  return values.toString();
+  String pkg = context.getPackageName();
+  PackageInfo info = context.getPackageManager().getPackageInfo(pkg, 0);
+  JSONObject core = new JSONObject().put("id", "android.core").put("name", "ClawProxyHub")
+      .put("package", pkg).put("version", info.versionName).put("installed", true)
+      .put("available", true).put("execution", "android-service");
+  return new JSONArray().put(core).toString();
  }
  public static boolean hasLua(){try{ServiceInfo service=context.getPackageManager().getServiceInfo(new ComponentName(context.getPackageName(),"github.shadowbaby.clawproxyhub.lua.LuaService"),0);return service.enabled && !service.exported && new HostStore(context).enabled();}catch(Exception ignored){return false;}}
  public static String extensionTrust() throws Exception {
