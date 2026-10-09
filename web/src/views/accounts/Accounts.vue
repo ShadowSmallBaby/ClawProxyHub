@@ -49,7 +49,7 @@
       <template #op="{ row }">
         <t-space size="small">
           <t-link theme="primary" @click="openEdit(row)">{{ $t('common.edit') }}</t-link>
-          <t-link theme="primary" @click="openTest(row)">{{ $t('accounts.test') }}</t-link>
+          <t-link v-if="gatewayEnabled" theme="primary" @click="openTest(row)">{{ $t('accounts.test') }}</t-link>
           <t-link theme="primary" @click="refresh(row.id)">{{ $t('common.refresh') }}</t-link>
           <t-link theme="danger" @click="askRemove(row)">{{ $t('common.delete') }}</t-link>
         </t-space>
@@ -262,7 +262,7 @@
             </form-item>
           </t-form>
         </div>
-        <div>
+        <div v-if="gatewayEnabled">
           <div class="section-title">
             {{ $t('accounts.modelsTitle') }}
             <t-link theme="primary" style="margin-left: 8px" @click="syncModels">{{ modelsSyncing ? $t('accounts.syncing') : $t('accounts.sync') }}</t-link>
@@ -295,7 +295,7 @@
         <form-item :label="$t('accounts.proxyTitle')">
           <bind-select v-model="editProxies" :options="proxyOptions" :placeholder="$t('accounts.proxyPh')" />
         </form-item>
-        <form-item :label="$t('accounts.modelsTitle')">
+        <form-item v-if="gatewayEnabled" :label="$t('accounts.modelsTitle')">
           <div style="width: 100%">
             <t-link theme="primary" @click="editSyncModels">{{ editSyncing ? $t('accounts.syncing') : $t('accounts.sync') }}</t-link>
             <div v-if="editModels.length" class="model-list" style="margin-top: 8px">
@@ -308,37 +308,7 @@
     </c-drawer>
 
     <!-- 在线测试：选端点/模型/问题 → 响应日志 -->
-    <c-drawer v-model:visible="testVisible" :header="$t('accounts.testTitle')" :footer="false" width="560px" close-on-overlay-click>
-      <t-space v-if="testRow" direction="vertical" style="width: 100%" size="large">
-        <t-form>
-          <form-item :label="$t('accounts.testEndpoint')">
-            <bind-select v-model="testEndpoint" :multiple="false" :options="endpointOptions" />
-          </form-item>
-          <form-item :label="$t('accounts.testModel')">
-            <bind-select v-model="testModel" :multiple="false" :options="testModelOptions" :placeholder="$t('accounts.testModelPh')" />
-          </form-item>
-          <form-item :label="$t('accounts.testQuestion')">
-            <t-input v-model="testQuestion" :placeholder="$t('accounts.testQuestionPh')" />
-          </form-item>
-        </t-form>
-        <t-button theme="primary" block :loading="testing" :disabled="!testModel" @click="runTest">{{ $t('accounts.testRun') }}</t-button>
-        <div v-if="testText" class="test-answer">{{ testText }}</div>
-        <div v-if="testLogs.length" class="test-logs">
-          <div v-for="(l, i) in testLogs" :key="i" class="test-log-line">{{ l }}</div>
-        </div>
-        <template v-if="testRequest || testEvents.length">
-          <t-collapse>
-            <t-collapse-panel v-if="testRequest" :header="$t('accounts.testRequest')">
-              <pre class="test-raw">{{ testRequest }}</pre>
-            </t-collapse-panel>
-            <t-collapse-panel v-if="testEvents.length" :header="$t('accounts.testEvents')">
-              <pre class="test-raw">{{ testEvents.join('\n') }}</pre>
-            </t-collapse-panel>
-          </t-collapse>
-          <t-button variant="outline" block @click="exportTest">{{ $t('accounts.testExport') }}</t-button>
-        </template>
-      </t-space>
-    </c-drawer>
+    <component :is="gateway.accountTest" v-if="gatewayEnabled && gateway.accountTest && testRow" :key="testRow.id" :row="testRow" @close="testRow = null" />
 
     <delete-impact-dialog
       v-model:visible="removeVisible"
@@ -363,9 +333,12 @@
 
 <script setup lang="ts">
 import { PageLayout, PageHeader } from '@/components'
+import { gateway } from '@profile'
+import { hasCapability } from '@/features/access'
+import { currentConnection } from '@/api/connections'
 import { CPagination } from '@/components/base'
 import { useClientPagination } from '@/composables'
-import { CCard, CDrawer, CTable, CTabs, MobileFab, FilterBar } from '@/components/base'
+import { CDrawer, CTable, CTabs, MobileFab, FilterBar } from '@/components/base'
 import { FormItem } from '@/components'
 import EntityIcon from '@/components/EntityIcon.vue'
 import GroupPicker from './GroupPicker.vue'
@@ -382,10 +355,11 @@ import { accountApi, groupApi, instanceApi, pluginApi, proxyApi, type Proxy } fr
 import BindSelect from '@/components/BindSelect.vue'
 import DeleteImpactDialog from '@/components/DeleteImpactDialog.vue'
 import { accountStatusDict, capabilityDict, dict, label, runStatusDict } from '@/utils/dict'
-import type { Account, AccountDetail, AuthMethod, GroupInfo, InstanceInfo, LoginResp, ModelInfo, NextStep, PluginInfo } from '@/api/types'
+import type { Account, AccountDetail, AuthMethod, GroupInfo, InstanceInfo, ModelInfo, NextStep, PluginInfo } from '@/api/types'
 import { isQrDataUrl } from '@/api/types'
 
 const { t } = useI18n()
+const gatewayEnabled = computed(() => !!gateway.models && hasCapability('gateway'))
 const { isPhone } = useIsMobile()
 const filterOpen = ref(false)
 const router = useRouter()
@@ -412,21 +386,10 @@ const editLoaded = ref(false)
 let editSequence = 0
 let originalModels = ''
 let originalProxies = ''
-const testModels = ref<ModelInfo[]>([])
 const editSaving = ref(false)
 const editSyncing = ref(false)
 
-// 在线测试抽屉
-const testVisible = ref(false)
 const testRow = ref<Account | null>(null)
-const testEndpoint = ref('chat_completions')
-const testModel = ref('')
-const testQuestion = ref('')
-const testText = ref('')
-const testLogs = ref<string[]>([])
-const testRequest = ref('')
-const testEvents = ref<string[]>([])
-const testing = ref(false)
 
 const addVisible = ref(false)
 const wizardStep = ref<'select' | 'auth' | 'done'>('select')
@@ -642,7 +605,7 @@ const currentMethod = computed(() => methods.value.find((m) => m.id === methodId
 const pluginGroups = computed(() => groups.value.filter((g) => g.plugin === pluginName.value && g.instance_id === wizardInstanceId.value))
 
 // 管理界面是否本机访问（决定 auto_wait 的走向：本机 127.0.0.1 回调可达）
-const isLocal = ['localhost', '127.0.0.1', '::1'].includes(location.hostname)
+const isLocal = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(currentConnection().baseURL || location.href).hostname)
 
 // wait 步骤是否渲染回调粘贴框：按插件声明的 callback 模式，未声明按 next 下发推断
 const showCallbackInput = computed(() => {
@@ -693,13 +656,6 @@ const editGroupOptions = computed(() => {
     .filter((g) => g.plugin_id === row?.plugin_id && g.instance_id === editInstanceId.value)
     .map((g) => ({ value: g.id, label: `${g.name} (${g.plugin_label || g.plugin})` }))
 })
-const endpointOptions = [
-  { value: 'chat_completions', label: 'chat/completions' },
-  { value: 'messages', label: 'messages' },
-  { value: 'responses', label: 'responses' },
-]
-const testModelOptions = computed(() => testModels.value.map((m) => ({ value: m.id, label: m.id })))
-
 // openEdit 打开编辑弹窗，回填名称/分组/代理/模型
 async function openEdit(row: Account) {
   const sequence = ++editSequence
@@ -726,12 +682,12 @@ async function openEdit(row: Account) {
 
 // editSyncModels 拉上游模型目录（?refresh=1 落库）
 async function editSyncModels() {
-  if (!editRow.value || editSyncing.value || !editLoaded.value) return
+  if (!gatewayEnabled.value || !gateway.models || !editRow.value || editSyncing.value || !editLoaded.value) return
   const id = editRow.value.id
   const sequence = editSequence
   editSyncing.value = true
   try {
-    const resp = await accountApi.models(id, true)
+    const resp = await gateway.models.list(id, true)
     if (sequence !== editSequence || !editVisible.value) return
     editModels.value = (resp.models ?? []).map((m) => ({ ...m }))
     originalModels = JSON.stringify(editModels.value)
@@ -750,7 +706,7 @@ async function submitEdit() {
     const id = editRow.value.id
     await accountApi.update(id, { display_name: editName.value, group_ids: editGroups.value, instance_id: editInstanceId.value ?? 0 })
     if (JSON.stringify(editProxies.value) !== originalProxies) await accountApi.saveProxies(id, editProxies.value)
-    if (JSON.stringify(editModels.value) !== originalModels) await accountApi.saveModels(id, editModels.value)
+    if (gatewayEnabled.value && JSON.stringify(editModels.value) !== originalModels) await gateway.models!.save(id, editModels.value)
     MessagePlugin.success(t('common.saved'))
     editVisible.value = false
     await loadAll()
@@ -761,59 +717,7 @@ async function submitEdit() {
   }
 }
 
-// openTest 打开在线测试抽屉，模型候选取账号已存模型
-async function openTest(row: Account) {
-  testRow.value = row
-  testEndpoint.value = 'chat_completions'
-  testQuestion.value = ''
-  testText.value = ''
-  testLogs.value = []
-  testRequest.value = ''
-  testEvents.value = []
-  testModel.value = ''
-  testVisible.value = true
-  const detail = await accountApi.detail(row.id).catch(() => null)
-  if (testRow.value?.id !== row.id) return
-  testModels.value = detail?.models ?? []
-  if (testModels.value.length) testModel.value = testModels.value[0].id
-}
-
-// runTest 直调插件 Chat（绕路由/key），输出响应与日志
-async function runTest() {
-  if (!testRow.value || !testModel.value) return
-  testing.value = true
-  testText.value = ''
-  testLogs.value = []
-  testRequest.value = ''
-  testEvents.value = []
-  try {
-    const resp = await accountApi.test(testRow.value.id, {
-      endpoint: testEndpoint.value, model: testModel.value, question: testQuestion.value,
-    })
-    testText.value = resp.text ?? ''
-    testLogs.value = resp.logs ?? []
-    testRequest.value = resp.request ?? ''
-    testEvents.value = resp.events ?? []
-  } catch (e: any) {
-    testLogs.value = ['✗ ' + (e.message || 'error')]
-  } finally {
-    testing.value = false
-  }
-}
-
-// exportTest 导出本次测试的 请求/事件/回答 为 JSON blob 下载
-function exportTest() {
-  const data = JSON.stringify(
-    { request: JSON.parse(testRequest.value || 'null'), events: testEvents.value, text: testText.value, logs: testLogs.value },
-    null, 2,
-  )
-  const url = URL.createObjectURL(new Blob([data], { type: 'application/json' }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `test-${testRow.value?.id ?? 0}-${Date.now()}.json`
-  a.click()
-  URL.revokeObjectURL(url)
-}
+function openTest(row: Account) { testRow.value = row }
 
 function openAdd() {
   addVisible.value = true
@@ -914,10 +818,10 @@ function enterDoneStep(accountID: number) {
 
 // syncModels 同步客户端模型目录（账号凭据）
 async function syncModels() {
-  if (!newAccountId.value || modelsSyncing.value) return
+  if (!gatewayEnabled.value || !gateway.models || !newAccountId.value || modelsSyncing.value) return
   modelsSyncing.value = true
   try {
-    const resp = await accountApi.models(newAccountId.value, true)
+    const resp = await gateway.models.list(newAccountId.value, true)
     wizardModels.value = resp.models ?? []
   } catch (e: any) {
     MessagePlugin.warning(t('accounts.syncFailed', { msg: e.message }))
@@ -1089,38 +993,6 @@ watch(instanceFilter, resetPage)
 .hint {
   color: var(--td-text-color-placeholder);
   font-size: 12px;
-}
-.test-answer {
-  padding: 12px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: var(--td-bg-color-secondarycontainer);
-  border-radius: 6px;
-}
-.test-logs {
-  padding: 8px 12px;
-  font-family: monospace;
-  font-size: 12px;
-  color: var(--td-text-color-secondary);
-  background: var(--td-bg-color-container-hover);
-  border-radius: 6px;
-}
-.test-log-line {
-  word-break: break-all;
-  line-height: 1.7;
-}
-.test-raw {
-  margin: 0;
-  padding: 8px 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-family: monospace;
-  font-size: 12px;
-  color: var(--td-text-color-secondary);
-  background: var(--td-bg-color-container-hover);
-  border-radius: 6px;
-  max-height: 280px;
-  overflow: auto;
 }
 .wizard-back {
   display: flex;

@@ -6,7 +6,7 @@
         <t-space>
           <t-button variant="outline" @click="openSources">{{ $t('plugins.sources') }}</t-button>
           <t-button variant="outline" :loading="marketLoading" @click="openMarket">{{ $t('plugins.market') }}</t-button>
-          <t-button v-if="!isPhone" variant="outline" @click="openEditor(null)">{{ $t('plugins.editorNew') }}</t-button>
+          <extension-actions location="plugins.toolbar" />
           <t-upload
             :auto-upload="false"
             :show-upload-progress="false"
@@ -53,7 +53,7 @@
           <t-space size="small" class="plugin-ops">
             <t-link theme="primary" @click="openSettings(p)">{{ $t('plugins.settings') }}</t-link>
             <t-link v-if="p.multi_instance" theme="primary" @click="openInstances(p)">{{ $t('menu.instances') }}</t-link>
-            <t-link v-if="p.editable && !isPhone" theme="primary" @click="openEditor(p)">{{ $t('plugins.editorEdit') }}</t-link>
+            <extension-actions location="plugins.item.actions" :name="p.name" :editable="p.editable" />
             <t-link theme="primary" @click="restart(p)">{{ $t('plugins.restart') }}</t-link>
             <t-link theme="warning" :disabled="!p.running" @click="stop(p.name)">{{ $t('plugins.stop') }}</t-link>
             <t-link theme="danger" @click="askUninstall(p)">{{ $t('plugins.uninstall') }}</t-link>
@@ -203,6 +203,7 @@
 
     <!-- 手机端：插件源/市场/上传 收进悬浮按钮 -->
     <mobile-fab v-if="isPhone">
+      <extension-actions location="plugins.toolbar" />
       <t-button theme="default" variant="outline" shape="circle" size="large" @click="openSources">
         <template #icon><app-icon /></template>
       </t-button>
@@ -229,7 +230,8 @@ import EntityIcon from '@/components/EntityIcon.vue'
 import { useAsync, useIsMobile } from '@/composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { ExtensionActions } from '@/components'
+import { refreshExtensions } from '@/features/extensions'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { ShopIcon, CloudUploadIcon, AppIcon } from 'tdesign-icons-vue-next'
 import type { ResponseType } from 'tdesign-vue-next'
@@ -242,7 +244,7 @@ import { notifyDeleteImpact } from '@/utils/impact'
 import type { InstanceInfo, PluginInfo, PluginSource } from '@/api/types'
 
 const { t } = useI18n()
-const router = useRouter()
+
 const { isPhone } = useIsMobile()
 
 const plugins = ref<PluginInfo[]>([])
@@ -498,13 +500,6 @@ function openInstanceForm(row: InstanceInfo | null) {
   instanceFormVisible.value = true
 }
 
-// ---------- 在线编辑器 ----------
-
-function openEditor(p: PluginInfo | null) {
-  if (p) router.push(`/plugins/editor/${p.name}`)
-  else router.push('/plugins/editor')
-}
-
 // ---------- 删除确认（插件卸载 / 实例删除共用一个影响面弹窗） ----------
 
 // deleteUrl 缺省 = 弹窗只做确认，确认后由 after 自行执行（插件卸载走进度弹窗）
@@ -607,21 +602,21 @@ const { run } = useAsync()
 
 async function load() {
   await run(async () => {
-    const resp = await pluginApi.list()
+    const [resp] = await Promise.all([pluginApi.list(), refreshExtensions()])
     plugins.value = resp.plugins ?? []
   })
 }
 
 // t-upload 自定义上传：multipart 直发安装端点
 async function uploadInstall({ raw }: { raw: File }): Promise<ResponseType> {
-  const resp = await pluginApi.uploadInstall(raw)
-  if (resp.ok) {
+  try {
+    await pluginApi.uploadInstall(raw)
     MessagePlugin.success(t('plugins.installOk'))
     await load()
     if (marketVisible.value) await loadMarket()
     return { status: 'success' }
   }
-  return { status: 'fail', error: { message: (await resp.text()).slice(0, 200) } } as any
+  catch (e: any) { return { status: 'fail', error: { message: e.message } } as any }
 }
 
 function onUploadFail({ file }: any) {

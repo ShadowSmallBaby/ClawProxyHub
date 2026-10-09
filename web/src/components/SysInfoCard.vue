@@ -23,6 +23,8 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { gateway } from '@profile'
+import { hasCapability } from '@/features/access'
 import { useI18n } from 'vue-i18n'
 import { fmtTime, fmtBytes } from '@/utils/format'
 import type { SysInfo } from '@/api/settings'
@@ -30,12 +32,12 @@ import type { SysInfo } from '@/api/settings'
 const props = withDefaults(defineProps<{ sys: SysInfo | null; column?: number }>(), { column: 1 })
 const { t } = useI18n()
 
-const countItems = [
+const countItems = computed(() => [
   { key: 'plugins', label: 'settings.countPlugins' }, { key: 'instances', label: 'settings.countInstances' },
   { key: 'accounts', label: 'settings.countAccounts' }, { key: 'groups', label: 'settings.countGroups' },
   { key: 'routes', label: 'settings.countRoutes' }, { key: 'keys', label: 'settings.countKeys' },
   { key: 'request_logs', label: 'settings.countLogs' }, { key: 'task_runs', label: 'settings.countRuns' },
-]
+].filter(item => !!gateway.settings && hasCapability('gateway') || !['routes', 'keys', 'request_logs'].includes(item.key)))
 
 const uptime = computed(() => {
   const s = props.sys?.uptime_seconds ?? 0

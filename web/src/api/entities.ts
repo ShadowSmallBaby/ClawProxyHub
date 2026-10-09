@@ -1,8 +1,9 @@
 // 实体资源 API（插件 / 实例 / 账号 / 分组 / 代理 / 路由 / 密钥 / OAuth 凭据 / 任务）。
-import { api, getToken, requestStream } from './client'
+import { api, upload, requestStream } from './client'
+import { actionApi } from './actions'
 import type {
   Account, AccountDetail, AuthMethod, DeleteImpact, GroupInfo, InstanceInfo, KeyInfo,
-  LoginResp, ModelInfo, NextStep, PluginInfo, PluginSource, RequestLog,
+  LoginResp, PluginInfo, PluginSource,
   RouteInfo, TaskRule, TaskRun,
 } from './types'
 
@@ -41,11 +42,7 @@ export const pluginApi = {
   uploadInstall: async (raw: File) => {
     const form = new FormData()
     form.append('package', raw)
-    return fetch('/admin/plugins/install-upload', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${getToken()}` },
-      body: form,
-    })
+    return upload<{installed:string}>('/admin/plugins/install-upload', form)
   },
   // 在线编辑（用户自建 Lua 插件）：脚手架 / 读源码 / 存源码 / 新建（multipart 含 icon）
   scaffold: () => api.get<{ lua: string }>('/admin/plugins/scaffold'),
@@ -55,17 +52,7 @@ export const pluginApi = {
     form.append('label', label)
     form.append('lua', lua)
     if (icon) form.append('icon', icon)
-    return fetch('/admin/plugins/local', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${getToken()}` },
-      body: form,
-    }).then(async (resp) => {
-      if (!resp.ok) {
-        const text = await resp.text()
-        throw new Error(JSON.parse(text).error ?? text)
-      }
-      return resp.json() as Promise<{ created: string }>
-    })
+    return upload<{ created: string }>('/admin/plugins/local', form)
   },
   source: (name: string, file: string) => api.get<{ content: string }>(`/admin/plugins/${name}/source?file=${encodeURIComponent(file)}`),
   saveSource: (name: string, file: string, content: string) => api.put(`/admin/plugins/${name}/source`, { file, content }),
@@ -105,14 +92,10 @@ export const accountApi = {
   impact: (id: number) => api.get(`/admin/accounts/${id}/impact`),
   proxies: (id: number) => api.get<{ proxy_ids: number[] }>(`/admin/accounts/${id}/proxies`),
   saveProxies: (id: number, proxy_ids: number[]) => api.put(`/admin/accounts/${id}/proxies`, { proxy_ids }),
-  models: (id: number, refresh = false) =>
-    api.get<{ models: ModelInfo[] | null }>(`/admin/accounts/${id}/models${refresh ? '?refresh=1' : ''}`),
-  saveModels: (id: number, models: { id: string }[]) => api.put(`/admin/accounts/${id}/models`, { models }),
   pause: (id: number) => api.post(`/admin/accounts/${id}/pause`),
   resume: (id: number) => api.post(`/admin/accounts/${id}/resume`),
   refresh: (id: number) => api.post(`/admin/accounts/${id}/refresh`),
-  test: (id: number, body: { endpoint: string; model: string; question: string }) =>
-    api.post<{ text: string; logs: string[]; request?: string; events?: string[] }>(`/admin/accounts/${id}/test`, body),
+
 }
 
 // ---------- 分组 ----------
@@ -200,5 +183,6 @@ export const taskApi = {
   updateRule: (id: number, body: Record<string, unknown>) => api.put(`/admin/task-rules/${id}`, body),
   removeRule: (id: number) => api.del(`/admin/task-rules/${id}`),
   toggleRule: (id: number) => api.post(`/admin/task-rules/${id}/toggle`),
-  runRule: (id: number) => api.post(`/admin/task-rules/${id}/run`),
+  runRule: (id: number) => actionApi.invoke('core.tasks.run', { id }),
+  cancelRule: (id: number) => actionApi.invoke('core.tasks.cancel', { id }),
 }

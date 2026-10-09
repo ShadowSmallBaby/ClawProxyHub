@@ -9,3 +9,10 @@ export { default as CTable } from './base/CTable.vue'
 export { default as CTabs } from './base/CTabs.vue'
 export { default as CDrawer } from './base/CDrawer.vue'
 export { default as CDialog } from './base/CDialog.vue'
+
+export { default as BindSelect } from './BindSelect.vue'
+export { default as EntityIcon } from './EntityIcon.vue'
+
+export { default as ExtensionActions } from './ExtensionActions.vue'
+export { default as ExtensionUI } from './ExtensionUI.vue'
+export { default as ExtensionFields } from './ExtensionFields.vue'

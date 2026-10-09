@@ -1,5 +1,5 @@
 // 系统设置 API（网关 / 网络 / 日志保留 / 站点品牌）+ 系统信息。
-import { api, getToken } from './client'
+import { api, upload, downloadFile } from './client'
 
 export interface AdminSettings {
   first_token_timeout: number
@@ -17,7 +17,6 @@ export interface AdminSettings {
   context_bytes_per_token?: number
   plugin_lua_enabled?: boolean
   plugin_lua_isolation?: boolean
-  plugin_lua_update_mode?: string
   site_name?: string
   site_abbr?: string
   site_logo?: string
@@ -35,39 +34,12 @@ export const settingsApi = {
   save: (patch: Record<string, unknown>) => api.put('/admin/settings', patch),
 }
 
-// 手动上传共享 luahost 二进制（multipart），覆盖 data/hosts 下当前平台版本并重启 Lua 插件
-export async function uploadLuahost(file: File) {
-  const fd = new FormData()
-  fd.append('file', file)
-  const resp = await fetch('/admin/plugins/luahost-upload', {
-    method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body: fd,
-  })
-  if (!resp.ok) throw new Error(JSON.parse(await resp.text()).error || `HTTP ${resp.status}`)
-}
-
-// 带鉴权头下载（<a download> 带不了 Authorization），blob 落成文件
-export async function downloadFile(path: string, fallbackName: string, flag: { value: boolean }) {
-  flag.value = true
-  try {
-    const resp = await fetch(path, { headers: { Authorization: `Bearer ${getToken()}` } })
-    if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`)
-    const name = /filename="?([^"]+)"?/.exec(resp.headers.get('Content-Disposition') ?? '')?.[1] ?? fallbackName
-    const url = URL.createObjectURL(await resp.blob())
-    const a = Object.assign(document.createElement('a'), { href: url, download: name })
-    a.click()
-    URL.revokeObjectURL(url)
-  } finally {
-    flag.value = false
-  }
-}
-
 export const systemApi = {
   info: () => api.get<SysInfo>('/admin/system/info'),
   backup: (flag: { value: boolean }) => downloadFile('/admin/system/backup', 'cph-backup.zip', flag),
   restore: async (file: File) => {
     const fd = new FormData()
     fd.append('file', file)
-    const resp = await fetch('/admin/system/restore', { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` }, body: fd })
-    if (!resp.ok) throw new Error(JSON.parse(await resp.text()).error)
+    await upload('/admin/system/restore', fd)
   },
 }

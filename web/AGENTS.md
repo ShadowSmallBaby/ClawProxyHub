@@ -4,7 +4,7 @@
 
 ## 技术栈
 
-Vue 3 `<script setup>` + TypeScript + Vite + TDesign Vue Next（全量注册）+ vue-i18n（zh/en）+ pinia + echarts（Dashboard）。构建产物 `dist/` 经 `go:embed` 嵌入 Go 二进制（`.gitkeep` 占位保证未构建也能编译）。
+Vue 3 `<script setup>` + TypeScript + Vite + TDesign Vue Next（全量注册）+ vue-i18n（zh/en）+ pinia + echarts（Dashboard）。桌面核心将 `build-web/` 经 `go:embed` 嵌入 Go 二进制；App 工作台资源交给原生宿主，配置定义于根 `build-config.json`。
 
 ## 目录结构
 
@@ -19,14 +19,15 @@ src/
     logs.ts          请求日志（列表 / CSV 导出 / 清空）+ 运行日志（/admin/run-logs，展开明细抽屉 / 导出）
     entities.ts      插件 / 插件源 / 实例 / 账号 / 分组 / 代理 / 路由 / 密钥 / OAuth / 任务
                      （插件条目带 runtime 字段：空=Go 插件、"lua"=脚本插件，插件页渲染 Go/Lua 徽章）
-    settings.ts      系统设置（网关/网络/日志/品牌 + 「插件」板块：Lua 启用/隔离/更新）/ 备份恢复 / 系统信息
+    settings.ts      系统设置（网关/网络/日志/品牌）/ 备份恢复 / 系统信息
+    extensions.ts    扩展包、运行时、动态设置、离线/在线目录与签名信任源
     types.ts         与后端 admin API 对齐的类型
-  views/             按功能域归一，每域一个文件夹（git mv 保留历史）
+  views/             按功能域归一，每域一个文件夹
     auth/            Login / Setup
     dashboard/ plugins/ instances/ accounts/ groups/
     proxies/ routes/ keys/ oauth/ tasks/ logs/ settings/ profile/
   layouts/           布局层
-    AppLayout.vue    组装层（菜单配置 + /admin/me 用户信息，约 95 行）
+    AppLayout.vue    组装层（菜单配置 + /admin/me 用户信息）
     AppSidebar.vue   侧栏（logo + 菜单 + 收起，collapsed 自持）
     AppHeader.vue    头部（页面标题/描述 + 功能区）
     header/          功能按钮子组件：VersionChip / NotifBell / LangSwitch / ThemeSwitch / UserMenu
@@ -60,5 +61,7 @@ npx vite dev           # 开发（5173，代理 /admin /v1 /assets 到 127.0.0.1
 ```
 
 ## 构建产物 chunk 约定
+
+支持 `web-full/app-full`，使用 `pnpm run build:profiles` 完成类型检查和两种产物构建。构建需 Python 3.11+ 读取根 `project.toml`。两者均保留网关、路由、账号和任务入口；Web 发行预配 Lua 编辑器，App 不预配。App 不携带业务插件管理页，插件操作由 Android 原生页负责。编辑器位于独立 `extensions/lua-editor`，主 Web 通过扩展贡献入口与沙箱桥调用，避免重复编入 CodeMirror。
 
 `vite.config.ts` manualChunks：vue / tdesign / echarts / vendor 独立 chunk。改业务代码不应触碰这些 chunk 的哈希；新增大型第三方依赖时评估是否归入 vendor。

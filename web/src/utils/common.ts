@@ -26,6 +26,10 @@ export function parseJSON<T>(raw: string | null | undefined, fallback: T): T {
 
 // 剪贴板复制
 export async function copyText(text: string): Promise<boolean> {
+  if (typeof window !== 'undefined' && (window as unknown as { cphPlatform?: unknown }).cphPlatform) {
+    try { await (await import('@/api/application')).copyApplicationText(text); return true }
+    catch { /* 旧版原生外壳仍可尝试浏览器剪贴板。 */ }
+  }
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text)

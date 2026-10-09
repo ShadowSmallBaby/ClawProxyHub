@@ -11,6 +11,7 @@
       </div>
     </div>
     <div class="header-right">
+      <notif-bell v-if="isMobile && isAndroidApp" />
       <action-icons v-if="!isMobile" />
       <user-menu :username="isMobile ? '' : username" :role="role" />
     </div>
@@ -20,7 +21,8 @@
 <script setup lang="ts">
 import { MenuIcon } from 'tdesign-icons-vue-next'
 import ActionIcons from './ActionIcons.vue'
-import { UserMenu } from './header'
+import { UserMenu, NotifBell } from './header'
+import { isAndroidApp } from '@/api/application'
 import type { MenuItem } from './types'
 
 defineProps<{

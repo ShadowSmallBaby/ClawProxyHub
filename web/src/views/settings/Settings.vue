@@ -3,41 +3,11 @@
   <div class="settings-page">
     <!-- 桌面/平板/手机：tab 切换统一 -->
     <c-tabs v-model="tab" class="settings-tabs" size="medium">
-      <t-tab-panel value="gateway" :label="$t('settings.gateway')">
-        <div class="panel">
-          <div class="s-form">
-            <form-item :label="$t('settings.firstEventTimeout')" :tip="$t('settings.firstEventTimeoutHelp')">
-              <t-input-number v-model="gwForm.first_event_timeout" :min="5" :max="3600" theme="column" class="w-sm" />
-            </form-item>
-            <form-item :label="$t('settings.firstTokenTimeout')" :tip="$t('settings.firstTokenTimeoutHelp')">
-              <t-input-number v-model="gwForm.first_token_timeout" :min="5" :max="3600" theme="column" class="w-sm" />
-            </form-item>
-            <form-item :label="$t('settings.maxRetries')" :tip="$t('settings.maxRetriesHelp')">
-              <t-input-number v-model="gwForm.max_retries" :min="1" :max="10" theme="column" class="w-sm" />
-            </form-item>
-            <form-item :label="$t('settings.contextTruncate')" :tip="$t('settings.contextTruncateHelp')">
-              <t-switch v-model="gwForm.context_truncate_enabled" />
-            </form-item>
-            <form-item :label="$t('settings.contextTruncateRatio')" :tip="$t('settings.contextTruncateRatioHelp')">
-              <t-input-number v-model="gwForm.context_truncate_ratio" :min="0.1" :max="1" :step="0.05" :decimal-places="2" theme="column" class="w-sm" />
-            </form-item>
-            <form-item :label="$t('settings.contextBytesPerToken')" :tip="$t('settings.contextBytesPerTokenHelp')">
-              <t-input-number v-model="gwForm.context_bytes_per_token" :min="1" :max="100" :step="0.5" :decimal-places="1" theme="column" class="w-sm" />
-            </form-item>
-            <form-item :label="$t('settings.userAgent')" :tip="$t('settings.userAgentHelp')">
-              <t-input v-model="gwForm.user_agent" :placeholder="$t('settings.uaPh')" class="w-2xl" />
-            </form-item>
-            <form-item :label="$t('settings.browserUserAgent')" :tip="$t('settings.browserUserAgentHelp')">
-              <t-input v-model="gwForm.browser_user_agent" :placeholder="$t('settings.uaPh')" class="w-2xl" />
-            </form-item>
-            <div class="save-row">
-              <t-button theme="primary" :loading="saving" @click="save({ first_event_timeout: gwForm.first_event_timeout, first_token_timeout: gwForm.first_token_timeout, max_retries: gwForm.max_retries, user_agent: gwForm.user_agent.trim(), browser_user_agent: gwForm.browser_user_agent.trim(), context_truncate_enabled: gwForm.context_truncate_enabled, context_truncate_ratio: gwForm.context_truncate_ratio, context_bytes_per_token: gwForm.context_bytes_per_token })">{{ $t('common.save') }}</t-button>
-            </div>
-          </div>
-        </div>
+      <t-tab-panel v-if="gatewayEnabled" value="gateway" :label="$t('settings.gateway')">
+        <component :is="gateway.settings" ref="gatewaySettings" :settings="loadedSettings" :save="save" :saving="saving" />
       </t-tab-panel>
 
-      <t-tab-panel value="network" :label="$t('settings.network')">
+      <t-tab-panel v-if="!supportsConnections" value="network" :label="$t('settings.network')">
         <div class="panel">
           <div class="s-form">
             <form-item :label="$t('settings.githubProxy')" :tip="$t('settings.githubProxyHelp')">
@@ -67,16 +37,7 @@
                 <t-option value="info" :label="$t('settings.runLevelInfo')" />
               </t-select>
             </form-item>
-            <form-item :label="$t('settings.logExport')" :tip="$t('settings.logExportHelp')">
-              <t-button variant="outline" :loading="exporting" @click="exportLogs">
-                <template #icon><download-icon /></template>{{ $t('settings.exportBtn') }}
-              </t-button>
-            </form-item>
-            <form-item :label="$t('settings.logClear')" :tip="$t('settings.logClearHelp')">
-              <t-button theme="danger" variant="outline" @click="confirmClear">
-                <template #icon><delete-icon /></template>{{ $t('settings.clearBtn') }}
-              </t-button>
-            </form-item>
+            <component :is="gateway.logActions" v-if="gatewayEnabled && gateway.logActions" @changed="loadSys" />
           </div>
         </div>
       </t-tab-panel>
@@ -97,29 +58,10 @@
         </div>
       </t-tab-panel>
 
-      <t-tab-panel value="plugin" :label="$t('settings.plugin')">
-        <div class="panel">
-          <div class="s-form">
-            <form-item :label="$t('settings.luaEnabled')" :tip="$t('settings.luaEnabledHelp')">
-              <t-switch v-model="pluginForm.plugin_lua_enabled" @change="save({ plugin_lua_enabled: pluginForm.plugin_lua_enabled })" />
-            </form-item>
-            <form-item :label="$t('settings.luaIsolation')" :tip="$t('settings.luaIsolationHelp')">
-              <t-switch v-model="pluginForm.plugin_lua_isolation" disabled />
-            </form-item>
-            <form-item :label="$t('settings.luaUpdate')" :tip="$t('settings.luaUpdateHelp')">
-              <input ref="luahostEl" type="file" hidden @change="onPickLuahost" />
-              <t-space>
-                <t-button variant="outline" :loading="uploadingLua" @click="luahostEl?.click()">
-                  <template #icon><upload-icon /></template>{{ $t('settings.luaUpdateManual') }}
-                </t-button>
-                <t-button variant="outline" disabled>{{ $t('settings.luaUpdateOnline') }}</t-button>
-              </t-space>
-            </form-item>
-          </div>
-        </div>
+      <t-tab-panel value="mcp" label="MCP">
+        <MCPSettings v-if="tab === 'mcp'" ref="mcpSettings" />
       </t-tab-panel>
-
-      <t-tab-panel value="system" :label="$t('settings.system')">
+      <t-tab-panel v-if="!supportsConnections" value="system" :label="$t('settings.system')">
         <div class="panel">
           <!-- 系统信息：手机端走独立抽屉，仅 PC 展示 -->
           <template v-if="!isPhone">
@@ -132,7 +74,7 @@
           <div class="s-form sys-form">
             <form-item :label="$t('settings.siteLogo')" :tip="$t('settings.siteLogoHelp')">
               <div class="logo-row">
-                <img class="logo-preview" :src="siteForm.site_logo || '/logo.png'" alt="logo" />
+                <img class="logo-preview" :src="siteForm.site_logo ? resourceURL(siteForm.site_logo) : DEFAULT_LOGO" alt="logo" />
                 <input ref="logoEl" type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden @change="onPickLogo" />
                 <t-button variant="outline" @click="logoEl?.click()">
                   <template #icon><upload-icon /></template>{{ $t('settings.siteLogoPick') }}
@@ -190,16 +132,16 @@
           </div>
         </template>
       </t-popup>
-      <t-button theme="default" shape="circle" size="large" @click="openSys">
+      <t-button v-if="!supportsConnections" theme="default" shape="circle" size="large" @click="openSys">
         <template #icon><desktop-icon /></template>
       </t-button>
-      <t-button v-if="['gateway', 'network', 'task', 'system'].includes(tab)" theme="success" shape="circle" size="large" :loading="saving" :aria-label="$t('common.save')" @click="saveCurrent">
+      <t-button v-if="['gateway', 'network', 'task', 'system', 'mcp'].includes(tab)" theme="success" shape="circle" size="large" :loading="saving || !!mcpSettings?.loading" :aria-label="$t('common.save')" @click="saveCurrent">
         <template #icon><save-icon /></template>
       </t-button>
     </mobile-fab>
 
     <!-- 手机端系统信息抽屉：一列展示 -->
-    <c-drawer v-if="isPhone" v-model:visible="sysOpen" :header="$t('settings.sysInfo')" :footer="false">
+    <c-drawer v-if="isPhone && !supportsConnections" v-model:visible="sysOpen" :header="$t('settings.sysInfo')" :footer="false">
       <sys-info-card :sys="sys" />
     </c-drawer>
 
@@ -212,25 +154,30 @@ import { FormItem, SysInfoCard } from '@/components'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
-import { DeleteIcon, DownloadIcon, UploadIcon, SettingIcon, SaveIcon, DesktopIcon } from 'tdesign-icons-vue-next'
-import { settingsApi, systemApi, uploadLuahost, type SysInfo } from '@/api/settings'
-import { logsApi } from '@/api/logs'
-import { refreshBranding } from '@/utils/branding'
+import { DownloadIcon, UploadIcon, SettingIcon, SaveIcon, DesktopIcon } from 'tdesign-icons-vue-next'
+import { settingsApi, systemApi, type SysInfo, type AdminSettings } from '@/api/settings'
+import { refreshBranding, DEFAULT_LOGO } from '@/utils/branding'
+import { resourceURL } from '@/api/client'
+import { supportsConnections } from '@/api/connections'
+import { gateway } from '@profile'
+import { hasCapability } from '@/features/access'
 import { useIsMobile } from '@/composables'
+import MCPSettings from './MCPSettings.vue'
 
 const { t } = useI18n()
+const gatewayEnabled = computed(() => !!gateway.settings && hasCapability('gateway'))
 const { isPhone } = useIsMobile()
 
 const tabOptions = computed(() => [
-  { value: 'gateway', label: t('settings.gateway') },
-  { value: 'network', label: t('settings.network') },
+  ...(gatewayEnabled.value ? [{ value: 'gateway', label: t('settings.gateway') }] : []),
+  ...(!supportsConnections ? [{ value: 'network', label: t('settings.network') }] : []),
   { value: 'logs', label: t('settings.logs') },
   { value: 'task', label: t('settings.task') },
-  { value: 'plugin', label: t('settings.plugin') },
-  { value: 'system', label: t('settings.system') },
+  { value: 'mcp', label: 'MCP' },
+  ...(!supportsConnections ? [{ value: 'system', label: t('settings.system') }] : []),
 ])
 
-const tab = ref('gateway')
+const tab = ref(gatewayEnabled.value ? 'gateway' : supportsConnections ? 'task' : 'network')
 const sysOpen = ref(false)
 const menuOpen = ref(false)
 
@@ -250,15 +197,18 @@ const currentTabLabel = computed(() => tabOptions.value.find((o) => o.value === 
 
 // 手机端悬浮保存：按 tab 分块提交当前块
 function saveCurrent() {
-  if (tab.value === 'gateway') save({ first_event_timeout: gwForm.first_event_timeout, first_token_timeout: gwForm.first_token_timeout, max_retries: gwForm.max_retries, user_agent: gwForm.user_agent.trim(), browser_user_agent: gwForm.browser_user_agent.trim(), context_truncate_enabled: gwForm.context_truncate_enabled, context_truncate_ratio: gwForm.context_truncate_ratio, context_bytes_per_token: gwForm.context_bytes_per_token })
+  if (tab.value === 'gateway') gatewaySettings.value?.save()
   else if (tab.value === 'network') save({ github_proxy: netForm.github_proxy.trim() })
   else if (tab.value === 'task') saveTask()
   else if (tab.value === 'system') saveSite()
+  else if (tab.value === 'mcp') mcpSettings.value?.save()
 }
 function saveTask() {
   return save({ timezone: taskForm.timezone.trim(), task_daily_jitter: taskForm.task_daily_jitter })
 }
-const gwForm = reactive({ first_event_timeout: 60, first_token_timeout: 120, max_retries: 3, user_agent: '', browser_user_agent: '', context_truncate_enabled: true, context_truncate_ratio: 0.9, context_bytes_per_token: 3.5 })
+const loadedSettings = ref<AdminSettings>()
+const gatewaySettings = ref<{ save: () => Promise<void> }>()
+const mcpSettings = ref<InstanceType<typeof MCPSettings>>()
 const netForm = reactive({ github_proxy: '' })
 const logForm = reactive({ log_retention_days: 0, run_level: 'error' })
 const taskForm = reactive({ task_daily_jitter: 30, timezone: 'Asia/Shanghai' })
@@ -267,28 +217,17 @@ const timezoneOptions = computed(() => [
   ...['UTC', 'Asia/Hong_Kong', 'Asia/Tokyo', 'Asia/Singapore', 'Asia/Kolkata', 'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Los_Angeles', 'Australia/Sydney'],
 ])
 const siteForm = reactive({ site_name: '', site_abbr: '', site_logo: '' })
-const pluginForm = reactive({ plugin_lua_enabled: true, plugin_lua_isolation: true, plugin_lua_update_mode: 'manual' })
 const saving = ref(false)
-const exporting = ref(false)
 const backingUp = ref(false)
 const restoring = ref(false)
 const fileEl = ref<HTMLInputElement>()
 const logoEl = ref<HTMLInputElement>()
-const luahostEl = ref<HTMLInputElement>()
-const uploadingLua = ref(false)
 
 const sys = ref<SysInfo | null>(null)
 
 async function load() {
   const r = await settingsApi.get()
-  gwForm.first_token_timeout = r.settings?.first_token_timeout ?? 120
-  gwForm.first_event_timeout = r.settings?.first_event_timeout ?? 60
-  gwForm.max_retries = r.settings?.max_retries ?? 3
-  gwForm.user_agent = r.settings?.user_agent ?? ''
-  gwForm.browser_user_agent = r.settings?.browser_user_agent ?? ''
-  gwForm.context_truncate_enabled = r.settings?.context_truncate_enabled ?? true
-  gwForm.context_truncate_ratio = r.settings?.context_truncate_ratio ?? 0.9
-  gwForm.context_bytes_per_token = r.settings?.context_bytes_per_token ?? 3.5
+  loadedSettings.value = r.settings
   netForm.github_proxy = r.settings?.github_proxy ?? ''
   logForm.log_retention_days = r.settings?.log_retention_days ?? 0
   logForm.run_level = r.settings?.run_level ?? 'error'
@@ -297,9 +236,6 @@ async function load() {
   siteForm.site_name = r.settings?.site_name ?? ''
   siteForm.site_abbr = r.settings?.site_abbr ?? ''
   siteForm.site_logo = r.settings?.site_logo ?? ''
-  pluginForm.plugin_lua_enabled = r.settings?.plugin_lua_enabled ?? true
-  pluginForm.plugin_lua_isolation = r.settings?.plugin_lua_isolation ?? true
-  pluginForm.plugin_lua_update_mode = r.settings?.plugin_lua_update_mode ?? 'manual'
 }
 async function loadSys() {
   sys.value = await systemApi.info().catch(() => null)
@@ -315,22 +251,6 @@ async function save(patch: Record<string, unknown>) {
     MessagePlugin.error(e.message)
   } finally {
     saving.value = false
-  }
-}
-
-// 手动上传 luahost 二进制（覆盖共享运行时 + 重启 Lua 插件）
-async function onPickLuahost(ev: Event) {
-  const file = (ev.target as HTMLInputElement).files?.[0]
-  if (luahostEl.value) luahostEl.value.value = ''
-  if (!file) return
-  uploadingLua.value = true
-  try {
-    await uploadLuahost(file)
-    MessagePlugin.success(t('settings.luaUploadOk'))
-  } catch (e: any) {
-    MessagePlugin.error(e.message)
-  } finally {
-    uploadingLua.value = false
   }
 }
 
@@ -355,24 +275,7 @@ function onPickLogo(ev: Event) {
 }
 
 // 带鉴权头下载：API 层负责 blob 落成文件，此处只管错误提示
-const exportLogs = () => logsApi.exportCsv(exporting).catch((e: any) => MessagePlugin.error(e.message))
 const exportBackup = () => systemApi.backup(backingUp).catch((e: any) => MessagePlugin.error(e.message))
-
-function confirmClear() {
-  const dlg = DialogPlugin.confirm({
-    header: t('settings.clearConfirmTitle'), body: t('settings.clearConfirmBody'), theme: 'danger',
-    onConfirm: async () => {
-      try {
-        const r = await logsApi.clear()
-        MessagePlugin.success(t('settings.cleared', { n: r.deleted }))
-        loadSys()
-      } catch (e: any) {
-        MessagePlugin.error(e.message)
-      }
-      dlg.destroy()
-    },
-  })
-}
 
 function onPickBackup(ev: Event) {
   const file = (ev.target as HTMLInputElement).files?.[0]

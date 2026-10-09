@@ -1,5 +1,5 @@
 // 日志 API（请求日志列表 / 导出 / 清空）。导出走 blob 下载（需鉴权头）。
-import { api, getToken } from './client'
+import { api, downloadFile } from './client'
 import type { RequestLog, RunLog } from './types'
 
 export interface LogFilters {
@@ -29,20 +29,7 @@ export const logsApi = {
     return api.get<{ logs: RequestLog[]; total: number }>(`/admin/logs?${p.toString()}`)
   },
   // 带鉴权头下载 CSV（<a download> 带不了 Authorization），blob 落成文件
-  exportCsv: async (flag: { value: boolean }) => {
-    flag.value = true
-    try {
-      const resp = await fetch('/admin/logs/export', { headers: { Authorization: `Bearer ${getToken()}` } })
-      if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`)
-      const name = /filename="?([^"]+)"?/.exec(resp.headers.get('Content-Disposition') ?? '')?.[1] ?? 'cph-logs.csv'
-      const url = URL.createObjectURL(await resp.blob())
-      const a = Object.assign(document.createElement('a'), { href: url, download: name })
-      a.click()
-      URL.revokeObjectURL(url)
-    } finally {
-      flag.value = false
-    }
-  },
+  exportCsv: (flag: { value: boolean }) => downloadFile('/admin/logs/export', 'cph-logs.csv', flag),
   clear: () => api.del<{ deleted: number }>('/admin/logs'),
 }
 

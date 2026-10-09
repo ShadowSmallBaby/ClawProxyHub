@@ -85,7 +85,7 @@ import {
   DashboardIcon, CheckCircleIcon, ChartBarIcon, UserIcon, AppIcon, LockOnIcon,
 } from 'tdesign-icons-vue-next'
 import { statsApi, type QuotaPlugin, type TrendPoint } from '@/api/stats'
-import { useChart } from '@/composables'
+import { useChart } from '@/composables/useChart'
 import LogCells from '@/components/LogCells.vue'
 import { dict, protocolDict } from '@/utils/dict'
 import { modelLabel } from '@/utils/logfmt'

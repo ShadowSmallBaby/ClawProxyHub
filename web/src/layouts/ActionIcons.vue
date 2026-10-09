@@ -4,13 +4,14 @@
     <version-chip />
     <github-icon-btn />
     <notif-bell />
-    <lang-switch />
-    <theme-switch />
+    <lang-switch v-if="!nativeApp" />
+    <theme-switch v-if="!nativeApp" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { GithubIconBtn, VersionChip, NotifBell, LangSwitch, ThemeSwitch } from './header'
+const nativeApp = __CPH_PROFILE__.startsWith('app-')
 
 defineProps<{
   compact?: boolean

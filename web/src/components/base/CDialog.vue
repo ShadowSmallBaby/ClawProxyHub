@@ -27,6 +27,7 @@
           <t-button
             :theme="confirmBtn?.theme ?? 'primary'"
             :loading="confirmBtn?.loading"
+            :disabled="confirmBtn?.disabled"
             @click="emit('confirm')"
           >{{ confirmBtn?.content ?? t('common.ok') }}</t-button>
         </span>
@@ -44,6 +45,7 @@ import { useIsMobile } from '@/composables'
 defineOptions({ inheritAttrs: false })
 
 interface ConfirmBtn {
+  disabled?: boolean
   loading?: boolean
   content?: string
   theme?: 'primary' | 'danger' | 'default'

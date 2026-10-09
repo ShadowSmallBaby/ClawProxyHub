@@ -1,8 +1,10 @@
 <!-- CPagination — 分页二次封装：手机端自动精简（去页大小/跳页器，simple 主题），桌面保持完整。 -->
 <template>
   <t-pagination
+    v-if="total > 0"
     class="c-pagination"
     v-bind="$attrs"
+    :total="total"
     :page-size-options="isPhone ? [] : pageSizeOptions"
     :show-jumper="!isPhone && showJumper"
     :theme="isPhone ? 'simple' : theme"
@@ -20,10 +22,12 @@ withDefaults(defineProps<{
   pageSizeOptions?: number[]
   showJumper?: boolean
   theme?: 'default' | 'simple'
+  total?: number
 }>(), {
   pageSizeOptions: () => [10, 30, 50, 100, 200],
   showJumper: true,
   theme: 'default',
+  total: 0,
 })
 
 const { isPhone } = useIsMobile()

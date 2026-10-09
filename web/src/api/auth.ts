@@ -24,6 +24,9 @@ export const authApi = {
 export interface Changelog { title?: Record<string, string>; items?: Record<string, string>[] }
 export interface VersionInfo {
   version: string
+  target?: 'core'
+  platform?: string
+  update_method?: 'replace-distribution' | 'android-app'
   latest?: string
   update_available?: boolean
   release_url?: string
@@ -51,3 +54,6 @@ export const notificationApi = {
   readAll: () => api.post('/admin/notifications/read-all'),
   clear: () => api.del('/admin/notifications'),
 }
+
+export interface Branding { name: string; abbr: string; logo: string }
+export const brandingApi = { get: () => api.get<Branding>('/admin/branding') }

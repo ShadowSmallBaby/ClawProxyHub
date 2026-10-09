@@ -1,46 +1,48 @@
-import { createRouter, createWebHistory } from 'vue-router'
-import { getToken, getRole } from '@/api/client'
+import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router'
+import { getToken } from '@/api/client'
+import { currentConnection, supportsConnections } from '@/api/connections'
+import { features } from '@profile'
+import { backendAccess, ensureAccess } from '@/features/access'
+import { permits } from '@/features/policy'
+import { initializeApplication } from '@/api/application'
 
-// guest 角色可访问的路径（与后端 menusForRole 保持一致）
-const GUEST_PATHS = ['dashboard', 'logs', 'profile']
-
+const unavailablePath = supportsConnections ? '/connections' : '/unavailable'
 const router = createRouter({
-  history: createWebHistory(),
+  history: supportsConnections ? createWebHashHistory() : createWebHistory(import.meta.env.BASE_URL),
   routes: [
-    { path: '/login', component: () => import('@/views/auth/Login.vue') },
-    { path: '/setup', component: () => import('@/views/auth/Setup.vue') },
+    { path: '/login', component: () => import('@/views/auth/Login.vue'), meta: { public: true } },
+    { path: '/setup', component: () => import('@/views/auth/Setup.vue'), meta: { public: true } },
+    { path: unavailablePath, component: () => import('@/views/auth/ConnectionStatus.vue'), meta: { public: true } },
     {
-      path: '/',
-      component: () => import('@/layouts/AppLayout.vue'),
-      children: [
-        { path: '', redirect: '/dashboard' },
-        { path: 'dashboard', component: () => import('@/views/dashboard/Dashboard.vue') },
-        { path: 'plugins', component: () => import('@/views/plugins/Plugins.vue') },
-        { path: 'plugins/editor', component: () => import('@/views/plugins/PluginEditor.vue') },
-        { path: 'plugins/editor/:name', component: () => import('@/views/plugins/PluginEditor.vue') },
-        { path: 'instances', component: () => import('@/views/instances/Instances.vue') },
-        { path: 'accounts', component: () => import('@/views/accounts/Accounts.vue') },
-        { path: 'groups', component: () => import('@/views/groups/Groups.vue') },
-        { path: 'proxies', component: () => import('@/views/proxies/Proxies.vue') },
-        { path: 'routes', component: () => import('@/views/routes/Routes.vue') },
-        { path: 'keys', component: () => import('@/views/keys/Keys.vue') },
-        { path: 'oauth', component: () => import('@/views/oauth/OAuth.vue') },
-        { path: 'tasks', component: () => import('@/views/tasks/Tasks.vue') },
-        { path: 'logs', component: () => import('@/views/logs/Logs.vue') },
-        { path: 'settings', component: () => import('@/views/settings/Settings.vue') },
-        { path: 'profile', component: () => import('@/views/profile/Profile.vue') },
-      ],
+      path: '/', component: () => import('@/layouts/AppLayout.vue'),
+      children: features.map(feature => ({ path: feature.path, component: feature.component, meta: { feature: feature.path } })),
     },
+    { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
 
-router.beforeEach((to) => {
-  if (to.path !== '/login' && to.path !== '/setup' && !getToken()) return '/login'
-  // guest 只读：访问配置类路径重定向回概览
-  if (getToken() && getRole() !== 'admin') {
-    const seg = to.path.replace(/^\//, '').split('/')[0]
-    if (seg && !GUEST_PATHS.includes(seg) && to.path !== '/') return '/dashboard'
+router.beforeEach(async to => {
+  if (supportsConnections) {
+    try { await initializeApplication() }
+    catch { if (to.path !== '/connections') return '/connections' }
+  }
+  if (supportsConnections && currentConnection().id === 'same-origin' && to.path !== '/connections') return '/connections'
+  if (to.path === '/login' && getToken()) return '/'
+  if (to.meta.public) return
+  if (!getToken()) return '/login'
+  try { await ensureAccess() }
+  catch (error: any) {
+    if (error.name === 'AbortError') return false
+    return getToken() ? unavailablePath : '/login'
+  }
+  const feature = features.find(f => f.path === to.meta.feature)
+  if (!feature || !permits(backendAccess.value, feature)) {
+    const fallback = features.find(f => permits(backendAccess.value, f))
+    return fallback ? `/${fallback.path}` : unavailablePath
   }
 })
 
+window.addEventListener('cph:unauthorized', () => {
+  if (!['/login', '/setup'].includes(router.currentRoute.value.path)) void router.replace('/login')
+})
 export default router

@@ -21,8 +21,11 @@
         <div class="user-menu-item" @click="go('/profile')">
           <user-icon /> {{ $t('common.profile') }}
         </div>
-        <div v-if="role !== 'guest'" class="user-menu-item" @click="go('/settings')">
-          <setting-icon /> {{ $t('menu.settings') }}
+        <div v-if="canUse('extensions')" class="user-menu-item" @click="go('/extensions')">
+          <app-icon /> {{ $t('menu.extensions') }}
+        </div>
+        <div v-if="canUse('settings')" class="user-menu-item" @click="go('/settings')">
+          <setting-icon /> {{ $t(isAndroidApp ? 'application.backendSettings' : 'menu.settings') }}
         </div>
         <div class="user-menu-item" @click="logout">
           <poweroff-icon /> {{ $t('common.logout') }}
@@ -34,21 +37,19 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { PoweroffIcon, SettingIcon, UserIcon } from 'tdesign-icons-vue-next'
+import { AppIcon, PoweroffIcon, SettingIcon, UserIcon } from 'tdesign-icons-vue-next'
 import i18n from '@/i18n'
 import { clearToken } from '@/api/client'
-import { useAsync } from '@/composables'
+import { canUse } from '@/features/access'
+import { isAndroidApp } from '@/api/application'
 
 const props = defineProps<{
   username: string
   role?: string
 }>()
 
-const { t } = useI18n()
 const router = useRouter()
-const { run } = useAsync()
 
 const menuVisible = ref(false)
 
@@ -61,9 +62,9 @@ function go(path: string) {
   router.push(path)
 }
 
-function logout() {
+async function logout() {
   menuVisible.value = false
-  clearToken()
+  await clearToken()
   router.push('/login')
 }
 </script>
