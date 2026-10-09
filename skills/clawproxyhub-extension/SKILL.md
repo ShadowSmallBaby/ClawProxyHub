@@ -26,7 +26,7 @@ description: "辅助开发、调试和签名打包 ClawProxyHub 功能扩展（.
 
 当前扩展 API 为 `1`，独立于业务插件 protocol v2。新页面扩展通常采用 `kind: "frontend-sandbox"`、`target: "backend"`、`activation: "hot"`。`target` 表示安装位置，系统兼容性由 `platforms` 表达。
 
-带 Go 后端的扩展使用 `service/backend/hot` 和 `trusted-process`，一个签名包包含公共前端及五个桌面平台入口。后端固定 Go、`CGO_ENABLED=0`，不能沿用业务插件 protocol v2；Android Go 功能扩展后端尚不支持。`frontend-trusted` 仍没有执行器。
+带 Go 后端的扩展使用 `service/backend/hot` 和 `trusted-process`，一个签名包包含公共前端及五个桌面平台入口。桌面后端固定 Go、`CGO_ENABLED=0`；Android 后端通过 `backend.android` 声明 JNI 入口，以 `CGO_ENABLED=1` 构建并由私有服务加载，正式包包含 arm64，x86_64 仅用于本地测试。扩展 RPC 独立于业务插件 protocol v2。`frontend-trusted` 仍没有执行器。
 
 `sdk/` 是多类接入 SDK 的集合。功能扩展使用 `sdk/extension`；已有业务插件保留 `sdk` 根包及协议子包的导入路径，不为开发一个扩展重排业务插件目录。
 
@@ -39,7 +39,7 @@ description: "辅助开发、调试和签名打包 ClawProxyHub 功能扩展（.
 | Go 处理器、多张业务表、存储授权、升级和清理 | [Go 后端与业务存储](references/backend-storage.md) |
 | 源码布局、组件注册、构建、签名、安装与验证 | [打包与验证](references/packaging.md) |
 
-纯页面例子是 `C/extensions/lua-editor/`；公共页面 SDK、原生 JS 前端、Go 后端和两张业务表的例子是 `C/examples/extensions/notes/`。按需求选择，替换扩展身份、文案、动作和配置；不要顺带引入编辑器依赖或工作区权限。
+Vue 编辑器、Go 分析与草稿后端的例子是 `C/extensions/lua-editor/`；公共页面 SDK、原生 JS 前端、Go 后端和两张业务表的例子是 `C/examples/extensions/notes/`。按需求选择，替换扩展身份、文案、动作和配置；不要顺带引入编辑器依赖或工作区权限。
 
 ## 实施流程
 

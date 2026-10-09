@@ -32,6 +32,8 @@ python scripts/build-extension.py --project examples/extensions/notes/build.json
 
 构建器运行一次前端构建，使用 `CGO_ENABLED=0` 生成 Windows amd64、Linux amd64/arm64、macOS amd64/arm64 程序，再统一签名和验签。产物为一个 `<id>-<version>.cphext`，另有 `trust.json` 和 `index.json`。前端文件在 `frontend/`，后端入口在 `backend/<os>-<arch>/`；清单的 Go 入口、执行模式和平台矩阵由构建器补齐，源清单仍需合法 ID、版本、动作和权限。
 
+需要 Android 后端时，在 `backend.android` 声明 `package/min_sdk/ndk`，并用 `sdk/extension/android.Register` 注册服务工厂。构建器额外生成 arm64 JNI 库；本地模拟器用 `--android-test-abi x86_64`。完整入口与工具链约定见 [后端 SDK](../../../sdk/extension/backend.md#android-入口)。
+
 `build.json` 是开发者或 CI 的执行配置，不随包成为安装指令。安装宿主不运行前端构建、`go build` 或迁移脚本。Go 扩展需 `service.execute` 和签名身份的 `native: true`；它是受信原生程序，不是操作系统沙箱。签名参数与下节一致，不自动加入核心发行预配或市场。
 
 ## 纯前端包与核心发行配置

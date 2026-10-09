@@ -1,11 +1,11 @@
 # Go 插件实现
 
-先读目标 SDK 和 `P/plugins/newapi/` 中与本次能力对应的文件。`C/examples/stub/main.go` 演示基本契约；新插件的工程结构以可导入业务包和独立桌面入口为准。
+先读目标 SDK 和 `P/plugins-go/newapi/` 中与本次能力对应的文件。`C/examples/stub/main.go` 演示基本契约；新插件的工程结构以可导入业务包和独立桌面入口为准。
 
 ## 结构与启动
 
 ```text
-P/plugins/myplugin/
+P/plugins-go/myplugin/
   manifest.json
   plugin.go        业务工厂、握手、宿主与配置
   cmd/main.go      桌面入口
@@ -64,7 +64,7 @@ func main() { sdk.Serve(myplugin.New(version)) }
 - SDK parser 的 emit 回调没有 error 返回值。封装时保存首次 `stream.Send` 错误并取消出站请求，最终把发送错误返回；不要照抄示例里忽略发送错误的写法。
 - 自己读 SSE 时必须处理多行 `data:`、帧上限、读错误和 `Finish/FinishWithError`。普通上游优先交给 `sdk.ScanSSE`，避免逐行 Scanner 循环遗漏收尾。
 
-只有 SDK 解析器无法覆盖上游时才实现自定义转换。复杂协议可参考对应插件：`P/plugins/puter/` 的 NDJSON、`P/plugins/todofor/` 的 WebSocket；不要继承与新上游无关的认证或内容改写行为。
+只有 SDK 解析器无法覆盖上游时才实现自定义转换。复杂协议可参考对应插件：`P/plugins-go/puter/` 的 NDJSON、`P/plugins-go/todofor/` 的 WebSocket；不要继承与新上游无关的认证或内容改写行为。
 
 ## 最小行为验证
 

@@ -13,7 +13,7 @@ description: "辅助编写、适配、调试和打包 ClawProxyHub 的 Go / Lua 
 
 - `C` 含 `sdk/proto/cph.proto`，仓库为 [ClawProxyHub](https://github.com/ShadowSmallBaby/ClawProxyHub)。
 - `P` 的 Go module 为 `github.com/ShadowSmallBaby/ClawProxyHubPlugins`，含 `tools/pack/`。主库检出时通常 `P = C/plugins`；独立开发时 `P` 就是当前插件仓库，不能再多拼一层 `plugins/`。
-- Go 源码在 `P/plugins/<name>/`，Lua 源码在 `P/plugins-lua/<name>/`。安装后的插件目录是部署产物，不默认作为仓库源码目录。
+- Go 源码在 `P/plugins-go/<name>/`，Lua 源码在 `P/plugins-lua/<name>/`。安装后的插件目录是部署产物，不默认作为仓库源码目录。
 
 读取目标工作区适用的 `AGENTS.md`，检查已有改动，再读目标插件的清单与实现。主库与插件子模块分别检查 Git 状态；只修改任务涉及的仓库和文件。
 
@@ -51,7 +51,7 @@ LuaHost 通过 `cph.settings` 与 `cph.store` 支持多实例设置和持久化�
 ## 实施流程
 
 1. **形成接入说明。** 从用户资料与代码确认插件名、上游地址及路径、认证方式、模型来源、上游协议、目标入口、是否多站点及任务能力。缺少影响实现的真实接口或样本时再询问，同时推进已确定部分；不把猜测的端点、签名算法或模型能力写成事实。
-2. **选择最接近的实现。** Go 多实例参考 `P/plugins/newapi/`，Lua HTTP 接入参考 `P/plugins-lua/autoclaw/`，Lua 任务参考 `C/examples/luatask/main.lua`。只提取当前所需结构；其他上游的请求头、签名常量、内容改写和重试策略不自动成为新插件要求。
+2. **选择最接近的实现。** Go 多实例参考 `P/plugins-go/newapi/`，Lua HTTP 接入参考 `P/plugins-lua/autoclaw/`，Lua 任务参考 `C/examples/luatask/main.lua`。只提取当前所需结构；其他上游的请求头、签名常量、内容改写和重试策略不自动成为新插件要求。
 3. **实现已声明能力。** 先打通清单与握手，再完成所需授权、账号、模型、Chat 或任务。已有插件保持凭据兼容；新增必填字段时处理旧 blob。仅任务插件无需实现 Chat，单纯模型插件无需伪造登录能力。
 4. **验证后产出。** 选择与变更相关的测试和目标插件打包命令，检查实际产物。需要联调时加载本次产物，避免拿旧二进制或旧 VM 的结果当作新实现证据。
 
