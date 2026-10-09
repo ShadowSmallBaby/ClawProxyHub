@@ -23,7 +23,9 @@
       "builder": "extension",
       "project": "extensions/lua-editor/build.json",
       "inputs": [
-        "sdk/extension/ui.ts"
+        "sdk/extension/ui.ts",
+        "sdk/extension/bridge.js",
+        "sdk/extension/bridge.d.ts"
       ],
       "suffix": ".cphext"
     },
