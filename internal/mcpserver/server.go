@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/action"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/version"
 )
 
 const Protocol = "2025-03-26"
@@ -136,7 +137,7 @@ func (s *Server) call(ctx context.Context, req Request, p action.Principal, sess
 		if json.Unmarshal(req.Params, &in) != nil || in.ProtocolVersion == "" {
 			return nil, &RPCError{-32602, "missing protocolVersion"}
 		}
-		return map[string]any{"protocolVersion": Protocol, "capabilities": map[string]any{"tools": map[string]bool{"listChanged": false}}, "serverInfo": map[string]string{"name": "ClawProxyHub", "version": "1.0.0"}}, nil
+		return map[string]any{"protocolVersion": Protocol, "capabilities": map[string]any{"tools": map[string]bool{"listChanged": false}}, "serverInfo": map[string]string{"name": "ClawProxyHub", "version": version.Core}}, nil
 	case "ping":
 		return map[string]any{}, nil
 	case "tools/list":

@@ -68,8 +68,7 @@ func NewEngine(db *gorm.DB, dataDir string, runner Runner, bus *event.Bus, store
 	return &Engine{owner: newToken(), active: map[int64]context.CancelFunc{}, ctx: ctx, cancel: cancel, running: map[int64]bool{}, queue: make(chan ruleJob, 64), db: db, dataDir: dataDir, runner: runner, bus: bus, settings: settings, stop: make(chan struct{}), done: make(chan struct{})}
 }
 
-// Start 启动扫描循环。残留的 running 记录（上次进程异常退出）标记为 failed。
-// 规则经有界队列执行，tick 不等上游 RPC。
+// Start 启动扫描循环并恢复过期租约；其他宿主仍持有租约的任务继续执行。
 func (e *Engine) Start(ctx context.Context) {
 	e.started.Do(func() {
 		e.mu.Lock()
