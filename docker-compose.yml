@@ -1,7 +1,7 @@
 services:
   cph:
     build: .
-    image: shadowbaby/claw-proxy-hub:latest
+    image: ${CPH_IMAGE:-shadowbaby/claw-proxy-hub:latest}
     container_name: cph
     restart: unless-stopped
     ports:
@@ -10,6 +10,8 @@ services:
       # 首次启动引导管理员（之后以数据库为准，改密码后本变量失效）
       CPH_ADMIN_USERNAME: admin
       CPH_ADMIN_PASSWORD: ${CPH_ADMIN_PASSWORD:?Set a unique administrator password before starting}
+      # 默认首次安装镜像携带的可信包；设为 false 后从扩展中心手动安装
+      CPH_INSTALL_PACKAGES: ${CPH_INSTALL_PACKAGES:-true}
       # 可选：首启引导调用密钥
       # CPH_SEED_API_KEY: cph-xxxx
     volumes:

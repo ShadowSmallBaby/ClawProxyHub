@@ -1,76 +1,230 @@
 name: release
 
-# 核心库发版附件：完整版（内置 luahost）+ 轻量版 + 独立 luahost 二进制。
-# 已有 Release 只补/覆盖附件、不动正文；只有 tag 没有 Release 时自动建一个再挂附件。
+# 同平台构建一次 core，独立组件按输入复用，装配 full 发行包。
+# 手动运行默认只构建；正式发布为已有 Release 更新附件，或为 tag 创建 Release。
 on:
   push:
     tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
+      mode:
+        description: "release 构建完整发行；components 仅更新组件附件与清单"
+        type: choice
+        options: [release, components]
+        default: release
       tag:
-        description: "目标 tag（留空取最新的 v*.*.*）"
+        description: "目标 Release tag；完整发行预构建时可留空"
         required: false
         type: string
+      source_ref:
+        description: "组件更新的构建源码分支/提交；留空使用目标 tag 的源码"
+        required: false
+        type: string
+      components:
+        description: "组件更新选择，以逗号分隔"
+        type: string
+        default: "lua-runtime,lua-editor,frontend.app"
+      publish:
+        description: "发布到 Release（须指定已有 tag）"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+env:
+  CPH_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  # 先定目标 tag：构建和发布都用它，避免手动触发时版本号被编成分支名
+  # 固定源码提交，手动预构建和正式发布使用同一套构建任务。
   resolve:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.tag.outputs.tag }}
+      ref: ${{ steps.target.outputs.ref }}
+      tag: ${{ steps.target.outputs.tag }}
+      publish: ${{ steps.target.outputs.publish }}
+      mode: ${{ steps.target.outputs.mode }}
+      components: ${{ steps.target.outputs.components }}
     steps:
-      - name: Resolve target tag
-        id: tag
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || (inputs.tag && format('refs/tags/{0}', inputs.tag)) || github.sha }}
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check project version metadata
+        run: python scripts/project_config.py check
+      - name: Resolve build and publication target
+        id: target
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_MODE: ${{ inputs.mode || 'release' }}
+          INPUT_SOURCE_REF: ${{ inputs.source_ref }}
+          INPUT_COMPONENTS: ${{ inputs.components }}
+          PUBLISH_RELEASE: ${{ github.event_name == 'push' || inputs.publish == true }}
+        run: |
+          tag="$INPUT_TAG"
+          if [ "$INPUT_MODE" = release ] && [ -n "$INPUT_SOURCE_REF" ]; then
+            echo 'source_ref is only supported for component updates.' >&2
+            exit 1
+          fi
+          if [ "$INPUT_MODE" = components ] && [ -z "$tag" ]; then
+            echo 'Component updates require an existing Release tag.' >&2
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = push ]; then tag="${GITHUB_REF#refs/tags/}"; fi
+          if [ "$PUBLISH_RELEASE" = true ] && [ -z "$tag" ]; then
+            echo 'Publishing requires an existing version tag.' >&2
+            exit 1
+          fi
+          if [ -z "$tag" ]; then tag="v$(python scripts/project_config.py get components.core.version)"; fi
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected a stable vX.Y.Z tag.' >&2; exit 1; }
+          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "mode=$INPUT_MODE" >> "$GITHUB_OUTPUT"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          config = json.loads(Path('build-config.json').read_text())
+          selected = sorted({p.strip() for p in os.environ['INPUT_COMPONENTS'].split(',') if p.strip()})
+          if os.environ['INPUT_MODE'] == 'components' and (not selected or set(selected) - set(config['packages'])):
+              raise SystemExit('Select configured component IDs separated by commas.')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('components=' + json.dumps(selected) + '\n')
+          PY
+      - name: Read target Release manifest
+        if: steps.target.outputs.mode == 'components'
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_TAG: ${{ inputs.tag }}
-        run: |
-          if [ -n "$INPUT_TAG" ]; then echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"; exit 0; fi
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"; exit 0; fi
-          tag=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/v" --jq '.[].ref' \
-            | sed 's#refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
-          [ -n "$tag" ] || { echo "no v*.*.* tag found"; exit 1; }
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.target.outputs.tag }}
+        run: gh release download "$RELEASE_TAG" --pattern update-manual.json --dir build/release-base
+      - uses: actions/upload-artifact@v4
+        if: steps.target.outputs.mode == 'components'
+        with:
+          name: release-base
+          path: build/release-base/update-manual.json
 
   web:
     needs: resolve
     runs-on: ubuntu-latest
+    env:
+      BUILD_EDITOR: ${{ needs.resolve.outputs.mode == 'release' || contains(needs.resolve.outputs.components, 'lua-editor') }}
+      BUILD_APP_UI: ${{ needs.resolve.outputs.mode == 'release' || contains(needs.resolve.outputs.components, 'frontend.app') }}
+      RELEASE_MODE: ${{ needs.resolve.outputs.mode }}
+      CPH_EXTENSION_PRIVATE_KEY: ${{ secrets.CPH_EXTENSION_PRIVATE_KEY }}
+      CPH_EXTENSION_KEY_ID: ${{ secrets.CPH_EXTENSION_KEY_ID }}
+      CPH_EXTENSION_TRUST_JSON: ${{ secrets.CPH_EXTENSION_TRUST_JSON }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.resolve.outputs.tag }}
+          ref: ${{ needs.resolve.outputs.ref }}
           submodules: false
 
       - uses: pnpm/action-setup@v4
         with:
           version: 10
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+          cache-dependency-path: |
+            web/pnpm-lock.yaml
+            extensions/lua-editor/pnpm-lock.yaml
+
+      - uses: android-actions/setup-android@v3
+        if: env.BUILD_EDITOR == 'true'
+
+      - name: Install Android NDK for ARM64 extension backend
+        if: env.BUILD_EDITOR == 'true'
+        run: sdkmanager "ndk;28.2.13676358"
+
+      - name: Compute component cache key
+        if: env.BUILD_EDITOR == 'true'
+        id: package-cache
+        env:
+          CPH_EXTENSION_PRIVATE_KEY: ${{ secrets.CPH_EXTENSION_PRIVATE_KEY }}
+          CPH_EXTENSION_KEY_ID: ${{ secrets.CPH_EXTENSION_KEY_ID }}
+          CPH_EXTENSION_TRUST_JSON: ${{ secrets.CPH_EXTENSION_TRUST_JSON }}
+        run: |
+          key=$(python scripts/build-packages.py --platform linux/amd64 --only lua-editor --out build/packages --cache-key)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        if: env.BUILD_EDITOR == 'true'
+        with:
+          path: .cache/cph-packages
+          key: cph-extensions-${{ runner.os }}-${{ steps.package-cache.outputs.key }}
+          restore-keys: cph-extensions-${{ runner.os }}-
 
       - name: Build web UI
+        if: env.BUILD_APP_UI == 'true'
         working-directory: web
         run: |
           pnpm install --frozen-lockfile
-          pnpm run build-fast
+          pnpm test
+          if [ "$RELEASE_MODE" = release ]; then
+            pnpm run build:profiles
+          else
+            pnpm exec vue-tsc --noEmit
+            pnpm exec vite build --mode app-full
+          fi
+
+      - name: Build or reuse signed components
+        if: env.BUILD_EDITOR == 'true'
+        run: |
+          python scripts/build-packages.py --platform linux/amd64 --only lua-editor --out build/packages
+
+      - name: Verify browser workflows
+        if: needs.resolve.outputs.mode == 'release'
+        working-directory: web
+        run: |
+          pnpm exec playwright install --with-deps chromium
+          pnpm test:browser
 
       - uses: actions/upload-artifact@v4
+        if: needs.resolve.outputs.mode == 'release'
         with:
-          name: web-dist
-          path: web/dist/
+          name: web-build
+          path: web/build-web/
+
+      - uses: actions/upload-artifact@v4
+        if: env.BUILD_APP_UI == 'true'
+        with:
+          name: app-build
+          path: web/build-app/
+
+      - uses: actions/upload-artifact@v4
+        if: needs.resolve.outputs.mode == 'release'
+        with:
+          name: extension-packages
+          path: build/packages/
+
+      - uses: actions/upload-artifact@v4
+        if: env.BUILD_EDITOR == 'true'
+        with:
+          name: cph-web-packages
+          path: |
+            build/packages/*.cphext
 
   build:
     needs: [resolve, web]
+    if: needs.resolve.outputs.mode == 'release' || contains(needs.resolve.outputs.components, 'lua-runtime')
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -87,7 +241,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.resolve.outputs.tag }}
+          ref: ${{ needs.resolve.outputs.ref }}
           submodules: false
 
       - uses: actions/setup-go@v5
@@ -95,69 +249,292 @@ jobs:
           go-version-file: go.mod
 
       - uses: actions/download-artifact@v4
+        if: needs.resolve.outputs.mode == 'release'
         with:
-          name: web-dist
-          path: web/dist/
+          name: web-build
+          path: web/build-web/
 
-      # luahost 独立 module 且 replace 回核心库，-C 下构建仍解析 replace
-      - name: Build luahost
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/download-artifact@v4
+        if: needs.resolve.outputs.mode == 'release'
+        with:
+          name: extension-packages
+          path: build/packages/
+
+      - name: Compute runtime cache key
+        id: package-cache
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
-        run: go build -C hosts/luahost -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/luahost.bin" .
+          CPH_EXTENSION_PRIVATE_KEY: ${{ secrets.CPH_EXTENSION_PRIVATE_KEY }}
+          CPH_EXTENSION_KEY_ID: ${{ secrets.CPH_EXTENSION_KEY_ID }}
+          CPH_EXTENSION_TRUST_JSON: ${{ secrets.CPH_EXTENSION_TRUST_JSON }}
+        run: |
+          key=$(python scripts/build-packages.py --platform "${{ matrix.goos }}/${{ matrix.goarch }}" --only lua-runtime --out build/packages --cache-key)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
 
-      - name: Build full (luahost embedded)
+      - uses: actions/cache@v4
+        with:
+          path: .cache/cph-packages
+          key: cph-runtime-${{ runner.os }}-${{ matrix.goarch }}-${{ steps.package-cache.outputs.key }}
+          restore-keys: cph-runtime-${{ runner.os }}-${{ matrix.goarch }}-
+
+      # 在目标平台实际运行迁移与持久化检查，避免仅验证 SQLite 编译成功。
+      - name: Verify SQLite runtime
+        if: needs.resolve.outputs.mode == 'release'
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "1"
-          VERSION: ${{ needs.resolve.outputs.tag }}
-        run: |
-          cp luahost.bin internal/plugin/luahost.bin
-          go build -trimpath -tags luahost_embed -ldflags "-s -w -X github.com/ShadowSmallBaby/ClawProxyHub/internal/version.Core=${VERSION#v}" \
-            -o "cph-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/cph
+        run: go test ./internal/database -count=1
 
-      - name: Build lite (no luahost)
+      - name: Verify module profiles
+        if: needs.resolve.outputs.mode == 'release'
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "1"
-          VERSION: ${{ needs.resolve.outputs.tag }}
         run: |
-          go build -trimpath -ldflags "-s -w -X github.com/ShadowSmallBaby/ClawProxyHub/internal/version.Core=${VERSION#v}" \
-            -o "cph-${{ matrix.goos }}-${{ matrix.goarch }}-lite${{ matrix.ext }}" ./cmd/cph
-          mv luahost.bin "luahost-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+          go test ./internal/module ./internal/app
+          go test ./internal/distribution ./internal/extension ./internal/action
+          python -m unittest discover -s scripts -p '*_test.py'
+
+      - name: Build core and assemble configured distributions
+        if: needs.resolve.outputs.mode == 'release'
+        env:
+          CGO_ENABLED: "1"
+          CPH_EXTENSION_PRIVATE_KEY: ${{ secrets.CPH_EXTENSION_PRIVATE_KEY }}
+          CPH_EXTENSION_KEY_ID: ${{ secrets.CPH_EXTENSION_KEY_ID }}
+          CPH_EXTENSION_TRUST_JSON: ${{ secrets.CPH_EXTENSION_TRUST_JSON }}
+        run: |
+          python scripts/build-release.py --platform "${{ matrix.goos }}/${{ matrix.goarch }}" --prebuilt-web --prebuilt lua-editor --packages build/packages --out build/release
+
+      - name: Build or reuse runtime component
+        if: needs.resolve.outputs.mode == 'components'
+        env:
+          CPH_EXTENSION_PRIVATE_KEY: ${{ secrets.CPH_EXTENSION_PRIVATE_KEY }}
+          CPH_EXTENSION_KEY_ID: ${{ secrets.CPH_EXTENSION_KEY_ID }}
+          CPH_EXTENSION_TRUST_JSON: ${{ secrets.CPH_EXTENSION_TRUST_JSON }}
+        run: python scripts/build-packages.py --platform "${{ matrix.goos }}/${{ matrix.goarch }}" --only lua-runtime --out build/release
 
       - uses: actions/upload-artifact@v4
         with:
           name: cph-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
-            cph-*
-            luahost-*
+            build/release/cph-*-full.zip
+            build/release/cph-*-full.zip.sha256
+            build/release/*.cphext
+            build/release/*.cphhost
+
+  android:
+    needs: [resolve, web]
+    if: needs.resolve.outputs.mode == 'release' || contains(needs.resolve.outputs.components, 'lua-runtime') || contains(needs.resolve.outputs.components, 'frontend.app')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a]
+    env:
+      BUILD_RUNTIME: ${{ needs.resolve.outputs.mode == 'release' || contains(needs.resolve.outputs.components, 'lua-runtime') }}
+      BUILD_APP_UI: ${{ needs.resolve.outputs.mode == 'release' || contains(needs.resolve.outputs.components, 'frontend.app') }}
+      CPH_ANDROID_KEYSTORE_BASE64: ${{ secrets.CPH_ANDROID_KEYSTORE_BASE64 }}
+      CPH_ANDROID_STORE_PASSWORD: ${{ secrets.CPH_ANDROID_STORE_PASSWORD }}
+      CPH_ANDROID_KEY_ALIAS: ${{ secrets.CPH_ANDROID_KEY_ALIAS }}
+      CPH_ANDROID_KEY_PASSWORD: ${{ secrets.CPH_ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: android-actions/setup-android@v3
+      - name: Install Android toolchain
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;28.2.13676358'
+      - uses: actions/download-artifact@v4
+        if: env.BUILD_APP_UI == 'true'
+        with:
+          name: app-build
+          path: web/build-app/
+      - uses: actions/download-artifact@v4
+        if: needs.resolve.outputs.mode == 'release'
+        with:
+          name: extension-packages
+          path: build/packages/
+      - name: Prepare official signing identity
+        run: python3 android/prepare_signing.py
+      - name: Build signed application
+        if: needs.resolve.outputs.mode == 'release'
+        env:
+          ANDROID_ABI: ${{ matrix.abi }}
+        run: |
+          sh android/gradlew -p android --build-cache -PcphABI="$ANDROID_ABI" -PcphReleaseSigning=true :app:assembleRelease :app:testReleaseUnitTest :app:lintRelease :app:packageLuaHost :app:packageAppFrontend
+          mkdir -p build/release
+          apk=$(python3 scripts/project_config.py apk-name "$ANDROID_ABI")
+          cp build/android/app/outputs/apk/release/app-release.apk "build/release/$apk"
+          cp build/android/host-packages/*.cphhost build/release/
+          cp build/android/frontend-packages/*.cphui build/release/
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose build/release/*.apk
+      - name: Build selected native components
+        if: needs.resolve.outputs.mode == 'components'
+        env:
+          ANDROID_ABI: ${{ matrix.abi }}
+        run: |
+          tasks=()
+          if [ "$BUILD_RUNTIME" = true ]; then tasks+=(:app:packageLuaHost); fi
+          if [ "$BUILD_APP_UI" = true ]; then tasks+=(:app:packageAppFrontend); fi
+          sh android/gradlew -p android --build-cache -PcphABI="$ANDROID_ABI" -PcphReleaseSigning=true "${tasks[@]}"
+          mkdir -p build/release
+          if [ "$BUILD_RUNTIME" = true ]; then cp build/android/host-packages/*.cphhost build/release/; fi
+          if [ "$BUILD_APP_UI" = true ]; then cp build/android/frontend-packages/*.cphui build/release/; fi
+      - name: Remove signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/cph-release-signing.jks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cph-android-${{ matrix.abi }}
+          path: build/release/*
 
   publish:
-    needs: [resolve, build]
+    needs: [resolve, web, build, android]
+    if: >-
+      always() && needs.resolve.result == 'success' && needs.web.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (needs.android.result == 'success' || needs.android.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
           pattern: cph-*
           merge-multiple: true
-          path: dist
+          path: build/release
+
+      - name: Generate shared update manifest
+        if: needs.resolve.outputs.mode == 'release'
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+        run: python scripts/update-manual.py --assets build/release --tag "$RELEASE_TAG"
+
+      - uses: actions/download-artifact@v4
+        if: needs.resolve.outputs.mode == 'components'
+        with:
+          name: release-base
+          path: build/release-base
+      - name: Merge component attachments into target manifest
+        if: needs.resolve.outputs.mode == 'components'
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+        run: python scripts/update-manual.py --assets build/release --tag "$RELEASE_TAG" --base build/release-base/update-manual.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: update-manual
+          path: build/release/update-manual.json
 
       # 已有 Release：只补/覆盖附件，正文不动；只有 tag：建 Release 再挂附件
       - name: Upload to release
+        if: needs.resolve.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          # publish 无 checkout（只有 artifacts），gh 需要 GH_REPO 显式指定仓库，否则找 .git 失败
           GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          RELEASE_MODE: ${{ needs.resolve.outputs.mode }}
         run: |
-          tag="${{ needs.resolve.outputs.tag }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/* --clobber
-          else
-            gh release create "$tag" dist/* --title "$tag" --notes "自动构建，更新说明见 CHANGELOG.md"
+          tag="$RELEASE_TAG"
+          if [ "$RELEASE_MODE" = components ]; then
+            gh release download "$tag" --pattern update-manual.json --dir build/release-current
+            cmp build/release-base/update-manual.json build/release-current/update-manual.json || {
+              echo 'Target manifest changed during the build; rerun the component update.' >&2
+              exit 1
+            }
+          elif ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --verify-tag --title "$tag" --notes "版本变更见 CHANGELOG.md"
           fi
+          assets=()
+          for file in build/release/*; do if [ "$(basename "$file")" != update-manual.json ]; then assets+=("$file"); fi; done
+          gh release upload "$tag" "${assets[@]}" --clobber
+          gh release upload "$tag" build/release/update-manual.json --clobber
           echo "uploaded to $tag:"
-          ls -lh dist
+          ls -lh build/release
+
+  docker:
+    needs: [resolve, publish]
+    if: vars.DOCKERHUB_IMAGE != '' && needs.resolve.outputs.mode == 'release'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    concurrency:
+      group: dockerhub-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+          submodules: false
+      - name: Validate Docker Hub image name
+        run: |
+          [[ "$DOCKERHUB_IMAGE" =~ ^[a-z0-9]+([._-]+[a-z0-9]+)*/[a-z0-9]+([._-]+[a-z0-9]+)*$ ]] || {
+            echo 'DOCKERHUB_IMAGE must be a lowercase Docker Hub namespace/repository without a tag.' >&2
+            exit 1
+          }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cph-linux-*
+          merge-multiple: true
+          path: build/docker-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: update-manual
+          path: build/docker-assets
+      - name: Prepare verified Linux release artifacts
+        run: python scripts/prepare-docker.py --assets build/docker-assets --out build/docker-context
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build image and publish version tag
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: build/docker-context
+          file: Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: ${{ needs.resolve.outputs.publish == 'true' }}
+          tags: ${{ env.DOCKERHUB_IMAGE }}:${{ env.RELEASE_TAG }}
+          labels: |
+            org.opencontainers.image.title=ClawProxyHub
+            org.opencontainers.image.source=${{ env.CPH_REPOSITORY_URL }}
+            org.opencontainers.image.version=${{ env.RELEASE_TAG }}
+            org.opencontainers.image.revision=${{ needs.resolve.outputs.ref }}
+          cache-from: type=gha,scope=cph-docker
+          cache-to: type=gha,scope=cph-docker,mode=max
+      - name: Publish latest from the version image
+        if: needs.resolve.outputs.publish == 'true'
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: docker buildx imagetools create --tag "$DOCKERHUB_IMAGE:latest" "$DOCKERHUB_IMAGE@$IMAGE_DIGEST"
