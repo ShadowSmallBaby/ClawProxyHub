@@ -154,7 +154,9 @@ jobs:
 
       - name: Install Android NDK for ARM64 extension backend
         if: env.BUILD_EDITOR == 'true'
-        run: sdkmanager "ndk;28.2.13676358"
+        run: |
+          sdkmanager "ndk;28.2.13676358"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
 
       - name: Compute component cache key
         if: env.BUILD_EDITOR == 'true'
