@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.0.1
+
+分页体验与插件 Turnstile 服务字段修复版，同时修正 Android/扩展发布环境的工具链配置。
+
+- Added 插件挑战服务表单字段支持，便于配置需要额外 Turnstile 参数的上游服务
+- Fixed Web 分页顶部间距，改善列表页筛选区与分页控件的布局
+- Changed Android 测试与可选发布检查流程，统一 CI 执行路径
+- Fixed 扩展发布构建固定 NDK 版本并移除已废弃的 Android 工具包依赖
+
 ## v2.0.0
 
 Android、签名扩展与统一发行版本。新增独立 Lua 编辑器、CLI 与托管 MCP，统一桌面和 Android 的组件安装与更新流程，并完善跨进程生命周期、会话隔离及前端性能。
