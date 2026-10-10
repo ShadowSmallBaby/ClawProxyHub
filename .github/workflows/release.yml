@@ -149,6 +149,8 @@ jobs:
 
       - uses: android-actions/setup-android@v3
         if: env.BUILD_EDITOR == 'true'
+        with:
+          packages: platform-tools
 
       - name: Install Android NDK for ARM64 extension backend
         if: env.BUILD_EDITOR == 'true'
@@ -357,6 +359,8 @@ jobs:
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Install Android toolchain
         run: sdkmanager 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;28.2.13676358'
       - uses: actions/download-artifact@v4
