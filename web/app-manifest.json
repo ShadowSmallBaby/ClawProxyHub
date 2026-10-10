@@ -1,0 +1,12 @@
+{
+  "id": "frontend.app",
+  "name": "ClawProxyHub App",
+  "kind": "frontend-trusted",
+  "api": 1,
+  "core": {"min": "1.5.2"},
+  "permissions": ["client.ui"],
+  "platforms": ["android/arm64", "android/amd64"],
+  "target": "client",
+  "activation": "restart",
+  "files": {}
+}

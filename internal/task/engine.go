@@ -3,9 +3,11 @@ package task
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	mathrand "math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +35,9 @@ type Runner interface {
 
 // Engine 周期扫描 task_rules，到期规则异步执行（tick 不阻塞）。
 type Engine struct {
+	owner      string
+	external   bool
+	active     map[int64]context.CancelFunc
 	db         *gorm.DB
 	dataDir    string
 	runner     Runner
@@ -42,6 +47,10 @@ type Engine struct {
 	stop       chan struct{}
 	stopped    sync.Once
 	workers    sync.Once
+	started    sync.Once
+	wg         sync.WaitGroup
+	waitOnce   sync.Once
+	done       chan struct{}
 	mu         sync.Mutex
 	running    map[int64]bool
 	queue      chan ruleJob
@@ -56,30 +65,41 @@ func NewEngine(db *gorm.DB, dataDir string, runner Runner, bus *event.Bus, store
 		settings = stores[0]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Engine{ctx: ctx, cancel: cancel, running: map[int64]bool{}, queue: make(chan ruleJob, 64), db: db, dataDir: dataDir, runner: runner, bus: bus, settings: settings, stop: make(chan struct{})}
+	return &Engine{owner: newToken(), active: map[int64]context.CancelFunc{}, ctx: ctx, cancel: cancel, running: map[int64]bool{}, queue: make(chan ruleJob, 64), db: db, dataDir: dataDir, runner: runner, bus: bus, settings: settings, stop: make(chan struct{}), done: make(chan struct{})}
 }
 
-// Start 启动扫描循环。残留的 running 记录（上次进程异常退出）标记为 failed。
-// 规则经有界队列执行，tick 不等上游 RPC。
+// Start 启动扫描循环并恢复过期租约；其他宿主仍持有租约的任务继续执行。
 func (e *Engine) Start(ctx context.Context) {
-	e.db.Model(&model.TaskRun{}).Where("status IN ?", []string{"running", "queued"}).
-		Update("status", "failed")
-
-	go func() {
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				e.Stop()
-				return
-			case <-e.stop:
-				return
-			case <-ticker.C:
-				e.tick(ctx)
-			}
+	e.started.Do(func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.ctx.Err() != nil {
+			return
 		}
-	}()
+		_ = e.RecoverExpired(time.Now().UTC())
+
+		e.wg.Add(1)
+		go func() {
+			defer e.wg.Done()
+			var tick <-chan time.Time
+			if !e.external {
+				ticker := time.NewTicker(15 * time.Second)
+				defer ticker.Stop()
+				tick = ticker.C
+			}
+			for {
+				select {
+				case <-ctx.Done():
+					e.Stop()
+					return
+				case <-e.stop:
+					return
+				case <-tick:
+					e.tick(ctx)
+				}
+			}
+		}()
+	})
 }
 
 // tick 执行一轮。单轮 panic 不退出进程，下一轮继续。
@@ -99,11 +119,28 @@ func (e *Engine) Stop() {
 	e.stopped.Do(func() { close(e.stop); e.cancel() })
 }
 
+// Shutdown 等待扫描与执行 goroutine 退出，避免宿主关闭数据库后仍有任务写入。
+func (e *Engine) Shutdown(ctx context.Context) error {
+	e.Stop()
+	e.mu.Lock()
+	e.waitOnce.Do(func() { go func() { e.wg.Wait(); close(e.done) }() })
+	e.mu.Unlock()
+	select {
+	case <-e.done:
+		return e.releaseOwned()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // doTick 一轮扫描：补算缺失 next_run_at → 取到期规则 → 逐条异步触发。
 func (e *Engine) doTick(ctx context.Context) {
 	e.scheduleMu.Lock()
 	defer e.scheduleMu.Unlock()
 	now := time.Now().UTC()
+	if err := e.RecoverExpired(now); err != nil {
+		return
+	}
 
 	// next_run_at 缺失的启用规则（直插 DB / 历史数据）补算下次触发时刻
 	var unscheduled []model.TaskRule
@@ -135,7 +172,9 @@ func (e *Engine) SaveSettings(values map[string]string) error {
 }
 
 // fire 入队成功才推进调度；队列满或同规则运行中则下轮再试。
-func (e *Engine) fire(ctx context.Context, rule *model.TaskRule) { _, _ = e.enqueue(rule, true) }
+func (e *Engine) fire(ctx context.Context, rule *model.TaskRule) {
+	_, _ = e.enqueueContext(ctx, rule, true)
+}
 func (e *Engine) RunNow(ctx context.Context, rule *model.TaskRule) (int64, error) {
 	if ctx.Err() != nil {
 		return 0, ctx.Err()
@@ -144,12 +183,22 @@ func (e *Engine) RunNow(ctx context.Context, rule *model.TaskRule) (int64, error
 }
 
 type ruleJob struct {
-	rule     model.TaskRule
-	accounts []*model.Account
-	runs     []model.TaskRun
+	token         string
+	ctx           context.Context
+	cancel        context.CancelFunc
+	heartbeatDone chan struct{}
+	rule          model.TaskRule
+	accounts      []*model.Account
+	runs          []model.TaskRun
 }
 
 func (e *Engine) enqueue(rule *model.TaskRule, scheduled bool) (int64, error) {
+	return e.enqueueContext(e.ctx, rule, scheduled)
+}
+func (e *Engine) enqueueContext(trigger context.Context, rule *model.TaskRule, scheduled bool) (int64, error) {
+	if err := trigger.Err(); err != nil {
+		return 0, err
+	}
 	if err := ValidateRule(rule); err != nil {
 		return 0, err
 	}
@@ -171,15 +220,22 @@ func (e *Engine) enqueue(rule *model.TaskRule, scheduled bool) (int64, error) {
 	if len(accounts) == 0 {
 		return 0, fmt.Errorf("no eligible accounts")
 	}
-	job := ruleJob{rule: *rule, accounts: accounts}
+	job := ruleJob{rule: *rule, accounts: accounts, token: newToken()}
 	now := time.Now().UTC()
 	var next *time.Time
 	if scheduled {
 		next = e.computeNext(rule, now)
 	}
 	err = e.db.Transaction(func(tx *gorm.DB) error {
+		claim := tx.Exec(`INSERT INTO task_claims(rule_id,token,owner,lease_until) VALUES(?,?,?,?) ON CONFLICT(rule_id) DO NOTHING`, rule.ID, job.token, e.owner, now.Add(claimLease).UnixMilli())
+		if claim.Error != nil {
+			return claim.Error
+		}
+		if claim.RowsAffected != 1 {
+			return fmt.Errorf("rule is already claimed")
+		}
 		if scheduled {
-			res := tx.Model(&model.TaskRule{}).Where("id = ? AND enabled = ?", rule.ID, true).Updates(map[string]interface{}{"last_run_at": now, "next_run_at": next, "enabled": rule.TriggerType != "once"})
+			res := tx.Model(&model.TaskRule{}).Where("id = ? AND enabled = ? AND next_run_at = ? AND next_run_at <= ?", rule.ID, true, rule.NextRunAt, now).Updates(map[string]interface{}{"last_run_at": now, "next_run_at": next, "enabled": rule.TriggerType != "once"})
 			if res.Error != nil {
 				return res.Error
 			}
@@ -188,7 +244,7 @@ func (e *Engine) enqueue(rule *model.TaskRule, scheduled bool) (int64, error) {
 			}
 		}
 		for _, acct := range accounts {
-			run := model.TaskRun{RuleID: &job.rule.ID, Status: "queued", StartedAt: now}
+			run := model.TaskRun{RuleID: &job.rule.ID, Status: "queued", StartedAt: now, ExecutionToken: job.token}
 			if acct != nil {
 				run.AccountID = &acct.ID
 			}
@@ -203,9 +259,18 @@ func (e *Engine) enqueue(rule *model.TaskRule, scheduled bool) (int64, error) {
 		return 0, err
 	}
 	e.running[rule.ID] = true
+	job.ctx, job.cancel = context.WithCancel(e.ctx)
+	cancelJob := job.cancel
+	stopTrigger := context.AfterFunc(trigger, cancelJob)
+	job.cancel = func() { stopTrigger(); cancelJob() }
+	job.heartbeatDone = make(chan struct{})
+	e.active[rule.ID] = job.cancel
+	e.wg.Add(1)
+	go func() { defer e.wg.Done(); defer close(job.heartbeatDone); e.heartbeat(job.ctx, job.token, job.cancel) }()
 	e.workers.Do(func() {
 		for i := 0; i < maxWorkers; i++ {
-			go e.worker()
+			e.wg.Add(1)
+			go func() { defer e.wg.Done(); e.worker() }()
 		}
 	})
 	e.queue <- job
@@ -218,10 +283,17 @@ func (e *Engine) worker() {
 			return
 		case job := <-e.queue:
 			for i, acct := range job.accounts {
-				e.executeAccount(e.ctx, &job.rule, acct, &job.runs[i])
+				if job.ctx.Err() != nil || !e.hasClaim(job.token) {
+					break
+				}
+				e.executeAccount(job.ctx, &job.rule, acct, &job.runs[i])
 			}
+			job.cancel()
+			<-job.heartbeatDone
+			_ = e.finishClaim(job.token, "cancelled before execution")
 			e.mu.Lock()
 			delete(e.running, job.rule.ID)
+			delete(e.active, job.rule.ID)
 			e.mu.Unlock()
 		}
 	}
@@ -293,7 +365,7 @@ func (e *Engine) computeNext(rule *model.TaskRule, from time.Time) *time.Time {
 		}
 		// 随机抖动：设定时刻之后延迟 0~jitter，错开多账号同刻打上游（每天各自随机）；管理端可配，0 = 关闭
 		if jitter := e.settings.DailyJitter(); jitter > 0 {
-			next = next.Add(time.Duration(rand.Int63n(int64(jitter))))
+			next = next.Add(time.Duration(mathrand.Int63n(int64(jitter))))
 		}
 	case "cron":
 		next = nextCron(rule.TriggerValue, from.In(e.settings.Location()))
@@ -408,3 +480,11 @@ func parseSchedule(def string) (string, string) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+func newToken() string {
+	var bytes [24]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(bytes[:])
+}

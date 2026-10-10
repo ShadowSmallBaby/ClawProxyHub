@@ -24,7 +24,17 @@ func KeyLookupHash(raw string) string {
 var keyMu sync.Mutex
 var ciphers = map[string]cipher.AEAD{}
 
-func InitCrypto(dataDir string) error { _, err := loadKey(dataDir); return err }
+func InitCrypto(dataDir string) error {
+	path, err := filepath.Abs(dataDir)
+	if err != nil {
+		return err
+	}
+	keyMu.Lock()
+	delete(ciphers, path+"\x00"+os.Getenv("CPH_SECRET_KEY"))
+	keyMu.Unlock()
+	_, err = loadKey(dataDir)
+	return err
+}
 
 // BackupKey 导出当前实际密钥，环境变量密钥与文件密钥遵循同一优先级。
 func BackupKey(dataDir string) ([]byte, error) {
@@ -104,7 +114,7 @@ func loadOrCreateKey(dataDir string) ([]byte, error) {
 		return nil, err
 	}
 	// 硬链接以排他方式发布完整文件，避免并发首启互相覆盖。
-	if err := os.Link(tmp.Name(), path); err != nil {
+	if err := publishKey(tmp.Name(), path); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			existing, readErr := os.ReadFile(path)
 			if readErr != nil {

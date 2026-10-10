@@ -3,7 +3,7 @@
     <div class="setup-card">
       <h2>{{ $t('setup.title') }}</h2>
       <p class="hint">{{ $t('setup.hint') }}</p>
-      <t-form @submit="onSetup">
+        <t-form @submit="onSetup">
         <form-item :label="$t('setup.username')">
           <t-input v-model="username" :placeholder="$t('setup.usernamePh')" @enter="onSetup" />
         </form-item>
@@ -25,7 +25,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { setToken } from '@/api/client'
-import FormItem from '@/components/FormItem.vue'
+import { FormItem } from '@/components'
 import { authApi } from '@/api/auth'
 
 const { t } = useI18n()
@@ -58,7 +58,7 @@ async function onSetup() {
   try {
     await authApi.setup(username.value, password.value)
     const session = await authApi.login(username.value, password.value)
-    setToken(session.token)
+    await setToken(session.token)
     password.value = ''
     confirm.value = ''
     MessagePlugin.success(t('setup.done'))

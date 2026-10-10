@@ -26,6 +26,7 @@
           <template #op="{ row }">
             <t-space size="small">
               <t-link theme="primary" @click="run(row)">{{ $t('tasks.run') }}</t-link>
+              <t-link theme="warning" @click="cancelRule(row.id)">{{ $t('tasks.cancelRun') }}</t-link>
               <t-link theme="primary" @click="openEdit(row)">{{ $t('common.edit') }}</t-link>
               <t-popconfirm :content="$t('tasks.confirmDelete')" @confirm="removeRule(row.id)">
                 <t-link theme="danger">{{ $t('common.delete') }}</t-link>
@@ -136,13 +137,12 @@ import { PageLayout, PageHeader } from '@/components'
 import { CTabs } from '@/components/base'
 import { FormItem } from '@/components'
 import { CDrawer } from '@/components/base'
-import { CCard, CTable, CPagination, MobileFab } from '@/components/base'
+import { CTable, CPagination, MobileFab } from '@/components/base'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AddIcon, RefreshIcon } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { accountApi, pluginApi, taskApi } from '@/api/entities'
-import { pluginLabelOf } from '@/utils/lookup'
 import { useIsMobile } from '@/composables'
 import { dict, runStatusDict, triggerDict } from '@/utils/dict'
 import { fmtTime, normalizeTime } from '@/utils/format'
@@ -275,7 +275,6 @@ const ruleColumns = computed(() => [
   { colKey: 'op', title: t('common.colOp'), width: 190, align: 'center' },
 ])
 
-const pluginLabel = (pluginID: number) => pluginLabelOf(plugins.value, pluginID)
 const runColumns = computed(() => [
   { colKey: 'plugin', title: t('tasks.plugin'), width: 170 },
   { colKey: 'instance', title: t('tasks.colInstance'), width: 120, align: 'center', ellipsis: true, cell: (_h: any, { row }: any) => row.instance || '-' },
@@ -410,6 +409,12 @@ async function run(rule: TaskRule) {
 
 async function removeRule(id: number) {
   await taskApi.removeRule(id)
+  await load()
+}
+
+async function cancelRule(id: number) {
+  await taskApi.cancelRule(id)
+  MessagePlugin.success(t('tasks.cancelRequested'))
   await load()
 }
 

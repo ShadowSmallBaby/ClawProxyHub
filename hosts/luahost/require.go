@@ -1,6 +1,6 @@
 // require.go — 沙箱化 require：仅允许 require("lib.<name>") 加载插件目录下 lib/*.lua，带模块缓存、禁路径逃逸。
 // 子模块在同一沙箱 L 里执行，继承白名单标准库与 cph.*；可互相 require。
-package main
+package luahost
 
 import (
 	"fmt"

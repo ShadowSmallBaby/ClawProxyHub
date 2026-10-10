@@ -1,5 +1,4 @@
-// Package plugin — 插件管理器：子进程生命周期、gRPC 握手、目录扫描。
-// 采用 hashicorp/go-plugin：插件是独立二进制，经 stdout 握手 + gRPC on localhost 通信。
+// Package plugin 管理业务插件，平台适配器负责进程或 Service 连接。
 package plugin
 
 import (
@@ -13,8 +12,6 @@ import (
 	"sync"
 	"time"
 
-	goplugin "github.com/hashicorp/go-plugin"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
 	"gorm.io/gorm"
 
@@ -35,22 +32,28 @@ var CoreVersion = version.Core
 
 // Manager 持有全部已启动的插件实例。
 type Manager struct {
-	installMu sync.Mutex
-	mu        sync.RWMutex
-	plugins   map[string]*Instance // key: plugin name
-	dir       string
-	db        *gorm.DB // plugins 表记录同步（nil = 不落库，测试用）
-	host      *HostService
-	runLog    *runlog.Logger
-	catalog   map[string]string // model id → plugin name
+	luaProvider func() (string, error)
+	runtimeGate sync.RWMutex
+	lifecycle   sync.Mutex
+	runtime     Runtime
+	installMu   sync.Mutex
+	mu          sync.RWMutex
+	plugins     map[string]*Instance // key: plugin name
+	dir         string
+	db          *gorm.DB // plugins 表记录同步（nil = 不落库，测试用）
+	host        *HostService
+	runLog      *runlog.Logger
+	catalog     map[string]string // model id → plugin name
 }
 
-// Instance 一个运行中的插件子进程。
+// Instance 一个运行中的插件会话。
 type Instance struct {
 	Name     string
 	Manifest *pb.Manifest
 	Protocol int32 // 协商到的契约版本（旧插件为 1：无实例维度，字段被忽略）
-	client   *goplugin.Client
+	dir      string
+	runtime  string
+	session  Session
 	rpc      pb.ClawPluginClient
 }
 
@@ -70,31 +73,8 @@ func ManifestMultiInstance(m *pb.Manifest, protocol int32) bool {
 	return false
 }
 
-// ClawPluginPlugin 实现 goplugin.Plugin，把 gRPC 服务暴露给 go-plugin 框架。
-type ClawPluginPlugin struct {
-	goplugin.Plugin
-	host *HostService
-}
-
-// GRPCServer 核心进程不作为插件运行，此路不走。
-func (p *ClawPluginPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
-	return fmt.Errorf("core does not run as a plugin")
-}
-
-// GRPCClient 核心侧拿到插件客户端桩，同时挂出宿主回调服务。
-func (p *ClawPluginPlugin) GRPCClient(ctx context.Context, broker *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
-	if p.host != nil {
-		// AcceptAndServe 阻塞等待插件反连，必须异步
-		go p.host.ServeHost(broker)
-	}
-	return pb.NewClawPluginClient(c), nil
-}
-
-// handshakeConfig go-plugin 进程握手配置。
-var handshakeConfig = sdk.HandshakeConfig()
-
 // NewManager 创建插件管理器。
-func NewManager(dir string, db *gorm.DB) *Manager {
+func NewManager(dir string, db *gorm.DB, options ...Option) *Manager {
 	m := &Manager{
 		plugins: make(map[string]*Instance),
 		dir:     dir,
@@ -104,6 +84,9 @@ func NewManager(dir string, db *gorm.DB) *Manager {
 	}
 	if db != nil {
 		m.runLog = runlog.New(db, m.host.settings.RunLevel)
+	}
+	for _, option := range options {
+		option(m)
 	}
 	return m
 }
@@ -167,7 +150,7 @@ func (m *Manager) Scan() ([]string, error) {
 	}
 	var found []string
 	for _, dir := range m.pluginDirs() {
-		if m.launchable(dir) {
+		if m.runtimeAdapter().Available(dir) {
 			found = append(found, dir)
 		}
 	}
@@ -221,54 +204,52 @@ func pluginBinary(dir string) (string, error) {
 	return "", fmt.Errorf("no binary for %s/%s in %s", runtimeOS(), runtimeArch(), name)
 }
 
-// Start 启动一个插件子进程并完成契约握手。
-// go-plugin 层按 [MinProtocolVersion, ProtocolVersion] 协商版本，旧契约插件按协商到的版本握手（线格式向后兼容）。
+// Start 启动平台会话并完成契约握手，同一管理器串行处理生命周期变更。
 func (m *Manager) Start(ctx context.Context, dir string) (*Instance, error) {
-	if manifestRuntimeAt(dir) == "lua" && m.db != nil && !m.host.settings.LuaEnabled() {
-		return nil, fmt.Errorf("Lua runtime is disabled")
-	}
-	// 由插件目录解析启动命令与插件名（lua → 共享 luahost + --dir；go → 目录内二进制）
-	name, cmd, err := m.resolveLaunch(dir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve %s: %w", dir, err)
-	}
-	// 每个插件实例独立持有宿主服务（forPlugin 按插件名隔离 store 等状态）
-	set := goplugin.PluginSet{"claw_plugin": &ClawPluginPlugin{host: m.host.forPlugin(name)}}
-	versioned := map[int]goplugin.PluginSet{}
-	for v := sdk.MinProtocolVersion; v <= sdk.ProtocolVersion; v++ {
-		versioned[int(v)] = set
-	}
-	maxMsg := sdk.GRPCMaxMsgSize()
-	client := goplugin.NewClient(&goplugin.ClientConfig{
-		HandshakeConfig:  handshakeConfig,
-		VersionedPlugins: versioned,
-		Cmd:              cmd,
-		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
-		GRPCDialOptions: []grpc.DialOption{
-			grpc.WithDefaultCallOptions(
-				grpc.MaxCallRecvMsgSize(maxMsg),
-				grpc.MaxCallSendMsgSize(maxMsg),
-			),
-		},
-	})
+	m.runtimeGate.RLock()
+	defer m.runtimeGate.RUnlock()
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
+	return m.start(ctx, dir)
+}
 
-	rpcClient, err := client.Client()
-	if err != nil {
-		client.Kill()
-		return nil, fmt.Errorf("connect plugin %s: %w", dir, err)
+func (m *Manager) start(ctx context.Context, dir string) (*Instance, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	negotiated := int32(client.NegotiatedVersion())
-
-	raw, err := rpcClient.Dispense("claw_plugin")
-	if err != nil {
-		client.Kill()
-		return nil, fmt.Errorf("dispense claw_plugin: %w", err)
+	name := filepath.Base(filepath.Clean(dir))
+	m.mu.RLock()
+	existing := m.plugins[name]
+	m.mu.RUnlock()
+	if existing != nil {
+		if !existing.session.Exited() {
+			return existing, nil
+		}
+		if err := m.stop(name, false); err != nil {
+			return nil, err
+		}
 	}
-
-	pc, ok := raw.(pb.ClawPluginClient)
-	if !ok {
-		client.Kill()
-		return nil, fmt.Errorf("unexpected plugin client type %T", raw)
+	if manifestRuntimeAt(dir) == "lua" && !m.LuaAvailable() {
+		return nil, fmt.Errorf("Lua Host is not installed or enabled")
+	}
+	session, err := m.runtimeAdapter().Start(ctx, dir, m.host.forPlugin(name))
+	if err != nil {
+		return nil, fmt.Errorf("start plugin %s: %w", name, err)
+	}
+	if session == nil {
+		return nil, fmt.Errorf("runtime returned an empty session")
+	}
+	accepted := false
+	defer func() {
+		if !accepted {
+			_ = session.Close()
+		}
+	}()
+	pc, negotiated := session.Client(), session.ProtocolVersion()
+	if pc == nil || negotiated < sdk.MinProtocolVersion || negotiated > sdk.ProtocolVersion {
+		return nil, fmt.Errorf("invalid runtime session: protocol=%d", negotiated)
 	}
 
 	// 契约握手：按协商版本校验，manifest 声明须一致
@@ -277,17 +258,17 @@ func (m *Manager) Start(ctx context.Context, dir string) (*Instance, error) {
 		ProtocolVersion: negotiated,
 	})
 	if err != nil {
-		client.Kill()
 		return nil, fmt.Errorf("handshake: %w", err)
 	}
+	if hs == nil {
+		return nil, fmt.Errorf("empty plugin handshake")
+	}
 	if hs.Error != nil && hs.Error.Code != 0 {
-		client.Kill()
 		return nil, fmt.Errorf("plugin rejected: %s", hs.Error.Message)
 	}
 	if hs.Manifest == nil || hs.Manifest.ProtocolVersion != negotiated || hs.Manifest.Name != name {
-		client.Kill()
-		return nil, fmt.Errorf("protocol version mismatch: negotiated=%d plugin=%d",
-			negotiated, hs.Manifest.GetProtocolVersion())
+		return nil, fmt.Errorf("plugin identity/protocol mismatch: expected=%s/%d received=%s/%d",
+			name, negotiated, hs.Manifest.GetName(), hs.Manifest.GetProtocolVersion())
 	}
 
 	// author 统一以落盘 manifest.json 为准（Go 插件 main.go / lua 脚本声明的 author 均不作数），
@@ -295,21 +276,13 @@ func (m *Manager) Start(ctx context.Context, dir string) (*Instance, error) {
 	if a := manifestAuthor(dir); a != "" {
 		hs.Manifest.Author = a
 	}
-	inst := &Instance{Name: hs.Manifest.Name, Manifest: hs.Manifest, Protocol: negotiated, client: client, rpc: pc}
+	inst := &Instance{Name: hs.Manifest.Name, Manifest: hs.Manifest, Protocol: negotiated, dir: dir, runtime: manifestRuntimeAt(dir), session: session, rpc: pc}
 	m.mu.Lock()
 	m.plugins[inst.Name] = inst
 	m.mu.Unlock()
 	m.syncRecord(inst)
+	accepted = true
 	return inst, nil
-}
-
-// StopLua 关闭总开关后停止既有 Lua 进程；Start 同样检查开关。
-func (m *Manager) StopLua() {
-	for _, name := range m.Names() {
-		if dir, ok := m.pluginDir(name); ok && manifestRuntimeAt(dir) == "lua" {
-			m.Stop(name, false)
-		}
-	}
 }
 
 // syncRecord 每次启动成功后同步 plugins 表（版本 / 契约 / manifest 快照）；
@@ -337,26 +310,30 @@ func (m *Manager) syncRecord(inst *Instance) {
 
 // Get 按名称取运行中的插件实例；进程已崩溃时自动重启。
 func (m *Manager) Get(name string) (*Instance, bool) {
+	m.runtimeGate.RLock()
+	defer m.runtimeGate.RUnlock()
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
 	m.mu.RLock()
 	inst, ok := m.plugins[name]
 	m.mu.RUnlock()
 	if !ok {
 		return nil, false
 	}
-	if !inst.client.Exited() {
+	if !inst.session.Exited() {
 		return inst, true
 	}
-	// 崩溃残留：清掉死实例并尝试从插件目录重启
-	m.mu.Lock()
-	delete(m.plugins, name)
-	m.mu.Unlock()
+	// 崩溃残留：释放会话，再通过原运行适配器重连。
+	if err := m.stop(name, false); err != nil {
+		return nil, false
+	}
 	dir, ok := m.pluginDir(name)
 	if !ok {
 		return nil, false
 	}
 	fmt.Printf("[plugin] %s crashed, restarting\n", name)
 	m.runLogger().Warn("plugin", "restart", "插件崩溃自动重启: "+name, "", nil)
-	inst2, err := m.Start(context.Background(), dir)
+	inst2, err := m.start(context.Background(), dir)
 	if err == nil {
 		return inst2, true
 	}
@@ -495,19 +472,31 @@ func injectFingerprint(req *pb.ChatRequest) {
 // Stop 停止一个插件。persists 为 true 时写持久化状态（enabled=0，重启核心保持停止；
 // 用户手动停用）；false 仅停本次进程（升级/卸载前临时停，重启照常拉起）。
 func (m *Manager) Stop(name string, persists bool) {
-	m.mu.Lock()
+	m.runtimeGate.RLock()
+	defer m.runtimeGate.RUnlock()
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
+	m.stop(name, persists)
+}
+
+func (m *Manager) stop(name string, persists bool) error {
+	m.mu.RLock()
 	inst, ok := m.plugins[name]
-	if ok {
-		delete(m.plugins, name)
-	}
-	m.mu.Unlock()
+	m.mu.RUnlock()
 	if !ok {
-		return
+		return nil
 	}
-	inst.client.Kill()
+	if err := inst.session.Close(); err != nil {
+		m.runLogger().Warn("plugin", "stop", "插件会话关闭失败: "+name, err.Error(), nil)
+		return fmt.Errorf("stop plugin %s: %w", name, err)
+	}
+	m.mu.Lock()
+	delete(m.plugins, name)
+	m.mu.Unlock()
 	if persists && m.db != nil {
 		m.db.Model(&model.Plugin{}).Where("name = ?", name).Update("enabled", false)
 	}
+	return nil
 }
 
 // Resume 清除持久化停止状态（enabled=1，下次重启核心照常拉起）。
@@ -527,6 +516,10 @@ func (m *Manager) ResolveModel(model string) (string, bool) {
 
 // StopAll 停止全部插件（进程退出前调用；仅停进程，不写持久化状态）。
 func (m *Manager) StopAll() {
+	m.runtimeGate.RLock()
+	defer m.runtimeGate.RUnlock()
+	m.lifecycle.Lock()
+	defer m.lifecycle.Unlock()
 	m.mu.Lock()
 	names := make([]string, 0, len(m.plugins))
 	for n := range m.plugins {
@@ -534,6 +527,6 @@ func (m *Manager) StopAll() {
 	}
 	m.mu.Unlock()
 	for _, n := range names {
-		m.Stop(n, false)
+		m.stop(n, false)
 	}
 }

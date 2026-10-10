@@ -1,6 +1,6 @@
 // rpc.go — ClawPlugin 契约分派：Handshake/Chat/ListModels/Login/Refresh/GetProfile → main.lua 约定函数。
 // 约定函数命名与 Go 插件同构：handshake/chat/models/login/refresh/profile。
-package main
+package luahost
 
 import (
 	"context"
@@ -172,16 +172,22 @@ func (h *luahost) Refresh(ctx context.Context, cred *pb.CredentialBlob) (*pb.Ref
 // GetProfile 调 plugin.profile(cred) → AccountProfile。
 func (h *luahost) GetProfile(ctx context.Context, cred *pb.CredentialBlob) (*pb.AccountProfile, error) {
 	t, present, err := h.call1(ctx, "profile", func(L *lua.LState) []lua.LValue { return []lua.LValue{credArg(L, cred)} })
-	if err != nil || !present {
+	if err != nil {
+		return nil, err
+	}
+	if !present {
 		return &pb.AccountProfile{}, nil
 	}
 	return profileFromTable(t), nil
 }
 
-// ListTaskCapabilities 调 plugin.tasks() → {capabilities={{id,label,kind,per_account,default_schedule},...}}；
-// 脚本未声明 tasks() 回空（未声明任务能力，与 Go 插件 Unimplemented 兜底同构）。
+// ListTaskCapabilities 传递实例查询，旧 tasks() 会忽略新增入参。
 func (h *luahost) ListTaskCapabilities(ctx context.Context, req *pb.TaskCapabilitiesRequest) (*pb.TaskCapabilities, error) {
-	t, present, err := h.call1(ctx, "tasks", func(L *lua.LState) []lua.LValue { return nil })
+	t, present, err := h.call1(ctx, "tasks", func(L *lua.LState) []lua.LValue {
+		r := L.NewTable()
+		r.RawSetString("instance_id", lua.LNumber(req.GetInstanceId()))
+		return []lua.LValue{r}
+	})
 	if err != nil {
 		return nil, err
 	}

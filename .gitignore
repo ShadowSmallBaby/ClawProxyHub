@@ -3,11 +3,12 @@ data/
 data-test/
 
 # 构建产物
+/build/
+/.cache/
 *.exe
 /cph
 release/
-# 内置 luahost
-internal/plugin/luahost.bin
+__pycache__/
 
 # IDE
 .idea/
@@ -19,10 +20,18 @@ docs/
 # 日志
 *.log
 
-# 前端：dist 由 pnpm build 生成，保留占位文件使 go:embed 在未构建时也能编译
+# 前端：保留 Web 占位文件，使 go:embed 在未构建时也能编译
 web/node_modules/
-web/dist/*
-!web/dist/.gitkeep
+web/build-web/*
+!web/build-web/.gitkeep
+web/build-app/
+web/test-results/
+web/playwright-report/
+web/cph-web-app.zip
 
 # 本地环境
 .env
+.env.*
+!.env.example
+go.work
+go.work.sum

@@ -408,11 +408,15 @@ func profileJSON(p *pb.AccountProfile) string {
 func ptrTime(t time.Time) *time.Time { return &t }
 
 // SubscribeRefresh 接收与刷新分离，最多合并 1024 个账号；超限计入总线丢弃数。
-func (s *Service) SubscribeRefresh(ctx context.Context, bus *event.Bus) {
+func (s *Service) SubscribeRefresh(ctx context.Context, bus *event.Bus) <-chan struct{} {
+	done := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Add(2)
 	ch := bus.Subscribe(event.TopicTaskCompleted)
 	pending := map[int64]bool{}
 	var mu sync.Mutex
 	go func() {
+		defer workers.Done()
 		for {
 			select {
 			case <-ctx.Done():
@@ -432,6 +436,7 @@ func (s *Service) SubscribeRefresh(ctx context.Context, bus *event.Bus) {
 		}
 	}()
 	go func() {
+		defer workers.Done()
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -457,4 +462,6 @@ func (s *Service) SubscribeRefresh(ctx context.Context, bus *event.Bus) {
 			}
 		}
 	}()
+	go func() { workers.Wait(); close(done) }()
+	return done
 }

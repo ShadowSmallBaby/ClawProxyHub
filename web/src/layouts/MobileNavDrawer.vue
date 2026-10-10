@@ -23,7 +23,7 @@
       </t-menu>
     </div>
     <template #footer>
-      <action-icons compact />
+      <action-icons v-if="!isAndroidApp" compact />
     </template>
   </t-drawer>
 </template>
@@ -32,6 +32,7 @@
 import { useRoute, useRouter } from 'vue-router'
 import { branding, brandLogo, brandCustom } from '@/utils/branding'
 import ActionIcons from './ActionIcons.vue'
+import { isAndroidApp } from '@/api/application'
 import type { MenuItem } from './types'
 
 defineProps<{
@@ -51,9 +52,6 @@ function go(v: string) {
   router.push(v)
 }
 
-function close() {
-  emit('update:visible', false)
-}
 </script>
 
 <style scoped>

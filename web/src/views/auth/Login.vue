@@ -89,7 +89,7 @@ async function onLogin() {
   try {
     // 登录换 JWT（后续请求带 Bearer <jwt>，服务端解析 role 免每请求 bcrypt）
     const r = await authApi.login(username.value, password.value)
-    setToken(r.token)
+    await setToken(r.token)
     router.push('/')
   } catch (e: any) {
     MessagePlugin.error(e.message === 'unauthorized' ? t('login.errCredentials') : e.message)

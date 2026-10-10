@@ -1,6 +1,6 @@
 // manifest.go — 读 plugins-lua/<name>/manifest.json，生成握手用的 pb.Manifest。
 // 脚本作者只写 manifest.json（含 runtime/entry/capabilities/auth_methods），无需在 Lua 里写 manifest 函数。
-package main
+package luahost
 
 import (
 	"encoding/json"

@@ -1,0 +1,36 @@
+// 仅测试 APK 携带最小插件，供宿主安装、验签和私有进程协议回归。
+def abi = providers.gradleProperty('cphABI').getOrElse('arm64-v8a')
+def payload = layout.buildDirectory.dir("intermediates/plugin-test/${abi}")
+def prepareFixture = tasks.register('prepareNativePluginTest') {
+    dependsOn 'buildPluginTestNative', 'validateSigningDebug'
+    doLast {
+        def directory = payload.get().asFile
+        def libraryPath = "lib/${abi}/libcphplugin.so"
+        def library = new File(directory, libraryPath)
+        library.parentFile.mkdirs()
+        library.bytes = layout.buildDirectory.file("generated/pluginTestNative/${abi}/libcphplugin.so").get().asFile.bytes
+        def metadata = [name:'androidtest', version:'0.0.0', author:'cph', label:[en:'Android test'], runtime:'go', protocol_version:2,
+            android:[format:'cph-native-v1', library:libraryPath, abi:abi, min_sdk:24,
+                files:[(libraryPath):java.security.MessageDigest.getInstance('SHA-256').digest(library.bytes).encodeHex().toString()]]]
+        def raw = (groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(metadata)) + '\n').getBytes('UTF-8')
+        new File(directory, 'manifest.json').bytes = raw
+        def signing = android.signingConfigs.debug
+        def keys = java.security.KeyStore.getInstance(signing.storeFile, signing.storePassword.toCharArray())
+        def signer = java.security.Signature.getInstance('SHA256withRSA')
+        signer.initSign(keys.getKey(signing.keyAlias, signing.keyPassword.toCharArray()))
+        signer.update(raw)
+        new File(directory, 'signature.json').text = groovy.json.JsonOutput.toJson([
+            algorithm:'SHA256withRSA', certificate:keys.getCertificate(signing.keyAlias).encoded.encodeBase64().toString(), value:signer.sign().encodeBase64().toString()])
+    }
+}
+def packageFixture = tasks.register('packageNativePluginTest', Zip) {
+    dependsOn prepareFixture
+    destinationDirectory = layout.buildDirectory.dir('generated/installTests')
+    archiveFileName = 'androidtest.cphplugin'
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+    from payload
+}
+tasks.configureEach {
+    if (name == 'mergeDebugAndroidTestAssets' || name == 'generateDebugAndroidTestLintModel' || name == 'lintAnalyzeDebugAndroidTest') dependsOn packageFixture
+}

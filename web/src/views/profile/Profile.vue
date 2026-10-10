@@ -37,7 +37,7 @@
 import { PageLayout } from '@/components'
 import { CDrawer } from '@/components/base'
 import FormItem from '@/components/FormItem.vue'
-import { CCard, CTable } from '@/components/base'
+import { CCard } from '@/components/base'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -82,7 +82,7 @@ async function savePw() {
     MessagePlugin.success(t('settings.passwordChanged'))
     pwVisible.value = false
     // 密码已变：清会话强制重新登录
-    clearToken()
+    await clearToken()
     router.push('/login')
   } catch (e: any) {
     MessagePlugin.error(e.message)

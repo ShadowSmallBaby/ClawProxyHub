@@ -1,0 +1,26 @@
+plugins {
+    id 'com.android.application' version '9.4.1' apply false
+    id 'org.jetbrains.kotlin.plugin.compose' version '2.4.20' apply false
+}
+
+// Android 各模块产物统一放入仓库根目录，便于本地构建与 CI 共用路径。
+layout.buildDirectory.set(rootProject.file('../build/android'))
+
+def python = System.getenv('CPH_PYTHON') ?: (System.getProperty('os.name').toLowerCase().contains('windows') ? 'python' : 'python3')
+ext.cphProject = new groovy.json.JsonSlurper().parseText(providers.exec {
+    workingDir rootProject.file('..')
+    commandLine python, 'scripts/project_config.py', 'export'
+}.standardOutput.asText.get())
+
+// 主应用与官方扩展复用项目图标，避免另存一份容易过期的位图。
+subprojects {
+    layout.buildDirectory.set(rootProject.layout.buildDirectory.dir(project.path.substring(1).replace(':', '/')))
+    plugins.withId('com.android.application') {
+        def branding = tasks.register('copyBranding', Sync) {
+            from(rootProject.file('../web/public/logo-512.png')) { rename { 'cph_logo.png' } }
+            into layout.buildDirectory.dir('generated/branding/drawable-nodpi')
+        }
+        android.sourceSets.main.res.srcDir layout.buildDirectory.dir('generated/branding').get().asFile
+        tasks.named('preBuild').configure { dependsOn branding }
+    }
+}

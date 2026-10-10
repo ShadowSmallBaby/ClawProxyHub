@@ -1,8 +1,9 @@
 // 实体资源 API（插件 / 实例 / 账号 / 分组 / 代理 / 路由 / 密钥 / OAuth 凭据 / 任务）。
-import { api, getToken, requestStream } from './client'
+import { api, upload, requestStream } from './client'
+import { actionApi } from './actions'
 import type {
   Account, AccountDetail, AuthMethod, DeleteImpact, GroupInfo, InstanceInfo, KeyInfo,
-  LoginResp, ModelInfo, NextStep, PluginInfo, PluginSource, RequestLog,
+  LoginResp, PluginInfo, PluginSource,
   RouteInfo, TaskRule, TaskRun,
 } from './types'
 
@@ -25,7 +26,7 @@ export const pluginApi = {
   stop: (name: string) => api.post(`/admin/plugins/${name}/stop`),
   start: (name: string) => api.post(`/admin/plugins/${name}/start`),
   uninstall: (name: string) => api.del<{ impact?: DeleteImpact }>(`/admin/plugins/${name}`),
-  impact: (name: string) => api.get(`/admin/plugins/${name}/impact`),
+  impact: (name: string) => api.get<DeleteImpact>(`/admin/plugins/${name}/impact`),
   marketplace: (source: string) =>
     api.get<{ plugins: MarketEntry[]; source?: string }>(`/admin/plugins/marketplace?source=${encodeURIComponent(source)}`),
   // 市场安装：NDJSON 进度流，每个阶段事件回调一次；出错抛 Error；signal 可中途取消下载
@@ -41,11 +42,7 @@ export const pluginApi = {
   uploadInstall: async (raw: File) => {
     const form = new FormData()
     form.append('package', raw)
-    return fetch('/admin/plugins/install-upload', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${getToken()}` },
-      body: form,
-    })
+    return upload<{installed:string}>('/admin/plugins/install-upload', form)
   },
   // 在线编辑（用户自建 Lua 插件）：脚手架 / 读源码 / 存源码 / 新建（multipart 含 icon）
   scaffold: () => api.get<{ lua: string }>('/admin/plugins/scaffold'),
@@ -55,17 +52,7 @@ export const pluginApi = {
     form.append('label', label)
     form.append('lua', lua)
     if (icon) form.append('icon', icon)
-    return fetch('/admin/plugins/local', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${getToken()}` },
-      body: form,
-    }).then(async (resp) => {
-      if (!resp.ok) {
-        const text = await resp.text()
-        throw new Error(JSON.parse(text).error ?? text)
-      }
-      return resp.json() as Promise<{ created: string }>
-    })
+    return upload<{ created: string }>('/admin/plugins/local', form)
   },
   source: (name: string, file: string) => api.get<{ content: string }>(`/admin/plugins/${name}/source?file=${encodeURIComponent(file)}`),
   saveSource: (name: string, file: string, content: string) => api.put(`/admin/plugins/${name}/source`, { file, content }),
@@ -89,8 +76,8 @@ export const instanceApi = {
     api.post('/admin/instances', body),
   update: (id: number, body: { plugin_id: number; name: string; base_url: string; settings: Record<string, unknown> }) =>
     api.put(`/admin/instances/${id}`, body),
-  remove: (id: number) => api.del(`/admin/instances/${id}`),
-  impact: (id: number) => api.get(`/admin/instances/${id}/impact`),
+  remove: (id: number) => api.del<{ impact?: DeleteImpact }>(`/admin/instances/${id}`),
+  impact: (id: number) => api.get<DeleteImpact>(`/admin/instances/${id}/impact`),
 }
 
 // ---------- 账号 ----------
@@ -101,18 +88,14 @@ export const accountApi = {
   login: (payload: { plugin: string; method_id: string; form: Record<string, string>; state: string; instance_id: number }) =>
     api.post<LoginResp>('/admin/accounts/login', payload),
   update: (id: number, body: Record<string, unknown>) => api.put(`/admin/accounts/${id}`, body),
-  remove: (id: number) => api.del(`/admin/accounts/${id}`),
-  impact: (id: number) => api.get(`/admin/accounts/${id}/impact`),
+  remove: (id: number) => api.del<{ impact?: DeleteImpact }>(`/admin/accounts/${id}`),
+  impact: (id: number) => api.get<DeleteImpact>(`/admin/accounts/${id}/impact`),
   proxies: (id: number) => api.get<{ proxy_ids: number[] }>(`/admin/accounts/${id}/proxies`),
   saveProxies: (id: number, proxy_ids: number[]) => api.put(`/admin/accounts/${id}/proxies`, { proxy_ids }),
-  models: (id: number, refresh = false) =>
-    api.get<{ models: ModelInfo[] | null }>(`/admin/accounts/${id}/models${refresh ? '?refresh=1' : ''}`),
-  saveModels: (id: number, models: { id: string }[]) => api.put(`/admin/accounts/${id}/models`, { models }),
   pause: (id: number) => api.post(`/admin/accounts/${id}/pause`),
   resume: (id: number) => api.post(`/admin/accounts/${id}/resume`),
   refresh: (id: number) => api.post(`/admin/accounts/${id}/refresh`),
-  test: (id: number, body: { endpoint: string; model: string; question: string }) =>
-    api.post<{ text: string; logs: string[]; request?: string; events?: string[] }>(`/admin/accounts/${id}/test`, body),
+
 }
 
 // ---------- 分组 ----------
@@ -200,5 +183,17 @@ export const taskApi = {
   updateRule: (id: number, body: Record<string, unknown>) => api.put(`/admin/task-rules/${id}`, body),
   removeRule: (id: number) => api.del(`/admin/task-rules/${id}`),
   toggleRule: (id: number) => api.post(`/admin/task-rules/${id}/toggle`),
-  runRule: (id: number) => api.post(`/admin/task-rules/${id}/run`),
+  runRule: (id: number) => actionApi.invoke('core.tasks.run', { id }),
+  cancelRule: (id: number) => actionApi.invoke('core.tasks.cancel', { id }),
+}
+
+export type DeletionTarget = { kind: 'account' | 'instance'; id: number } | { kind: 'plugin'; id: string }
+
+export function deletionApi(target: DeletionTarget) {
+  if (target.kind === 'plugin') return {
+    impact: () => pluginApi.impact(target.id),
+    remove: () => pluginApi.uninstall(target.id),
+  }
+  const domain = target.kind === 'account' ? accountApi : instanceApi
+  return { impact: () => domain.impact(target.id), remove: () => domain.remove(target.id) }
 }

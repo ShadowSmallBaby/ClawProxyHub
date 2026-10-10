@@ -40,8 +40,7 @@
       v-model:visible="removeVisible"
       :header="$t('common.delete') + ' · ' + (removing?.name ?? '')"
       :message="$t('instances.confirmDelete')"
-      :impact-url="`/admin/instances/${removing?.id ?? 0}/impact`"
-      :delete-url="`/admin/instances/${removing?.id ?? 0}`"
+      :target="removing ? { kind: 'instance', id: removing.id } : undefined"
       @deleted="load"
     />
 
@@ -61,7 +60,7 @@
 import { PageLayout, PageHeader } from '@/components'
 import { CPagination } from '@/components/base'
 import { useClientPagination } from '@/composables'
-import { CCard, CTable, MobileFab , CDrawer, FilterBar } from '@/components/base'
+import { CTable, MobileFab, CDrawer, FilterBar } from '@/components/base'
 import { useAsync, useIsMobile } from '@/composables'
 import { pluginLabelOf } from '@/utils/lookup'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -69,7 +68,7 @@ import { useI18n } from 'vue-i18n'
 import { AddIcon, FilterIcon } from 'tdesign-icons-vue-next'
 import { pluginApi, instanceApi } from '@/api/entities'
 import InstanceFormDialog from '@/components/InstanceFormDialog.vue'
-import DeleteImpactDialog from '@/components/DeleteImpactDialog.vue'
+import { DeleteImpactDialog } from '@/components'
 import type { InstanceInfo, PluginInfo } from '@/api/types'
 
 const { t } = useI18n()
@@ -79,7 +78,6 @@ const filterOpen = ref(false)
 const plugins = ref<PluginInfo[]>([])
 const list = ref<InstanceInfo[]>([])
 const filterPlugin = ref<number | undefined>(undefined)
-const createPluginId = ref<number | undefined>(undefined)
 
 const dialogVisible = ref(false)
 const dialogPlugin = ref<PluginInfo | null>(null)

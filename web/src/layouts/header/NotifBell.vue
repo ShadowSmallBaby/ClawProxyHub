@@ -1,8 +1,8 @@
 <!-- NotifBell — 头部通知铃铛：未读红点；点击列表，条目点击标记已读并弹详情；60s 轮询。 -->
 <template>
-  <t-popup trigger="click" placement="bottom-right" @visible-change="(v: boolean) => v && load()">
+  <t-popup v-if="!nativeDelivery" trigger="click" placement="bottom-right" @visible-change="(v: boolean) => v && load()">
     <t-badge :count="unread" :offset="[4, 4]" size="small">
-      <t-button variant="text" shape="square" theme="default">
+      <t-button variant="text" shape="square" theme="default" :aria-label="$t('common.notifications')">
         <notification-icon />
       </t-button>
     </t-badge>
@@ -37,23 +37,41 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, ref } from 'vue'
 import { NotificationIcon } from 'tdesign-icons-vue-next'
 import { notificationApi, type Notification } from '@/api/auth'
 import { CDialog } from '@/components/base'
 import { fmtTime } from '@/utils/format'
+import { isAndroidApp, notificationToOpen, syncApplicationNotifications } from '@/api/application'
+import { currentConnection, connectionGeneration } from '@/api/connections'
 
 const notifications = ref<Notification[]>([])
 const unread = ref(0)
 const current = ref<Notification | null>(null)
 const detailVisible = ref(false)
+const nativeDelivery = ref(false)
+let disposed = false
+let reading = false
 
 async function load() {
+  if (reading) return
+  reading = true
+  const epoch = connectionGeneration()
   try {
     const r = await notificationApi.list()
+    if (disposed || epoch !== connectionGeneration()) return
     notifications.value = r.notifications ?? []
     unread.value = r.unread ?? 0
-  } catch { /* 静默 */ }
+    if (isAndroidApp) {
+      try {
+        const result = await syncApplicationNotifications(currentConnection().id, notifications.value, unread.value)
+        if (disposed || epoch !== connectionGeneration()) return
+        nativeDelivery.value = result.native
+      } catch { nativeDelivery.value = false }
+      const selected = notifications.value.find(n => n.id === notificationToOpen.value)
+      if (selected) { notificationToOpen.value = 0; await open(selected) }
+    }
+  } catch { /* 静默 */ } finally { reading = false }
 }
 
 async function open(n: Notification) {
@@ -78,7 +96,8 @@ async function clearRead() {
 
 load()
 const timer = window.setInterval(load, 60_000)
-onBeforeUnmount(() => window.clearInterval(timer))
+window.addEventListener('cph:notifications-changed', load)
+onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.removeEventListener('cph:notifications-changed', load) })
 </script>
 
 <style scoped>

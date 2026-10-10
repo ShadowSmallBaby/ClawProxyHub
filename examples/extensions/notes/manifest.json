@@ -1,0 +1,26 @@
+{
+  "id": "sample-notes",
+  "version": "0.1.0",
+  "name": "Notes example",
+  "label": { "zh": "笔记示例", "en": "Notes example" },
+  "api": 1,
+  "environments": ["app", "web-desktop", "web-mobile"],
+  "core": { "min": "1.5.2" },
+  "permissions": ["service.execute", "storage.read", "storage.write"],
+  "pages": [{ "id": "notes", "title": "Notes", "labels": { "zh": "笔记", "en": "Notes" }, "entry": "frontend/index.html" }],
+  "contributions": [{ "id": "open", "location": "plugins.toolbar", "label": "Notes", "labels": { "zh": "笔记", "en": "Notes" }, "page": "notes" }],
+  "actions": [
+    { "id": "list", "title": "List notes", "permission": "storage.read", "effect": "read", "timeout_ms": 5000, "input_schema": { "type": "object" }, "output_schema": { "type": "object", "additionalProperties": true } },
+    { "id": "create", "title": "Create note", "permission": "storage.write", "effect": "write", "timeout_ms": 5000,
+      "input_schema": { "type": "object", "properties": { "content": { "type": "string", "maxLength": 4096 }, "label": { "type": "string", "maxLength": 80 } }, "required": ["content", "label"] },
+      "output_schema": { "type": "object", "additionalProperties": true } }
+  ],
+  "storage": {
+    "schema_version": 1,
+    "tables": [
+      { "name": "notes", "columns": [{ "name": "id", "type": "string", "primary_key": true }, { "name": "content", "type": "string" }, { "name": "label_id", "type": "string" }] },
+      { "name": "labels", "columns": [{ "name": "id", "type": "string", "primary_key": true }, { "name": "name", "type": "string" }] }
+    ]
+  },
+  "files": {}
+}

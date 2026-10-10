@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/luasource"
 )
 
 // LocalNamespace 自建插件命名空间目录名（<dir>/local/<name>/）。
@@ -157,38 +158,54 @@ func (m *Manager) ScaffoldLua(label string) string {
 	return fmt.Sprintf(scaffoldLuaTemplate, label, label, label)
 }
 
-// CreateLocalPlugin 新建自建插件：校验 → 落盘（manifest 脚手架 + 用户 main.lua + 可选 icon）→
-// ensureLuahost → 启动。同名拒绝。lua 为空时用内置脚手架。
+// CreateLocalPlugin 保留旧 SDK 的创建并运行语义；工作区 API 使用 CreateLocalWorkspace。
 func (m *Manager) CreateLocalPlugin(ctx context.Context, name, label, lua string, icon []byte) (string, error) {
+	created, err := m.CreateLocalWorkspace(name, label, lua, icon)
+	if err != nil {
+		return "", err
+	}
+	if err = m.ReloadLocalSource(ctx, name); err != nil {
+		return created, fmt.Errorf("created but failed to start: %w", err)
+	}
+	return created, nil
+}
+
+// CreateLocalWorkspace 只建档保存，不下载运行时或启动脚本。
+func (m *Manager) CreateLocalWorkspace(name, label, lua string, icon []byte) (string, error) {
 	if !validPluginName(name) {
 		return "", fmt.Errorf("插件名仅允许字母、数字、- 与 _")
 	}
 	if m.IsLocalPlugin(name) {
 		return "", fmt.Errorf("插件 %q 已存在", name)
 	}
-	if _, err := m.ensureLuahost(); err != nil {
-		return "", err
-	}
-	dir := filepath.Join(m.localDir(), name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(m.ScaffoldManifestFile(name, label)), 0o644); err != nil {
-		return "", err
+	if len(lua) > 2<<20 || len(icon) > 2<<20 || len(label) > 128 {
+		return "", fmt.Errorf("工作区内容超过限制")
 	}
 	if lua == "" {
-		lua = m.ScaffoldLua(label)
+		lua = m.ScaffoldLua(name)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "main.lua"), []byte(lua), 0o644); err != nil {
+	if identity, _ := ParseLuaIdentity(lua); identity != "" && identity != name {
+		return "", fmt.Errorf("代码侧 PLUGIN_NAME 与插件身份不一致")
+	}
+	if err := os.MkdirAll(m.localDir(), 0755); err != nil {
 		return "", err
 	}
+	stage, err := os.MkdirTemp(m.localDir(), ".workspace-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(stage)
+	files := map[string][]byte{"manifest.json": []byte(m.ScaffoldManifestFile(name, label)), "main.lua": []byte(lua)}
 	if len(icon) > 0 {
-		if err := os.WriteFile(filepath.Join(dir, "icon.png"), icon, 0o644); err != nil {
+		files["icon.png"] = icon
+	}
+	for path, data := range files {
+		if err = os.WriteFile(filepath.Join(stage, path), data, 0600); err != nil {
 			return "", err
 		}
 	}
-	if _, err := m.Start(ctx, dir); err != nil {
-		return name, fmt.Errorf("created but failed to start: %w", err)
+	if err = os.Rename(stage, filepath.Join(m.localDir(), name)); err != nil {
+		return "", err
 	}
 	return name, nil
 }
@@ -198,7 +215,9 @@ func (m *Manager) ScaffoldManifestFile(name, label string) string {
 	if label == "" {
 		label = name
 	}
-	return fmt.Sprintf(scaffoldTemplate, name, label, label)
+	encoded, _ := json.Marshal(label)
+	escaped := string(encoded[1 : len(encoded)-1])
+	return fmt.Sprintf(scaffoldTemplate, name, escaped, escaped)
 }
 
 // syncLocalLabel 代码侧 PLUGIN_LABEL_ZH/EN 变更时同步进 manifest.json 的 label.zh/en（label 非身份）。
@@ -213,8 +232,9 @@ func (m *Manager) syncLocalLabel(dir, name, luaContent string) {
 	if json.Unmarshal(data, &mf) != nil {
 		return
 	}
+	metadata, _ := luasource.Metadata(luaContent)
 	for lang, varName := range map[string]string{"zh": "PLUGIN_LABEL_ZH", "en": "PLUGIN_LABEL_EN"} {
-		v := luaStringLiteral(cutVarRest(luaContent, varName))
+		v := metadata[varName]
 		if v == "" || mf.Label[lang] == v {
 			continue
 		}
@@ -232,40 +252,10 @@ func (m *Manager) syncLocalLabel(dir, name, luaContent string) {
 	}
 }
 
-// cutVarRest 取 `local <var>` 行的后缀（供 luaStringLiteral 提取）；变量名后须紧跟空白或 =。
-func cutVarRest(content, varName string) string {
-	prefix := "local " + varName
-	for _, line := range strings.Split(content, "\n") {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), prefix)
-		if !ok {
-			continue
-		}
-		if rest == "" || rest[0] == ' ' || rest[0] == '\t' || rest[0] == '=' {
-			return rest
-		}
-	}
-	return ""
-}
-
 // ParseLuaIdentity 提取 main.lua 顶部的 PLUGIN_NAME / PLUGIN_LABEL_ZH 声明（保存时回显表单）。
 func ParseLuaIdentity(content string) (name, label string) {
-	name = luaStringLiteral(cutVarRest(content, "PLUGIN_NAME"))
-	label = luaStringLiteral(cutVarRest(content, "PLUGIN_LABEL_ZH"))
-	return name, label
-}
-
-// luaStringLiteral 从 `= "value"  -- comment` 形态提取引号内字符串。
-func luaStringLiteral(s string) string {
-	s = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "="))
-	i := strings.IndexByte(s, '"')
-	if i < 0 {
-		return ""
-	}
-	s = s[i+1:]
-	if before, _, ok := strings.Cut(s, "\""); ok {
-		return before
-	}
-	return ""
+	metadata, _ := luasource.Metadata(content)
+	return metadata["PLUGIN_NAME"], metadata["PLUGIN_LABEL_ZH"]
 }
 
 // ReadLocalSource 读自建插件源码（仅 main.lua；manifest 由核心建档生成，不开放编辑）。
@@ -273,20 +263,32 @@ func (m *Manager) ReadLocalSource(name, file string) (string, error) {
 	if file != "main.lua" {
 		return "", fmt.Errorf("only main.lua editable")
 	}
-	dir, ok := m.localPluginDir(name)
+	_, ok := m.localPluginDir(name)
 	if !ok {
 		return "", fmt.Errorf("插件 %q 不是可编辑的自建插件", name)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, file))
+	root, err := os.OpenRoot(m.localDir())
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	data, err := root.ReadFile(name + "/" + file)
 	if err != nil {
 		return "", err
 	}
 	return string(data), nil
 }
 
-// WriteLocalSource 写自建插件 main.lua 并重启生效；代码侧 PLUGIN_NAME 须与身份一致（改名拒绝），
-// PLUGIN_LABEL_ZH/EN 变更自动同步进 manifest.json。
+// WriteLocalSource 保留旧 SDK 保存后重载语义，新工作区将两者分开调用。
 func (m *Manager) WriteLocalSource(ctx context.Context, name, file, content string) error {
+	if err := m.SaveLocalSource(name, file, content); err != nil {
+		return err
+	}
+	return m.ReloadLocalSource(ctx, name)
+}
+
+// SaveLocalSource 原子替换 main.lua，不改变当前运行实例。
+func (m *Manager) SaveLocalSource(name, file, content string) error {
 	if file != "main.lua" {
 		return fmt.Errorf("only main.lua editable")
 	}
@@ -294,22 +296,55 @@ func (m *Manager) WriteLocalSource(ctx context.Context, name, file, content stri
 	if !ok {
 		return fmt.Errorf("插件 %q 不是可编辑的自建插件", name)
 	}
+	if len(content) > 2<<20 {
+		return fmt.Errorf("源码超过限制")
+	}
 	if codeName, _ := ParseLuaIdentity(content); codeName != "" && codeName != name {
 		return fmt.Errorf("代码侧 PLUGIN_NAME %q 与插件身份不一致（不可改名，需删除重建）", codeName)
 	}
-	if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+	root, err := os.OpenRoot(m.localDir())
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	// OpenRoot 阻止工作区符号链接越界；临时文件与目标在同一目录，崩溃不截断原稿。
+	tmpName := fmt.Sprintf("%s/.source-%d", name, time.Now().UnixNano())
+	f, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	defer root.Remove(tmpName)
+	_, err = f.WriteString(content)
+	if err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err = root.Rename(tmpName, name+"/"+file); err != nil {
 		return err
 	}
 	m.syncLocalLabel(dir, name, content)
-	// 重启进程加载新脚本（VM 池缓存旧脚本）；停后略等旧进程退出再拉起，失败不回滚。
+	return nil
+}
+
+// ReloadLocalSource 执行单独授权，未安装/禁用运行时时由运行适配器返回明确错误。
+func (m *Manager) ReloadLocalSource(ctx context.Context, name string) error {
+	dir, ok := m.localPluginDir(name)
+	if !ok {
+		return fmt.Errorf("插件不是本地工作区")
+	}
 	if _, running := m.Get(name); running {
 		m.Stop(name, false)
-		time.Sleep(500 * time.Millisecond)
 	}
 	startCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if _, err := m.Start(startCtx, dir); err != nil {
-		return fmt.Errorf("已保存但重启失败（请检查脚本后重存）: %w", err)
+		return fmt.Errorf("源码已保存，运行失败: %w", err)
 	}
 	return nil
 }

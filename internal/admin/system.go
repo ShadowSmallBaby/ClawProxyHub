@@ -15,6 +15,7 @@ import (
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/database"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/extstore"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/version"
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
@@ -78,7 +79,7 @@ func absPath(p string) string {
 	return p
 }
 
-// exportBackup GET /admin/system/backup — zip：cph.db（VACUUM INTO 一致性快照）+ secret.key（凭据加解密密钥）。
+// exportBackup 为主库、扩展库生成各自的一致性快照，并连同凭据密钥导出。
 func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
@@ -98,6 +99,13 @@ func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
 	if err = s.db.WithContext(r.Context()).Exec("VACUUM INTO '" + strings.ReplaceAll(filepath.ToSlash(snapshot), "'", "''") + "'").Error; err != nil {
 		http.Error(w, "snapshot failed", 500)
 		return
+	}
+	hasExtensions := s.extensions != nil && s.extensions.HasDataStore()
+	if hasExtensions {
+		if err = s.extensions.SnapshotData(r.Context(), filepath.Join(dir, "cph.ext.db")); err != nil {
+			http.Error(w, "extension snapshot failed", 500)
+			return
+		}
 	}
 	archive, err := os.Create(filepath.Join(dir, "backup.zip"))
 	if err != nil {
@@ -121,6 +129,15 @@ func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	err = add("cph.db", dbFile)
 	dbFile.Close()
+	if err == nil && hasExtensions {
+		extensionFile, openErr := os.Open(filepath.Join(dir, "cph.ext.db"))
+		if openErr != nil {
+			err = openErr
+		} else {
+			err = add("cph.ext.db", extensionFile)
+			extensionFile.Close()
+		}
+	}
 	if err == nil {
 		err = add("secret.key", strings.NewReader(string(key)))
 	}
@@ -150,7 +167,7 @@ func (s *Server) importBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	s.restoreMu.Lock()
 	defer s.restoreMu.Unlock()
-	r.Body = http.MaxBytesReader(w, r.Body, 512<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<30)
 	f, header, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, `{"error":"invalid backup upload"}`, 400)
@@ -179,13 +196,13 @@ func (s *Server) importBackup(w http.ResponseWriter, r *http.Request) {
 	fail := func(err error) { http.Error(w, `{"error":"invalid or incompatible backup"}`, http.StatusBadRequest) }
 	var total uint64
 	for _, zf := range zr.File {
-		if zf.UncompressedSize64 > 512<<20 || total > (512<<20)-zf.UncompressedSize64 {
+		if zf.UncompressedSize64 > 1<<30 || total > (2<<30)-zf.UncompressedSize64 {
 			fail(fmt.Errorf("backup too large"))
 			return
 		}
 		total += zf.UncompressedSize64
 		name := zf.Name
-		if name != "cph.db" && name != "secret.key" {
+		if name != "cph.db" && name != "cph.ext.db" && name != "secret.key" {
 			continue
 		}
 		if seen[name] || zf.Mode()&os.ModeSymlink != 0 {
@@ -194,6 +211,9 @@ func (s *Server) importBackup(w http.ResponseWriter, r *http.Request) {
 		}
 		seen[name] = true
 		limit := int64(512 << 20)
+		if name == "cph.ext.db" {
+			limit = 1 << 30
+		}
 		if name == "secret.key" {
 			limit = 32
 		}
@@ -243,6 +263,12 @@ func (s *Server) importBackup(w http.ResponseWriter, r *http.Request) {
 	if err = database.ValidateBackup(r.Context(), filepath.Join(stage, "cph.db"), key); err != nil {
 		fail(err)
 		return
+	}
+	if seen["cph.ext.db"] {
+		if err = extstore.ValidateBackup(r.Context(), filepath.Join(stage, "cph.ext.db")); err != nil {
+			fail(err)
+			return
+		}
 	}
 	if err = database.PublishRestore(stage, s.dataDir); err != nil {
 		http.Error(w, `{"error":"backup not staged"}`, 500)

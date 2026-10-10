@@ -1,0 +1,52 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+ <uses-permission android:name="android.permission.INTERNET" />
+ <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+ <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+ <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+ <application android:label="ClawProxyHub" android:icon="@drawable/cph_logo" android:roundIcon="@drawable/cph_logo" android:allowBackup="false" android:usesCleartextTraffic="true" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+  <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
+  <service android:name="github.shadowbaby.clawproxyhub.lua.LuaService" android:process=":lua" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.lua.LuaService$Probe" android:process=":lua_probe" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.extension.ExtensionService$Worker0" android:process=":extension0" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.extension.ExtensionService$Worker1" android:process=":extension1" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.extension.ExtensionService$Worker2" android:process=":extension2" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.extension.ExtensionService$Worker3" android:process=":extension3" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.extension.ExtensionService$Worker4" android:process=":extension4" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.extension.ExtensionService$Worker5" android:process=":extension5" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.extension.ExtensionService$Worker6" android:process=":extension6" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.extension.ExtensionService$Worker7" android:process=":extension7" android:exported="false" />
+  <service android:name=".TaskJobService" android:exported="true" android:permission="android.permission.BIND_JOB_SERVICE" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker0" android:process=":plugin0" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker1" android:process=":plugin1" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker2" android:process=":plugin2" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker3" android:process=":plugin3" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker4" android:process=":plugin4" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker5" android:process=":plugin5" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker6" android:process=":plugin6" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker7" android:process=":plugin7" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker8" android:process=":plugin8" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker9" android:process=":plugin9" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker10" android:process=":plugin10" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker11" android:process=":plugin11" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker12" android:process=":plugin12" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker13" android:process=":plugin13" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker14" android:process=":plugin14" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker15" android:process=":plugin15" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker16" android:process=":plugin16" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker17" android:process=":plugin17" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker18" android:process=":plugin18" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker19" android:process=":plugin19" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker20" android:process=":plugin20" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker21" android:process=":plugin21" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker22" android:process=":plugin22" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker23" android:process=":plugin23" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker24" android:process=":plugin24" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker25" android:process=":plugin25" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker26" android:process=":plugin26" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker27" android:process=":plugin27" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker28" android:process=":plugin28" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker29" android:process=":plugin29" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker30" android:process=":plugin30" android:exported="false" />
+  <service android:name="github.shadowbaby.clawproxyhub.plugin.PluginService$Worker31" android:process=":plugin31" android:exported="false" />
+ </application>
+</manifest>

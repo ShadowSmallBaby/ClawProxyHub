@@ -8,8 +8,7 @@
     </div>
   </t-tooltip>
 
-  <!-- 更新日志弹窗（CDialog：移动端 85% 宽居中，内容限高滚动） -->
-  <c-dialog v-model:visible="changelogVisible" :header="changelogTitle" :footer="false" width="480px">
+  <c-drawer v-model:visible="changelogVisible" :header="changelogTitle" :footer="false" width="480px">
     <div class="changelog-ver">v{{ version }} → <b>v{{ latest }}</b></div>
     <ul v-if="changelog?.items?.length" class="changelog-list">
       <li v-for="(it, i) in changelog.items" :key="i">{{ clText(it) }}</li>
@@ -17,16 +16,17 @@
     <div class="changelog-foot">
       <t-button theme="primary" @click="gotoRelease">{{ $t('common.goRelease') }}</t-button>
     </div>
-  </c-dialog>
+  </c-drawer>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { CDialog } from '@/components/base'
+import { CDrawer } from '@/components'
 import { versionApi, type Changelog } from '@/api/auth'
 import { useLocalizedText } from '@/composables'
+import { useDialog } from '@/composables/useDialogVisible'
 
 const { t } = useI18n()
 const clText = useLocalizedText()
@@ -35,9 +35,9 @@ const version = ref('')
 const latest = ref('')
 const updateAvailable = ref(false)
 const checking = ref(false)
-const releaseUrl = ref('https://github.com/ShadowSmallBaby/ClawProxyHub/releases')
+const releaseUrl = ref(`${__CPH_UPDATE_REPOSITORY__}/releases/latest`)
 const changelog = ref<Changelog | null>(null)
-const changelogVisible = ref(false)
+const { visible: changelogVisible } = useDialog()
 
 async function checkVersion(manual = false) {
   if (checking.value) return
@@ -50,7 +50,9 @@ async function checkVersion(manual = false) {
     if (r.release_url) releaseUrl.value = r.release_url
     changelog.value = r.changelog ?? null
     if (manual) {
-      if (updateAvailable.value) {
+      if (r.update_method === 'android-app') {
+        MessagePlugin.info(t('common.coreUpdatedWithApp'))
+      } else if (updateAvailable.value) {
         changelogVisible.value = true
       } else if (latest.value) {
         MessagePlugin.success(t('common.upToDate'))
@@ -83,7 +85,7 @@ onMounted(() => checkVersion()) // 首次进页自动查一次
   gap: 5px;
   height: 26px;
   padding: 0 10px;
-  border-radius: 13px;
+  border-radius: 12px;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: var(--td-text-color-placeholder);

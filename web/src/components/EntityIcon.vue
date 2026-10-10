@@ -1,13 +1,14 @@
 <!-- EntityIcon — 实体图标：有 icon 显示图片，否则兜底首字母（插件卡片/市场/客户端选择复用）。 -->
 <template>
   <div class="entity-icon" :style="{ width: size, height: size, fontSize }">
-    <img v-if="icon" :src="icon" :alt="name" />
+    <img v-if="source && !failed" :src="source" :alt="name" @error="failed = true" />
     <span v-else>{{ (name || '?').slice(0, 1) }}</span>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { resourceURL } from '@/api/client'
 
 const props = withDefaults(defineProps<{
   icon?: string // 包内相对路径或 URL（空 = 兜底首字母）
@@ -19,6 +20,9 @@ const fontSize = computed(() => {
   const n = parseInt(props.size, 10)
   return `${Math.round(n * 0.45)}px`
 })
+const source = computed(() => resourceURL(props.icon || ''))
+const failed = ref(false)
+watch(source, () => { failed.value = false })
 </script>
 
 <style scoped>

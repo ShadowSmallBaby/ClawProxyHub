@@ -1,62 +1,20 @@
-// cph — ClawProxyHub 核心进程入口。
+// cph — 平台入口只处理配置、信号与退出码。
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
-	"time"
 
-	accountpkg "github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
-	"github.com/ShadowSmallBaby/ClawProxyHub/internal/admin"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/app"
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/config"
-	"github.com/ShadowSmallBaby/ClawProxyHub/internal/database"
-	"github.com/ShadowSmallBaby/ClawProxyHub/internal/event"
-	"github.com/ShadowSmallBaby/ClawProxyHub/internal/gateway"
-	"github.com/ShadowSmallBaby/ClawProxyHub/internal/janitor"
-	"github.com/ShadowSmallBaby/ClawProxyHub/internal/model"
-	"github.com/ShadowSmallBaby/ClawProxyHub/internal/plugin"
-	"github.com/ShadowSmallBaby/ClawProxyHub/internal/router"
-	"github.com/ShadowSmallBaby/ClawProxyHub/internal/setting"
-	"github.com/ShadowSmallBaby/ClawProxyHub/internal/task"
-	"github.com/ShadowSmallBaby/ClawProxyHub/web"
-	"gorm.io/gorm"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/distribution"
+	"github.com/ShadowSmallBaby/ClawProxyHub/internal/version"
 )
-
-// seedAPIKey 首次部署引导：环境变量指定 key，不存在则入库（加密存储）。
-func seedAPIKey(db *gorm.DB, raw string, dataDir string) error {
-	lookup := accountpkg.KeyLookupHash(raw)
-	return db.Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&model.Key{}).Where("key_lookup = ? OR key_cipher = ?", lookup, lookup).Count(&count).Error; err != nil {
-			return err
-		}
-		if count > 0 {
-			return nil
-		}
-		var old []model.Key
-		if err := tx.Where("key_lookup IS NULL OR key_lookup = ''").Find(&old).Error; err != nil {
-			return err
-		}
-		for _, key := range old {
-			plain, err := accountpkg.DecryptCredential(dataDir, []byte(key.KeyCipher))
-			if err != nil {
-				return err
-			}
-			if string(plain) == raw {
-				return tx.Model(&key).Update("key_lookup", lookup).Error
-			}
-		}
-		sealed, err := accountpkg.EncryptCredential(dataDir, []byte(raw))
-		if err != nil {
-			return err
-		}
-		return tx.Create(&model.Key{KeyCipher: string(sealed), KeyLookup: lookup, Name: "seed"}).Error
-	})
-}
 
 func main() {
 	if err := run(); err != nil {
@@ -66,93 +24,61 @@ func main() {
 }
 
 func run() error {
-	cfg := config.Load()
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
-	if err := os.MkdirAll(cfg.PluginDir, 0o755); err != nil {
-		return fmt.Errorf("create plugin dir: %w", err)
-	}
-
-	// 管理界面上传的备份在此换入（打开库之前）
-	dbPath := database.DSNToFilepath(cfg.DatabaseDSN)
-	if err := database.ApplyPendingRestore(dbPath, cfg.DataDir); err != nil {
-		return err
-	}
-	db, err := database.Open(ctx, cfg.DatabaseDSN)
+	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-
-	if key := os.Getenv("CPH_SEED_API_KEY"); key != "" {
-		if err := seedAPIKey(db, key, cfg.DataDir); err != nil {
+	dir := flag.String("distribution", "", "verified distribution directory (default beside executable)")
+	install := flag.Bool("install-packages", !cfg.DisablePackageAutoInstall, "automatically install new mounted packages (CPH_INSTALL_PACKAGES)")
+	flag.Parse()
+	cfg.DisablePackageAutoInstall = !*install
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if *dir == "" {
+		candidate := filepath.Dir(exe)
+		if _, err := os.Stat(filepath.Join(candidate, "distribution.lock.json")); err == nil {
+			*dir = candidate
+		}
+	}
+	var options []app.Option
+	if *dir != "" {
+		*dir, err = filepath.Abs(*dir)
+		if err != nil {
 			return err
 		}
-	}
-
-	if err := accountpkg.InitCrypto(cfg.DataDir); err != nil {
-		return err
-	}
-	if err := accountpkg.EncryptProxyPasswords(db, cfg.DataDir); err != nil {
-		return err
-	}
-	settings := setting.New(db)
-	plugins := plugin.NewManager(cfg.PluginDir, db)
-	plugins.Configure(settings, func(blob []byte) ([]byte, error) { return accountpkg.DecryptCredential(cfg.DataDir, blob) })
-	// 开机自启：持久化停止的插件（enabled=0）跳过，其余全拉起
-	if bins, err := plugins.AutoStarts(); err == nil {
-		for _, bin := range bins {
-			if _, err := plugins.Start(ctx, bin); err != nil {
-				fmt.Printf("[plugin] start failed: %v\n", err)
+		b, err := distribution.Open(*dir, exe, version.Core)
+		if err != nil {
+			return err
+		}
+		if cfg.Profile != "" && cfg.Profile != b.Profile() {
+			return fmt.Errorf("CPH_PROFILE conflicts with distribution lock")
+		}
+		cfg.Profile = b.Profile()
+		if os.Getenv("CPH_DATA_DIR") == "" {
+			cfg.DataDir = filepath.Join(*dir, "data")
+			if os.Getenv("CPH_DATABASE_DSN") == "" {
+				cfg.DatabaseDSN = filepath.Join(cfg.DataDir, "cph.db")
+			}
+			if os.Getenv("CPH_PLUGIN_DIR") == "" {
+				cfg.PluginDir = filepath.Join(cfg.DataDir, "plugins")
 			}
 		}
-	}
-	plugins.RefreshCatalog(ctx)
-	defer plugins.StopAll()
-
-	bus := event.New()
-	accounts := accountpkg.New(db, cfg.DataDir, plugins, settings)
-	accounts.SubscribeRefresh(ctx, bus)
-
-	engine := task.NewEngine(db, cfg.DataDir, task.NewPluginRunner(plugins), bus, settings)
-	engine.Start(ctx)
-	defer engine.Stop()
-	janitor.StartLogRetention(ctx, db, settings)
-	gw := gateway.New(db, cfg.DataDir, plugins, router.New(db), accounts, settings)
-	adminSrv := admin.New(db, accounts, plugins, engine, settings, cfg.MarketplaceURL, cfg.DataDir, dbPath)
-
-	mux := http.NewServeMux()
-	mux.Handle("/v1/", gw.Handler())
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"status":"ok"}`))
-	})
-	mux.Handle("/admin/", adminSrv.Handler())
-	// 插件图标（img 标签带不了 Authorization，走免鉴权只读静态服务）
-	mux.HandleFunc("GET /assets/plugins/{name}/icon", func(w http.ResponseWriter, r *http.Request) {
-		path, ok := plugins.IconFile(r.PathValue("name"))
-		if !ok {
-			http.NotFound(w, r)
-			return
+		if len(cfg.PackageDirs) == 0 {
+			cfg.PackageDirs = []string{filepath.Join(cfg.DataDir, "packages")}
 		}
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-		http.ServeFile(w, r, path)
-	})
-	mux.Handle("/", web.Handler())
-
-	fmt.Printf("listening on %s\n", cfg.Addr)
-	httpSrv := &http.Server{Addr: cfg.Addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
-	errCh := make(chan error, 1)
-	go func() { errCh <- httpSrv.ListenAndServe() }()
-	select {
-	case <-ctx.Done():
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		return httpSrv.Shutdown(ctx)
-	case err := <-errCh:
-		return err
+		mounted := false
+		for _, candidate := range cfg.PackageDirs {
+			path, _ := filepath.Abs(candidate)
+			mounted = mounted || path == b.PackageDir()
+		}
+		if !mounted {
+			cfg.PackageDirs = append(cfg.PackageDirs, b.PackageDir())
+		}
+		options = append(options, app.WithExtensionTrust(b.Lock.Trust))
 	}
+	return app.Run(ctx, cfg, options...)
 }

@@ -18,6 +18,7 @@ import (
 
 // ctxKeyRole 请求上下文里的当前角色键。
 type ctxKeyRole struct{}
+type ctxKeyClaims struct{}
 
 func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if roleOf(r) == "admin" {
@@ -37,7 +38,7 @@ func roleOf(r *http.Request) string {
 
 // menusForRole 角色可见菜单键：admin 全量，guest 只读（隐藏系统设置）。
 func menusForRole(role string) []string {
-	all := []string{"dashboard", "plugins", "instances", "accounts", "groups", "proxies", "routes", "keys", "oauth", "tasks", "logs", "settings"}
+	all := []string{"dashboard", "extensions", "plugins", "instances", "accounts", "groups", "proxies", "routes", "keys", "oauth", "tasks", "logs", "settings"}
 	if role == "admin" {
 		return all
 	}
@@ -65,6 +66,9 @@ func (s *Server) ensureAdminSeed() {
 
 // createUser 建管理员账号。
 func (s *Server) createUser(username, password string) bool {
+	if s.deviceSetup {
+		return s.createDeviceUser(username, password)
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return false
@@ -82,12 +86,41 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
+		if c.Scoped {
+			allowed := r.Pattern == "GET /admin/actions" || r.Pattern == "POST /admin/actions/{id}"
+			if !allowed {
+				http.Error(w, `{"error":"scoped token only permits actions"}`, http.StatusForbidden)
+				return
+			}
+		}
 		// guest 只读：仅放行 GET（写操作需 admin）；改自己密码除外
 		if c.Role != "admin" && r.Method != http.MethodGet && r.URL.Path != "/admin/password" {
 			http.Error(w, `{"error":"forbidden: read-only role"}`, http.StatusForbidden)
 			return
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), ctxKeyRole{}, c.Role)))
+		ctx := context.WithValue(r.Context(), ctxKeyRole{}, c.Role)
+		ctx = context.WithValue(ctx, ctxKeyClaims{}, c)
+		if c.Scoped {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(ctx, time.Unix(c.Exp, 0))
+			defer cancel()
+			go func() {
+				ticker := time.NewTicker(5 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						if _, err := s.parseBearer(r); err != nil {
+							cancel()
+							return
+						}
+					}
+				}
+			}()
+		}
+		next(w, r.WithContext(ctx))
 	}
 }
 
@@ -186,12 +219,15 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		"username":   user.Username,
 		"role":       user.Role,
 		"created_at": user.CreatedAt,
-		"menus":      menusForRole(user.Role),
+		"menus":      s.visibleMenus(user.Role),
 	})
 }
 
 // initialized users 表已有管理员账号。
 func (s *Server) initialized() bool {
+	if s.legacyDeviceOwner(s.db) {
+		return false
+	}
 	var count int64
 	s.db.Model(&model.User{}).Where("role = ?", "admin").Count(&count)
 	return count > 0

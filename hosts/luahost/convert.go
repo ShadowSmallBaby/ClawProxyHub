@@ -1,5 +1,5 @@
 // convert.go — 通用 Go/Lua JSON 值互转 + 取字段辅助 + 出向 message 转换。
-package main
+package luahost
 
 import (
 	lua "github.com/yuin/gopher-lua"

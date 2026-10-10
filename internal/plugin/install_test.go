@@ -4,12 +4,55 @@ import (
 	"archive/zip"
 	"context"
 	"errors"
+	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+// Lua 包经平台服务安装并握手，无需桌面 luahost 文件。
+func TestInstallLuaWithServiceRuntime(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "lua.cphplugin")
+	file, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(file)
+	for name, content := range map[string]string{"manifest.json": `{"name":"lua-install","version":"1.0.0","runtime":"lua","protocol_version":2}`, "main.lua": "return {}", "lib/helpers.lua": "return {}"} {
+		writer, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = writer.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	file.Close()
+	root := t.TempDir()
+	connector := &pipeConnector{name: "lua-install", protocol: sdk.ProtocolVersion}
+	manager := NewManager(root, nil, WithRuntime(NewServiceRuntime(connector)))
+	if err := manager.SetLuaRuntime(func() (string, error) { return "verified-service", nil }); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.StopAll()
+	if _, err = manager.InstallZip(context.Background(), archive, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if connector.started.Load() != 1 {
+		t.Fatal("platform runtime not used")
+	}
+	if _, err = os.Stat(filepath.Join(root, "lua-install", "lib", "helpers.lua")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(root, "hosts")); !os.IsNotExist(err) {
+		t.Fatal("desktop host unexpectedly required")
+	}
+}
 
 // 普通 ZIP 目录条目可通过校验，目录穿越仍拒绝；取消安装不触碰目标目录。
 func TestInstallZipDirectoryEntries(t *testing.T) {

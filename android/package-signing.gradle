@@ -1,0 +1,44 @@
+// 原生包独立准备 APP 签名身份，组件打包无需触发 APK 或核心构建。
+def release = providers.gradleProperty('cphReleaseSigning').map { it.toBoolean() }.getOrElse(false)
+ext.cphPackageSigning = providers.provider { android.signingConfigs.getByName(release ? 'release' : 'debug') }
+ext.cphSigningKeys = {
+ def signing = cphPackageSigning.get()
+ java.security.KeyStore.getInstance(signing.storeFile, signing.storePassword.toCharArray())
+}
+ext.cphSigningCertificate = providers.provider {
+ def certificate = cphSigningKeys().getCertificate(cphPackageSigning.get().keyAlias)
+ java.security.MessageDigest.getInstance('SHA-256').digest(certificate.encoded).encodeHex().toString()
+}
+tasks.register('prepareCphPackageSigning') {
+ if (release) dependsOn 'validateCphReleaseSigning'
+ doLast {
+  def signing = cphPackageSigning.get()
+  if (!signing.storeFile) throw new GradleException('Missing APP signing keystore')
+  if (!release && !signing.storeFile.isFile()) {
+   signing.storeFile.parentFile.mkdirs()
+   def suffix = System.getProperty('os.name').toLowerCase().contains('windows') ? '.exe' : ''
+   providers.exec {
+    commandLine new File(System.getProperty('java.home'), "bin/keytool${suffix}"),
+        '-genkeypair', '-keystore', signing.storeFile, '-storetype', 'JKS',
+        '-alias', signing.keyAlias, '-storepass', signing.storePassword, '-keypass', signing.keyPassword,
+        '-dname', 'CN=Android Debug,O=Android,C=US', '-validity', '10950', '-keyalg', 'RSA', '-keysize', '2048'
+   }.result.get().assertNormalExitValue()
+  }
+  if (!signing.storeFile.isFile()) throw new GradleException('APP signing keystore does not exist')
+  def keys = cphSigningKeys()
+  def key = keys.getKey(signing.keyAlias, signing.keyPassword.toCharArray())
+  if (!(key instanceof java.security.PrivateKey) || key.algorithm != 'RSA' || keys.getCertificate(signing.keyAlias)?.publicKey?.algorithm != 'RSA')
+   throw new GradleException('APP signing identity must contain an RSA private key and certificate')
+ }
+}
+ext.signCphManifest = { File directory, Map metadata ->
+ def signing = cphPackageSigning.get()
+ def raw = (groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(metadata)) + '\n').getBytes('UTF-8')
+ new File(directory, 'manifest.json').bytes = raw
+ def keys = cphSigningKeys()
+ def signer = java.security.Signature.getInstance('SHA256withRSA')
+ signer.initSign(keys.getKey(signing.keyAlias, signing.keyPassword.toCharArray())); signer.update(raw)
+ new File(directory, 'signature.json').setText(groovy.json.JsonOutput.toJson([
+     algorithm:'SHA256withRSA', certificate:keys.getCertificate(signing.keyAlias).encoded.encodeBase64().toString(),
+     value:signer.sign().encodeBase64().toString()]) + '\n', 'UTF-8')
+}

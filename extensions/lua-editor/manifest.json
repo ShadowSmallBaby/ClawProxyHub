@@ -1,0 +1,477 @@
+{
+  "id": "lua-editor",
+  "name": "Lua Editor",
+  "label": {
+    "zh": "Lua 编辑器",
+    "en": "Lua Editor"
+  },
+  "desc": {
+    "zh": "编辑 Lua 插件源码，检查语法、保存草稿并手动运行，支持桌面与 Android。",
+    "en": "Edit Lua plugins, check syntax, keep drafts and run saved code on desktop and Android."
+  },
+  "kind": "service",
+  "environments": [
+    "app",
+    "web-desktop",
+    "web-mobile"
+  ],
+  "api": 1,
+  "core": {
+    "min": "1.5.2"
+  },
+  "permissions": [
+    "workspace.read",
+    "workspace.write",
+    "workspace.execute",
+    "service.execute",
+    "storage.read",
+    "storage.write"
+  ],
+  "target": "backend",
+  "activation": "hot",
+  "settings": [
+    {
+      "id": "theme",
+      "kind": "select",
+      "label": {
+        "zh": "主题",
+        "en": "Theme"
+      },
+      "hint": {
+        "zh": "跟随系统时使用工作台当前主题。",
+        "en": "Follow system uses the workspace's current theme."
+      },
+      "default": "dark",
+      "required": true,
+      "options": [
+        {
+          "value": "system",
+          "label": {
+            "zh": "跟随系统",
+            "en": "Follow system"
+          }
+        },
+        {
+          "value": "light",
+          "label": {
+            "zh": "浅色",
+            "en": "Light"
+          }
+        },
+        {
+          "value": "dark",
+          "label": {
+            "zh": "深色",
+            "en": "Dark"
+          }
+        }
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "id": "editor",
+      "title": "Lua Editor",
+      "labels": {
+        "zh": "Lua 编辑器",
+        "en": "Lua Editor"
+      },
+      "entry": "frontend/index.html"
+    }
+  ],
+  "contributions": [
+    {
+      "id": "new",
+      "location": "plugins.toolbar",
+      "label": "New Lua plugin",
+      "labels": {
+        "zh": "新建 Lua 插件",
+        "en": "New Lua plugin"
+      },
+      "page": "editor",
+      "order": 10
+    },
+    {
+      "id": "edit",
+      "location": "plugins.item.actions",
+      "label": "Edit",
+      "labels": {
+        "zh": "编辑",
+        "en": "Edit"
+      },
+      "page": "editor",
+      "when": "editable",
+      "order": 10
+    }
+  ],
+  "actions": [
+    {
+      "id": "scaffold",
+      "target": "core.workspace.scaffold",
+      "title": "Plugin template",
+      "labels": {
+        "zh": "插件模板",
+        "en": "Plugin template"
+      }
+    },
+    {
+      "id": "read",
+      "target": "core.workspace.read",
+      "title": "Read source",
+      "labels": {
+        "zh": "读取源码",
+        "en": "Read source"
+      }
+    },
+    {
+      "id": "save",
+      "target": "core.workspace.save",
+      "title": "Save source",
+      "labels": {
+        "zh": "保存源码",
+        "en": "Save source"
+      }
+    },
+    {
+      "id": "create",
+      "target": "core.workspace.create",
+      "title": "Create plugin",
+      "labels": {
+        "zh": "新建插件",
+        "en": "Create plugin"
+      }
+    },
+    {
+      "id": "reload",
+      "target": "core.workspace.reload",
+      "title": "Run plugin",
+      "labels": {
+        "zh": "运行插件",
+        "en": "Run plugin"
+      }
+    },
+    {
+      "id": "analyze",
+      "title": "Analyze Lua source",
+      "labels": {
+        "zh": "检查 Lua 源码",
+        "en": "Analyze Lua source"
+      },
+      "permission": "workspace.read",
+      "effect": "read",
+      "timeout_ms": 5000,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "maxLength": 2097152
+          }
+        },
+        "required": [
+          "content"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "sha256": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "valid_name": {
+            "type": "boolean"
+          },
+          "lines": {
+            "type": "integer"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "diagnostics": {
+            "type": "array",
+            "maxItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "line": {
+                  "type": "integer"
+                },
+                "column": {
+                  "type": "integer"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "line",
+                "column",
+                "message"
+              ]
+            }
+          }
+        },
+        "required": [
+          "name",
+          "labels",
+          "sha256",
+          "valid",
+          "valid_name",
+          "lines",
+          "bytes",
+          "diagnostics"
+        ]
+      }
+    },
+    {
+      "id": "draft-read",
+      "title": "Read draft",
+      "labels": {
+        "zh": "读取草稿",
+        "en": "Read draft"
+      },
+      "permission": "storage.read",
+      "effect": "read",
+      "timeout_ms": 5000,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 32
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "found": {
+            "type": "boolean"
+          },
+          "draft": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "content": {
+                "type": "string",
+                "maxLength": 2097152
+              },
+              "revision": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "sha256": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "base_sha256": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "updated_at": {
+                "type": "string",
+                "maxLength": 40
+              }
+            },
+            "required": [
+              "name",
+              "content",
+              "revision",
+              "sha256",
+              "base_sha256",
+              "updated_at"
+            ]
+          }
+        },
+        "required": [
+          "found"
+        ]
+      }
+    },
+    {
+      "id": "draft-save",
+      "title": "Save draft",
+      "labels": {
+        "zh": "保存草稿",
+        "en": "Save draft"
+      },
+      "permission": "storage.write",
+      "effect": "write",
+      "timeout_ms": 10000,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 2097152
+          },
+          "revision": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "base_sha256": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "name",
+          "content",
+          "revision",
+          "base_sha256"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "sha256": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "updated_at": {
+            "type": "string",
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "revision",
+          "sha256",
+          "updated_at"
+        ]
+      }
+    },
+    {
+      "id": "draft-delete",
+      "title": "Delete draft",
+      "labels": {
+        "zh": "删除草稿",
+        "en": "Delete draft"
+      },
+      "permission": "storage.write",
+      "effect": "write",
+      "timeout_ms": 5000,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "revision": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "name",
+          "revision"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ]
+      }
+    }
+  ],
+  "files": {},
+  "execution": "trusted-process",
+  "storage": {
+    "schema_version": 1,
+    "tables": [
+      {
+        "name": "drafts",
+        "columns": [
+          {
+            "name": "id",
+            "type": "string",
+            "primary_key": true
+          },
+          {
+            "name": "revision",
+            "type": "string"
+          },
+          {
+            "name": "base_sha256",
+            "type": "string"
+          },
+          {
+            "name": "sha256",
+            "type": "string"
+          },
+          {
+            "name": "updated_at",
+            "type": "datetime"
+          }
+        ]
+      },
+      {
+        "name": "draft_chunks",
+        "columns": [
+          {
+            "name": "id",
+            "type": "string",
+            "primary_key": true
+          },
+          {
+            "name": "draft_id",
+            "type": "string"
+          },
+          {
+            "name": "revision",
+            "type": "string"
+          },
+          {
+            "name": "position",
+            "type": "integer"
+          },
+          {
+            "name": "content",
+            "type": "bytes"
+          }
+        ],
+        "indexes": [
+          {
+            "name": "by_draft",
+            "columns": [
+              "draft_id",
+              "revision",
+              "position"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

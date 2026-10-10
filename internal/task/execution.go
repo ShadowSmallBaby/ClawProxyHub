@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/internal/account"
@@ -19,7 +20,10 @@ func (e *Engine) executeAccount(ctx context.Context, rule *model.TaskRule, acct 
 	run := *queued
 	run.Status = "running"
 	run.StartedAt = time.Now().UTC()
-	if err := e.db.Save(&run).Error; err != nil {
+	if ctx.Err() != nil || !e.hasClaim(run.ExecutionToken) {
+		return
+	}
+	if res := e.db.Model(&model.TaskRun{}).Where("id=? AND execution_token=? AND status='queued'", run.ID, run.ExecutionToken).Updates(map[string]any{"status": "running", "started_at": run.StartedAt}); res.Error != nil || res.RowsAffected != 1 {
 		return
 	}
 	defer func() {
@@ -28,15 +32,26 @@ func (e *Engine) executeAccount(ctx context.Context, rule *model.TaskRule, acct 
 		}
 		fin := time.Now().UTC()
 		run.FinishedAt = &fin
-		if err := e.db.Save(&run).Error; err != nil {
-			fmt.Printf("[task] persist run %d: %v\n", run.ID, err)
+		result := e.db.Model(&model.TaskRun{}).Where("id=? AND execution_token=? AND status='running'", run.ID, run.ExecutionToken).Select("status", "summary", "detail_json", "error_message", "finished_at").Updates(&run)
+		if result.Error != nil {
+			fmt.Printf("[task] persist run %d: %v\n", run.ID, result.Error)
+			return
+		}
+		if result.RowsAffected != 1 {
 			return
 		}
 		if run.Status == "success" && acct != nil && e.bus != nil {
 			e.bus.Publish(event.Event{Topic: event.TopicTaskCompleted, AccountID: acct.ID})
 		}
 	}()
+	ctx = context.WithValue(ctx, executionKey{}, run.ExecutionToken+fmt.Sprintf("/%d", run.ID))
 	resp, err := e.runAccount(ctx, rule, acct)
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil && !e.hasClaim(run.ExecutionToken) {
+		err = fmt.Errorf("execution lease lost")
+	}
 	if err != nil {
 		run.Status, run.ErrorMessage = "failed", truncate(err.Error(), 1000)
 		return
@@ -62,7 +77,8 @@ func (e *Engine) executeAccount(ctx context.Context, rule *model.TaskRule, acct 
 }
 
 func (e *Engine) runAccount(ctx context.Context, rule *model.TaskRule, acct *model.Account) (*pb.RunTaskResponse, error) {
-	req := &pb.RunTaskRequest{CapabilityId: rule.CapabilityID}
+	token, _ := ctx.Value(executionKey{}).(string)
+	req := &pb.RunTaskRequest{CapabilityId: rule.CapabilityID, Context: map[string]string{"execution_token": token}}
 	if acct != nil {
 		unlock, err := account.LockCredential(ctx, e.dataDir, acct.ID)
 		if err != nil {
@@ -79,6 +95,12 @@ func (e *Engine) runAccount(ctx context.Context, rule *model.TaskRule, acct *mod
 		req.Credential = cred
 	}
 	resp, err := e.runner.RunTask(ctx, pluginNameByID(e.db, rule.PluginID), req)
+	if err == nil {
+		err = ctx.Err()
+	}
+	if claim, _, _ := strings.Cut(token, "/"); err == nil && claim != "" && !e.hasClaim(claim) {
+		err = fmt.Errorf("execution lease lost")
+	}
 	if err != nil || resp == nil {
 		return resp, err
 	}
@@ -93,3 +115,5 @@ func (e *Engine) runAccount(ctx context.Context, rule *model.TaskRule, acct *mod
 	}
 	return resp, nil
 }
+
+type executionKey struct{}

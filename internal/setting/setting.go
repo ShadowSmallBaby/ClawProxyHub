@@ -60,6 +60,15 @@ const KeyMarketplaceURL = "network.marketplace_url"
 // KeyPluginSources 插件源列表（JSON 数组，见 PluginSource）。
 const KeyPluginSources = "network.plugin_sources"
 
+// KeyExtensionTrust 扩展中心管理的签名身份，键为包签名中的 key_id。
+const KeyExtensionTrust = "extensions.trust"
+
+// KeyExtensionCatalog 缓存已验证结构的发行清单，断网时仍可浏览包目录。
+const KeyExtensionCatalog = "extensions.catalog"
+
+// ExtensionConfigKey 按扩展身份保存配置，与包版本和安装状态分开。
+func ExtensionConfigKey(id string) string { return "extensions.config." + id }
+
 // OfficialSourceName 官方源名：该源的插件安装在插件根目录，其他源按源名建命名空间目录。
 const OfficialSourceName = "official"
 
@@ -92,14 +101,12 @@ const (
 	defaultContextBytesPerToken   = 3.5
 )
 
-// 插件（lua 运行时）设置。
+// 旧版 Lua 设置仅用于迁移，启停以运行时安装状态为准。
 const (
-	KeyLuaEnabled    = "plugin.lua_enabled"     // 是否允许安装/运行 lua 插件（默认开）
-	KeyLuaIsolation  = "plugin.lua_isolation"   // lua 运行态隔离（默认开；本版锁定为开）
-	KeyLuaUpdateMode = "plugin.lua_update_mode" // luahost 更新方式：manual / online
+	KeyLuaEnabled    = "plugin.lua_enabled"
+	KeyLuaIsolation  = "plugin.lua_isolation"
+	KeyLuaUpdateMode = "plugin.lua_update_mode"
 )
-
-const defaultLuaUpdateMode = "manual"
 
 // Store 设置存储。
 type Store struct {
@@ -115,23 +122,46 @@ func New(db *gorm.DB) *Store {
 
 // Get 读设置，缺省返回 def。
 func (s *Store) Get(key, def string) string {
+	if value, found, err := s.Lookup(key); err == nil && found {
+		return value
+	}
+	return def
+}
+
+// Lookup 区分缺省配置和存储故障，迁移或覆盖配置时不吞掉读取错误。
+func (s *Store) Lookup(key string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if v, ok := s.cache[key]; ok {
-		return v
+		return v, true, nil
 	}
 	if s.missing[key] {
-		return def
+		return "", false, nil
 	}
 	var rec model.Setting
 	if err := s.db.Where("key = ?", key).First(&rec).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			s.missing[key] = true
+			return "", false, nil
 		}
-		return def
+		return "", false, err
 	}
 	s.cache[key] = rec.Value
-	return rec.Value
+	return rec.Value, true, nil
+}
+
+// Delete 在数据库删除成功后清理缓存。
+func (s *Store) Delete(keys ...string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.db.Where("key IN ?", keys).Delete(&model.Setting{}).Error; err != nil {
+		return err
+	}
+	for _, key := range keys {
+		delete(s.cache, key)
+		s.missing[key] = true
+	}
+	return nil
 }
 
 // Set 写成功后才更新缓存。
@@ -231,32 +261,6 @@ func (s *Store) ContextBytesPerToken() float64 {
 		return defaultContextBytesPerToken
 	}
 	return f
-}
-
-// LuaEnabled 是否允许安装/运行 lua 插件；缺省开。
-func (s *Store) LuaEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(s.Get(KeyLuaEnabled, ""))) {
-	case "false", "0", "off", "no":
-		return false
-	}
-	return true
-}
-
-// LuaIsolation lua 运行态隔离（每插件一份运行态）；缺省开。本版锁定为开，仅持久化+展示。
-func (s *Store) LuaIsolation() bool {
-	switch strings.ToLower(strings.TrimSpace(s.Get(KeyLuaIsolation, ""))) {
-	case "false", "0", "off", "no":
-		return false
-	}
-	return true
-}
-
-// LuaUpdateMode luahost 更新方式：manual（手动上传）/ online（在线，占位）；非法回退 manual。
-func (s *Store) LuaUpdateMode() string {
-	if v := s.Get(KeyLuaUpdateMode, defaultLuaUpdateMode); v == "manual" || v == "online" {
-		return v
-	}
-	return defaultLuaUpdateMode
 }
 
 // GitHubProxy GitHub 代理前缀（以 / 结尾与否均可；空 = 直连）。

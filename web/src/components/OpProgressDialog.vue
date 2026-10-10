@@ -14,8 +14,8 @@
     <div class="op-steps">
       <div v-for="s in steps" :key="s.key" class="op-step" :class="'is-' + s.status">
         <span class="op-step-dot">
-          <t-icon v-if="s.status === 'done'" name="check" />
-          <t-icon v-else-if="s.status === 'error'" name="close" />
+          <check-icon v-if="s.status === 'done'" />
+          <close-icon v-else-if="s.status === 'error'" />
           <t-loading v-else-if="s.status === 'active'" size="12px" />
           <i v-else class="op-step-pending" />
         </span>
@@ -31,7 +31,7 @@
       </div>
     </div>
 
-    <!-- 进行中且可取消（含下载）显示取消；完成/失败靠点遮罩关闭 -->
+    <!-- 进行中且可取消（含下载）显示取消；完成/失败可用关闭按钮退出 -->
     <t-button v-if="running" block theme="danger" variant="outline" :disabled="!cancelable" style="margin-top: 12px" @click="emit('cancel')">
       {{ t('common.cancel') }}
     </t-button>
@@ -42,6 +42,7 @@
 import { nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CDrawer } from './base'
+import { CheckIcon, CloseIcon } from 'tdesign-icons-vue-next'
 
 // 一步：pending 待办 / active 进行中 / done 完成 / error 失败
 export interface OpStep { key: string; label: string; status: 'pending' | 'active' | 'done' | 'error' }

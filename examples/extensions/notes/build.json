@@ -1,0 +1,6 @@
+{
+  "format": 1,
+  "manifest": "manifest.json",
+  "frontend": { "directory": "frontend", "output": ".", "entry": "index.html", "sdk": "cph.js" },
+  "backend": { "language": "go", "module": "backend", "package": ".", "cgo": false }
+}

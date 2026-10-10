@@ -1,0 +1,129 @@
+plugins {
+ id 'com.android.application'
+ id 'org.jetbrains.kotlin.plugin.compose'
+}
+def projectConfig = rootProject.ext.cphProject
+def coreVersion = projectConfig.components.core.version
+def appVersion = projectConfig.components.android
+def releaseConfig = new groovy.json.JsonSlurper().parse(rootProject.file('../build-config.json'))
+def packageDirectory = providers.gradleProperty('cphPackageDir').map { file(it) }.getOrElse(rootProject.file('../build/packages'))
+def frontendName = providers.gradleProperty('cphFrontend').getOrElse(releaseConfig.android.frontend)
+def frontend = releaseConfig.frontends[frontendName]
+if (!frontend || frontend.surface != 'app') throw new GradleException("Unsupported app frontend: ${frontendName}")
+android {
+ namespace 'github.shadowbaby.clawproxyhub.core'
+ compileSdk { version = release(37) { minorApiLevel = 0 } }
+ ndkVersion '28.2.13676358'
+ defaultConfig { applicationId appVersion.application_id; minSdk appVersion.min_sdk; targetSdk appVersion.target_sdk; versionCode appVersion.version_code; versionName appVersion.version; testInstrumentationRunner 'github.shadowbaby.clawproxyhub.core.CoreInstrumentation' }
+ buildFeatures { buildConfig true; compose true }
+ defaultConfig { buildConfigField 'String', 'CORE_VERSION', groovy.json.JsonOutput.toJson(coreVersion) }
+ defaultConfig { buildConfigField 'String', 'FRONTEND_VERSION', groovy.json.JsonOutput.toJson(projectConfig.components.frontend.version) }
+ defaultConfig { buildConfigField 'String', 'UPDATE_REPOSITORY', groovy.json.JsonOutput.toJson(projectConfig.updates.repository) }
+ compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+ sourceSets.main.jniLibs.srcDir layout.buildDirectory.dir('generated/jniLibs').get().asFile
+ sourceSets.androidTest.assets.srcDir layout.buildDirectory.dir('generated/installTests').get().asFile
+ sourceSets.androidTest.assets.srcDir layout.buildDirectory.dir('generated/updateTests').get().asFile
+ sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/assets').get().asFile
+ sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/versionAssets').get().asFile
+ packaging.jniLibs.useLegacyPackaging = providers.gradleProperty('cphCompactApk').map { it.toBoolean() }.getOrElse(true)
+ packaging.jniLibs.excludes += ['**/libcphlua.so']
+ signingConfigs {
+  release {
+   def path = System.getenv('CPH_ANDROID_KEYSTORE')
+   if (path) storeFile file(path)
+   storePassword System.getenv('CPH_ANDROID_STORE_PASSWORD')
+   keyAlias System.getenv('CPH_ANDROID_KEY_ALIAS')
+   keyPassword System.getenv('CPH_ANDROID_KEY_PASSWORD')
+  }
+ }
+ buildTypes { release { signingConfig signingConfigs.release } }
+}
+
+tasks.register('validateCphReleaseSigning') {
+ doLast {
+  if (!providers.gradleProperty('cphReleaseSigning').map { it.toBoolean() }.getOrElse(false))
+   throw new GradleException('Set -PcphReleaseSigning=true so the APK, Lua Host and App UI use the same release identity')
+  ['CPH_ANDROID_KEYSTORE', 'CPH_ANDROID_STORE_PASSWORD', 'CPH_ANDROID_KEY_ALIAS', 'CPH_ANDROID_KEY_PASSWORD'].each {
+   if (!System.getenv(it)) throw new GradleException("Missing release signing configuration: ${it}")
+  }
+ }
+}
+tasks.configureEach { if (name == 'validateSigningRelease') dependsOn 'validateCphReleaseSigning' }
+dependencies {
+ testImplementation 'junit:junit:4.13.2'
+ testImplementation 'org.json:json:20240303'
+ implementation 'androidx.activity:activity-compose:1.13.0'
+ implementation 'top.yukonga.miuix.kmp:miuix-ui:0.9.4'
+ implementation 'top.yukonga.miuix.kmp:miuix-preference:0.9.4'
+ implementation 'androidx.webkit:webkit:1.14.0'
+ implementation 'androidx.core:core:1.16.0'
+}
+ext.cphNativeSource = './android/app/src/main/go'
+ext.cphNativeLibrary = 'cphcore'
+ext.cphNativeTags = 'cph_no_web'
+ext.cphNativeLdflags = '-s -w -X github.com/ShadowSmallBaby/ClawProxyHub/internal/version.UpdateRepository=' + projectConfig.updates.repository
+ext.cphAdditionalNatives = [
+ [task:'buildLuaNative',source:'./android',library:'cphlua',workdir:rootProject.file('../hosts/luahost'),tags:'',output:'generated/hostNative',preBuild:false],
+ [task:'buildPluginTestNative',source:'./android/app/src/androidTest/go',library:'cphplugin',workdir:rootProject.file('..'),tags:'',output:'generated/pluginTestNative',preBuild:false]
+]
+apply from: rootProject.file('native.gradle')
+
+def copyWeb = tasks.register('copyWeb', Sync) {
+ inputs.properties([profile:frontendName, version:projectConfig.components.frontend.version, packages:frontend.packages])
+ inputs.file(rootProject.file('../' + frontend.out + '/profile.json')).withPathSensitivity(PathSensitivity.RELATIVE)
+ doFirst {
+  def report = new groovy.json.JsonSlurper().parse(rootProject.file('../' + frontend.out + '/profile.json'))
+  if (!rootProject.file('../' + frontend.out + '/index.html').isFile() || report.profile != frontendName || report.version != projectConfig.components.frontend.version || report.packages != frontend.packages)
+   throw new GradleException("Build the configured frontend first: pnpm --dir web exec vite build --mode ${frontendName}")
+ }
+ from rootProject.file('../' + frontend.out)
+ into layout.buildDirectory.dir('generated/assets/web')
+ exclude '.vite/**', '.gitkeep', 'profile.json'
+}
+def copyCatalog = tasks.register('copyCatalog', Copy) {
+ from rootProject.file('../plugins/index.json')
+ into layout.buildDirectory.dir('generated/assets')
+ rename { 'plugin-market.json' }
+}
+def appMetadata = groovy.json.JsonOutput.toJson(new LinkedHashMap(appVersion) + [core_version:coreVersion, frontend:[profile:frontendName, version:projectConfig.components.frontend.version]])
+def versionAsset = layout.buildDirectory.file('generated/versionAssets/app-version.json')
+def writeVersion = tasks.register('writeVersion') {
+ inputs.property('metadata', appMetadata)
+ outputs.file(versionAsset)
+ doLast {
+  versionAsset.get().asFile.parentFile.mkdirs()
+  versionAsset.get().asFile.setText(appMetadata + '\n', 'UTF-8')
+ }
+}
+tasks.named('preBuild').configure { dependsOn copyWeb, copyCatalog, writeVersion }
+apply from: rootProject.file('package-signing.gradle')
+apply from: rootProject.file('host-package.gradle')
+apply from: rootProject.file('frontend-package.gradle')
+abstract class PackageAssetsTask extends Sync {
+ @OutputDirectory abstract DirectoryProperty getAssetDirectory()
+}
+
+def copyPackages = tasks.register('copyPackages', PackageAssetsTask) {
+ def packages = (releaseConfig.android.packages + frontend.packages).unique()
+ if (packages.contains('lua-runtime')) {
+  dependsOn 'packageLuaHost'
+  from(tasks.named('packageLuaHost').flatMap { it.archiveFile }) { into 'packages' }
+ }
+ packages.findAll { it != 'lua-runtime' }.each { id ->
+  def spec = releaseConfig.packages[id]
+  def name = "${id}-${projectConfig.components[id].version}${spec.suffix}"
+  from(new File(packageDirectory, name)) { into 'packages' }
+  doFirst { if (!new File(packageDirectory, name).isFile()) throw new GradleException("Missing ${name}; run scripts/build-packages.py for the selected frontend") }
+ }
+ from(new File(packageDirectory, 'trust.json')) { into 'packages' }
+ if (packages.any { it != 'lua-runtime' }) {
+  doFirst { if (!new File(packageDirectory, 'trust.json').isFile()) throw new GradleException('Missing package trust.json') }
+ }
+ assetDirectory.set(layout.buildDirectory.dir('generated/packageAssets'))
+ into assetDirectory
+}
+androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+ variant.sources.assets.addGeneratedSourceDirectory(copyPackages) { it.assetDirectory }
+}
+apply from: rootProject.file('plugin-test.gradle')
+apply from: rootProject.file('extension-test.gradle')

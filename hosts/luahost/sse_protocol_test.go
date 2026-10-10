@@ -1,4 +1,4 @@
-package main
+package luahost
 
 import (
 	lua "github.com/yuin/gopher-lua"

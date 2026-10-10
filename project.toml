@@ -1,0 +1,24 @@
+# 组件版本独立维护；更新日志位于 version.json。
+format = 1
+
+[updates]
+repository = "https://github.com/ShadowSmallBaby/ClawProxyHub"
+
+[components.core]
+version = "2.0.0"
+
+[components.android]
+version = "1.0.0"
+version_code = 1
+application_id = "github.shadowbaby.clawproxyhub.core"
+min_sdk = 24
+target_sdk = 36
+
+[components.lua-runtime]
+version = "0.3.0"
+
+[components.lua-editor]
+version = "0.2.0"
+
+[components.frontend]
+version = "0.6.0"

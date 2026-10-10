@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "component": "lua-editor",
+  "manifest": "manifest.json",
+  "frontend": {
+    "directory": ".",
+    "install": ["pnpm", "install", "--frozen-lockfile"],
+    "build": ["pnpm", "run", "build"],
+    "output": "package/frontend",
+    "entry": "index.html"
+  },
+  "backend": {
+    "language": "go",
+    "module": "backend",
+    "package": "./cmd",
+    "cgo": false,
+    "android": { "package": "./android", "min_sdk": 24, "ndk": "28.2.13676358" }
+  },
+  "assets": {
+    "LICENSE": { "source": "package/LICENSE", "inputs": ["../../LICENSE", "prepare.mjs"] },
+    "icon.svg": { "source": "package/icon.svg", "inputs": ["prepare.mjs"] }
+  }
+}

@@ -132,7 +132,7 @@ import { CPagination } from '@/components/base'
 import { useClientPagination } from '@/composables'
 import { CDrawer } from '@/components/base'
 import { FormItem } from '@/components'
-import { CCard, CTable, MobileFab } from '@/components/base'
+import { CTable, MobileFab } from '@/components/base'
 import { useAsync, useIsMobile } from '@/composables'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -215,9 +215,6 @@ function groupLabel(e: RouteGroupEntry): string {
   return `${g?.name ?? e.group_id} → ${e.model} (${e.weight})`
 }
 
-function pluginName(g: GroupInfo): string {
-  return g.plugin_label || g.plugin || `#${g.plugin_id}`
-}
 
 function failoverLabel(row: RouteInfo): string {
   const codes = [row.FailoverOn4xx && '4xx', row.FailoverOn5xx && '5xx'].filter(Boolean).join('/')

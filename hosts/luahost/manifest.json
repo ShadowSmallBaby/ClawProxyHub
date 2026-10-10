@@ -1,0 +1,24 @@
+{
+  "id": "lua-runtime",
+  "name": "Lua Host",
+  "label": {"zh": "Lua Host", "en": "Lua Host"},
+  "desc": {"zh": "为 Lua 插件提供沙箱运行环境。", "en": "A sandboxed runtime for Lua plugins."},
+  "api": 1,
+  "kind": "runtime",
+  "target": "backend",
+  "activation": "hot",
+  "core": {"min": "1.5.2"},
+  "permissions": ["runtime.execute"],
+  "capabilities": ["lua"],
+  "settings": [
+    {
+      "id": "isolation",
+      "kind": "toggle",
+      "label": {"zh": "隔离运行", "en": "Isolated execution"},
+      "hint": {"zh": "每个 Lua 插件使用独立运行环境，当前版本固定开启。", "en": "Each Lua plugin runs in its own environment. Always enabled in this version."},
+      "default": true,
+      "readonly": true
+    }
+  ],
+  "files": {}
+}

@@ -1,0 +1,12 @@
+# syntax=docker/dockerfile:1
+# 与 Linux 发行包的 Ubuntu 24.04 构建环境保持 glibc 兼容。
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+ARG TARGETARCH
+COPY ${TARGETARCH}/ ./
+RUN mkdir -p data/packages /opt/clawproxyhub && mv data/packages /opt/clawproxyhub/packages && rmdir data && ./cph -h
+ENV CPH_ADDR=":8080" CPH_DATA_DIR="/app/data" CPH_INSTALL_PACKAGES="true" CPH_PACKAGE_DIRS="/opt/clawproxyhub/packages:/app/data/packages"
+VOLUME ["/app/data"]
+EXPOSE 8080
+ENTRYPOINT ["./cph"]

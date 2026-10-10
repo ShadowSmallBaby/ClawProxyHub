@@ -1,5 +1,5 @@
 // openai.go — Lua 与 Go 插件共用信封适配，避免字段映射分叉。
-package main
+package luahost
 
 import (
 	"encoding/json"

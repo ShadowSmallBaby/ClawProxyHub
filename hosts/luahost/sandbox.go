@@ -1,6 +1,6 @@
 // sandbox.go — Lua 沙箱：只装白名单标准库、剔除可越权/触达宿主的符号。
 // 一切出站能力只经 cph.*（见 cph.go），脚本无法自建 socket、读环境变量或触达文件系统。
-package main
+package luahost
 
 import lua "github.com/yuin/gopher-lua"
 

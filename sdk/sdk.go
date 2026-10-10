@@ -9,9 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	goplugin "github.com/hashicorp/go-plugin"
-	"google.golang.org/grpc"
-
 	pb "github.com/ShadowSmallBaby/ClawProxyHub/sdk/proto/cphv1"
 )
 
@@ -34,15 +31,6 @@ const (
 	// HostBrokerID 宿主 ClawHost 服务在 broker 上的固定通道号。
 	HostBrokerID uint32 = 1000
 )
-
-// HandshakeConfig go-plugin 进程握手配置。
-func HandshakeConfig() goplugin.HandshakeConfig {
-	return goplugin.HandshakeConfig{
-		ProtocolVersion:  uint(ProtocolVersion),
-		MagicCookieKey:   MagicCookieKey,
-		MagicCookieValue: MagicCookieVal,
-	}
-}
 
 // gRPC 消息上限（core↔插件）：默认 4MB 太小，长会话请求会撞 ResourceExhausted → 502。
 // 由 env 启动期注入，核心与插件读同一变量保持两端一致（改后需重启进程；SDK 变更需重编插件）。
@@ -103,6 +91,11 @@ type Host struct {
 	client pb.ClawHostClient
 }
 
+// NewHost 注入平台提供的宿主客户端；连接关闭与重连由平台会话管理。
+func NewHost(client pb.ClawHostClient) *Host {
+	return &Host{client: client}
+}
+
 func (h *Host) conn() pb.ClawHostClient {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -135,22 +128,13 @@ func (h *Host) LogFields(level, message string, fields map[string]string) {
 
 // StoreGet 读插件状态。
 func (h *Host) StoreGet(key string) ([]byte, bool) {
-	c := h.conn()
-	if c == nil {
-		return nil, false
-	}
-	resp, err := c.StoreGet(context.Background(), &pb.StoreGetRequest{Key: key})
-	if err != nil || !resp.Found {
-		return nil, false
-	}
-	return resp.Value, true
+	value, found, _ := h.StoreGetContext(context.Background(), key)
+	return value, found
 }
 
 // StorePut 写插件状态。
 func (h *Host) StorePut(key string, value []byte) {
-	if c := h.conn(); c != nil {
-		c.StorePut(context.Background(), &pb.StorePutRequest{Key: key, Value: value})
-	}
+	_ = h.StorePutContext(context.Background(), key, value)
 }
 
 // Settings 读插件设置（核心管理界面在线编辑；pluginName 为本插件 id）。
@@ -162,16 +146,12 @@ func (h *Host) Settings(pluginName string) []byte {
 // InstanceSettings 读实例视图的设置：插件设置 ← 实例设置 ← {"base_url": 实例地址}。
 // instanceID 为 0 时等价于 Settings（仅插件级）。
 func (h *Host) InstanceSettings(pluginName string, instanceID int64) []byte {
-	c := h.conn()
-	if c == nil {
-		return nil
-	}
-	resp, err := c.GetSettings(context.Background(), &pb.GetSettingsRequest{Plugin: pluginName, InstanceId: instanceID})
+	values, err := h.InstanceSettingsContext(context.Background(), pluginName, instanceID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[cph-sdk] GetSettings failed: %v\n", err)
 		return nil
 	}
-	return resp.Values
+	return values
 }
 
 // Plugin 插件作者需要实现的全部：gRPC 服务 + 宿主注入点。
@@ -182,50 +162,4 @@ type Plugin interface {
 // HostAware 可选：实现后核心会把宿主回调注入插件。
 type HostAware interface {
 	SetHost(host *Host)
-}
-
-// pluginServer 包装用户实现，注册进 gRPC 并接通宿主回调。
-type pluginServer struct {
-	goplugin.NetRPCUnsupportedPlugin
-	impl Plugin
-}
-
-func (s *pluginServer) GRPCServer(broker *goplugin.GRPCBroker, srv *grpc.Server) error {
-	if ha, ok := s.impl.(HostAware); ok {
-		host := &Host{dial: func() (pb.ClawHostClient, error) {
-			conn, err := broker.Dial(HostBrokerID)
-			if err != nil {
-				return nil, err
-			}
-			return pb.NewClawHostClient(conn), nil
-		}}
-		ha.SetHost(host)
-		// 宿主 Accept 发来的连接信息 broker 只保留 5s，必须在握手期内建连；
-		// 之后复用同一 gRPC 连接（底层自动重连），懒到首次调用会超时拿不到。
-		go host.conn()
-	}
-	pb.RegisterClawPluginServer(srv, s.impl)
-	return nil
-}
-
-// GRPCClient 插件进程不作为客户端使用，仅为满足 goplugin.GRPCPlugin。
-func (s *pluginServer) GRPCClient(ctx context.Context, broker *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
-	return nil, fmt.Errorf("plugin does not act as a grpc client")
-}
-
-// Serve 启动插件进程，阻塞至核心将其关闭。
-// 插件二进制的 main 只需一行：sdk.Serve(impl)。
-func Serve(impl Plugin) {
-	opts := &goplugin.ServeConfig{
-		HandshakeConfig: HandshakeConfig(),
-		Plugins: goplugin.PluginSet{
-			"claw_plugin": &pluginServer{impl: impl},
-		},
-		GRPCServer: func(opts []grpc.ServerOption) *grpc.Server {
-			max := GRPCMaxMsgSize()
-			opts = append(opts, grpc.MaxRecvMsgSize(max), grpc.MaxSendMsgSize(max))
-			return grpc.NewServer(opts...)
-		},
-	}
-	goplugin.Serve(opts)
 }
