@@ -160,6 +160,7 @@ export default {
     unreadN: '{n} unread',
   },
   impact: {
+    previewFailed: 'Impact preview is unavailable. Check related references before deleting.',
     cascade: 'Will also remove:',
     instances: 'Instances',
     groups: 'Groups',

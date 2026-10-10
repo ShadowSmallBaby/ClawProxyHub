@@ -16,3 +16,5 @@ export { default as EntityIcon } from './EntityIcon.vue'
 export { default as ExtensionActions } from './ExtensionActions.vue'
 export { default as ExtensionUI } from './ExtensionUI.vue'
 export { default as ExtensionFields } from './ExtensionFields.vue'
+
+export { default as DeleteImpactDialog } from './DeleteImpactDialog.vue'

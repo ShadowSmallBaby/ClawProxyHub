@@ -314,8 +314,7 @@
       v-model:visible="removeVisible"
       :header="$t('common.delete') + ' · ' + (removing?.display_name || `#${removing?.id ?? 0}`)"
       :message="$t('accounts.confirmDelete')"
-      :impact-url="`/admin/accounts/${removing?.id ?? 0}/impact`"
-      :delete-url="`/admin/accounts/${removing?.id ?? 0}`"
+      :target="removing ? { kind: 'account', id: removing.id } : undefined"
       @deleted="loadAll"
     />
 
@@ -353,7 +352,7 @@ import { MessagePlugin } from 'tdesign-vue-next'
 import { AddIcon, FilterIcon } from 'tdesign-icons-vue-next'
 import { accountApi, groupApi, instanceApi, pluginApi, proxyApi, type Proxy } from '@/api/entities'
 import BindSelect from '@/components/BindSelect.vue'
-import DeleteImpactDialog from '@/components/DeleteImpactDialog.vue'
+import { DeleteImpactDialog } from '@/components'
 import { accountStatusDict, capabilityDict, dict, label, runStatusDict } from '@/utils/dict'
 import type { Account, AccountDetail, AuthMethod, GroupInfo, InstanceInfo, ModelInfo, NextStep, PluginInfo } from '@/api/types'
 import { isQrDataUrl } from '@/api/types'
@@ -1025,11 +1024,10 @@ watch(instanceFilter, resetPage)
   border-radius: var(--td-radius-medium);
   padding: 14px 16px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: border-color 0.2s;
 }
 .client-card:hover {
   border-color: var(--td-brand-color);
-  box-shadow: var(--td-shadow-1);
 }
 .client-head {
   display: flex;

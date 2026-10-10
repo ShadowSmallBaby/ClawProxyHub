@@ -715,3 +715,42 @@ test('extension environments keep App identity at every width and reject Web-onl
     await expect(page.locator('iframe')).toHaveCount(0)
   } finally { await page.unrouteAll({ behavior: 'wait' }).catch(() => {}); await target.close() }
 })
+
+
+test('delete preview ignores a late response from the previous target', async ({ page }) => {
+  const target = await backend()
+  let releaseFirst!: () => void
+  const firstResponse = new Promise<void>(resolve => { releaseFirst = resolve })
+  let firstStarted = false
+  const impact = (route: string) => ({ instances: 0, groups: 0, accounts: 0, task_rules: 0, task_runs: 0, routes: [route], keys: [] })
+  try {
+    await connect(page, target)
+    await page.route('**/admin/instances', route => route.fulfill({ json: { instances: [
+      { id: 101, name: 'First instance', plugin_id: 1, base_url: 'https://first.test' },
+      { id: 102, name: 'Second instance', plugin_id: 1, base_url: 'https://second.test' },
+    ] } }))
+    await page.route('**/admin/instances/101/impact', async route => {
+      firstStarted = true
+      await firstResponse
+      await route.fulfill({ json: impact('Stale route') })
+    })
+    await page.route('**/admin/instances/102/impact', route => route.fulfill({ json: impact('Current route') }))
+    await page.goto('http://127.0.0.1:4173/instances')
+    await page.locator('tr').filter({ hasText: 'First instance' }).getByText('Delete', { exact: true }).click()
+    await expect.poll(() => firstStarted).toBe(true)
+    await page.locator('.t-drawer--open .t-drawer__mask').click({ position: { x: 10, y: 10 } })
+    await expect(page.locator('.t-drawer--open')).toHaveCount(0)
+    await page.locator('tr').filter({ hasText: 'Second instance' }).getByText('Delete', { exact: true }).click()
+    await expect(page.getByText('Routes：Current route', { exact: true })).toBeVisible()
+    const staleResponse = page.waitForResponse('**/admin/instances/101/impact')
+    releaseFirst()
+    await (await staleResponse).finished()
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+    await expect(page.getByText('Routes：Stale route', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('Routes：Current route', { exact: true })).toBeVisible()
+  } finally {
+    releaseFirst()
+    await page.unrouteAll({ behavior: 'wait' }).catch(() => {})
+    await target.close()
+  }
+})

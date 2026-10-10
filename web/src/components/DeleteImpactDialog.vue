@@ -10,6 +10,7 @@
   >
     <t-loading :loading="loading" size="small" style="width: 100%">
       <p style="margin: 0 0 8px">{{ message }}</p>
+      <t-alert v-if="previewFailed" theme="warning" :message="t('impact.previewFailed')" />
       <template v-if="impact">
         <p v-if="cascadeLines.length" class="impact-title">{{ t('impact.cascade') }}</p>
         <ul v-if="cascadeLines.length" class="impact-list">
@@ -32,7 +33,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { CDrawer } from './base'
-import { api } from '@/api/client'
+import { deletionApi, type DeletionTarget } from '@/api/entities'
 import type { DeleteImpact } from '@/api/types'
 import { notifyDeleteImpact } from '@/utils/impact'
 
@@ -40,8 +41,8 @@ const props = defineProps<{
   visible: boolean
   header: string
   message: string // 确认文案（如「确认删除该账号？」）
-  impactUrl: string // GET 预览接口
-  deleteUrl?: string // DELETE 执行接口；不传则只做确认，由调用方经 confirm 事件自行执行
+  target?: DeletionTarget
+  confirmOnly?: boolean
 }>()
 const emit = defineEmits<{ (e: 'update:visible', v: boolean): void; (e: 'deleted'): void; (e: 'confirm'): void }>()
 
@@ -50,19 +51,26 @@ const loading = ref(false)
 const deleting = ref(false)
 const impact = ref<DeleteImpact | null>(null)
 
-// 打开时拉预览；接口失败时不阻塞删除，只是没有影响面展示
-watch(() => props.visible, async (v) => {
-  if (!v) return
+const previewFailed = ref(false)
+
+// 目标切换或关闭后忽略旧请求，避免迟到响应覆盖当前预览。
+watch(() => [props.visible, props.target?.kind, props.target?.id], async (_, __, onCleanup) => {
+  let current = true
+  onCleanup(() => { current = false })
   impact.value = null
+  previewFailed.value = false
+  loading.value = false
+  if (!props.visible || !props.target) return
   loading.value = true
   try {
-    impact.value = await api.get<DeleteImpact>(props.impactUrl)
+    const result = await deletionApi(props.target).impact()
+    if (current) impact.value = result
   } catch {
-    impact.value = null
+    if (current) previewFailed.value = true
   } finally {
-    loading.value = false
+    if (current) loading.value = false
   }
-})
+}, { immediate: true })
 
 // 级联移除的对象：只列数量 > 0 的项
 const cascadeLines = computed(() => {
@@ -79,14 +87,15 @@ const cascadeLines = computed(() => {
 })
 
 async function confirm() {
-  if (!props.deleteUrl) {
+  if (deleting.value || !props.target) return
+  if (props.confirmOnly) {
     emit('update:visible', false)
     emit('confirm')
     return
   }
   deleting.value = true
   try {
-    const resp = await api.del<{ impact?: DeleteImpact }>(props.deleteUrl)
+    const resp = await deletionApi(props.target).remove()
     emit('update:visible', false)
     emit('deleted')
     notifyDeleteImpact(resp.impact, t)

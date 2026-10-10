@@ -40,8 +40,7 @@
       v-model:visible="removeVisible"
       :header="$t('common.delete') + ' · ' + (removing?.name ?? '')"
       :message="$t('instances.confirmDelete')"
-      :impact-url="`/admin/instances/${removing?.id ?? 0}/impact`"
-      :delete-url="`/admin/instances/${removing?.id ?? 0}`"
+      :target="removing ? { kind: 'instance', id: removing.id } : undefined"
       @deleted="load"
     />
 
@@ -69,7 +68,7 @@ import { useI18n } from 'vue-i18n'
 import { AddIcon, FilterIcon } from 'tdesign-icons-vue-next'
 import { pluginApi, instanceApi } from '@/api/entities'
 import InstanceFormDialog from '@/components/InstanceFormDialog.vue'
-import DeleteImpactDialog from '@/components/DeleteImpactDialog.vue'
+import { DeleteImpactDialog } from '@/components'
 import type { InstanceInfo, PluginInfo } from '@/api/types'
 
 const { t } = useI18n()

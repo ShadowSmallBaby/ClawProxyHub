@@ -26,7 +26,7 @@ export const pluginApi = {
   stop: (name: string) => api.post(`/admin/plugins/${name}/stop`),
   start: (name: string) => api.post(`/admin/plugins/${name}/start`),
   uninstall: (name: string) => api.del<{ impact?: DeleteImpact }>(`/admin/plugins/${name}`),
-  impact: (name: string) => api.get(`/admin/plugins/${name}/impact`),
+  impact: (name: string) => api.get<DeleteImpact>(`/admin/plugins/${name}/impact`),
   marketplace: (source: string) =>
     api.get<{ plugins: MarketEntry[]; source?: string }>(`/admin/plugins/marketplace?source=${encodeURIComponent(source)}`),
   // 市场安装：NDJSON 进度流，每个阶段事件回调一次；出错抛 Error；signal 可中途取消下载
@@ -76,8 +76,8 @@ export const instanceApi = {
     api.post('/admin/instances', body),
   update: (id: number, body: { plugin_id: number; name: string; base_url: string; settings: Record<string, unknown> }) =>
     api.put(`/admin/instances/${id}`, body),
-  remove: (id: number) => api.del(`/admin/instances/${id}`),
-  impact: (id: number) => api.get(`/admin/instances/${id}/impact`),
+  remove: (id: number) => api.del<{ impact?: DeleteImpact }>(`/admin/instances/${id}`),
+  impact: (id: number) => api.get<DeleteImpact>(`/admin/instances/${id}/impact`),
 }
 
 // ---------- 账号 ----------
@@ -88,8 +88,8 @@ export const accountApi = {
   login: (payload: { plugin: string; method_id: string; form: Record<string, string>; state: string; instance_id: number }) =>
     api.post<LoginResp>('/admin/accounts/login', payload),
   update: (id: number, body: Record<string, unknown>) => api.put(`/admin/accounts/${id}`, body),
-  remove: (id: number) => api.del(`/admin/accounts/${id}`),
-  impact: (id: number) => api.get(`/admin/accounts/${id}/impact`),
+  remove: (id: number) => api.del<{ impact?: DeleteImpact }>(`/admin/accounts/${id}`),
+  impact: (id: number) => api.get<DeleteImpact>(`/admin/accounts/${id}/impact`),
   proxies: (id: number) => api.get<{ proxy_ids: number[] }>(`/admin/accounts/${id}/proxies`),
   saveProxies: (id: number, proxy_ids: number[]) => api.put(`/admin/accounts/${id}/proxies`, { proxy_ids }),
   pause: (id: number) => api.post(`/admin/accounts/${id}/pause`),
@@ -185,4 +185,15 @@ export const taskApi = {
   toggleRule: (id: number) => api.post(`/admin/task-rules/${id}/toggle`),
   runRule: (id: number) => actionApi.invoke('core.tasks.run', { id }),
   cancelRule: (id: number) => actionApi.invoke('core.tasks.cancel', { id }),
+}
+
+export type DeletionTarget = { kind: 'account' | 'instance'; id: number } | { kind: 'plugin'; id: string }
+
+export function deletionApi(target: DeletionTarget) {
+  if (target.kind === 'plugin') return {
+    impact: () => pluginApi.impact(target.id),
+    remove: () => pluginApi.uninstall(target.id),
+  }
+  const domain = target.kind === 'account' ? accountApi : instanceApi
+  return { impact: () => domain.impact(target.id), remove: () => domain.remove(target.id) }
 }

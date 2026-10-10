@@ -160,6 +160,7 @@ export default {
     unreadN: '{n} 条未读',
   },
   impact: {
+    previewFailed: '影响预览加载失败，删除前请确认相关引用。',
     cascade: '将一并移除：',
     instances: '实例',
     groups: '分组',

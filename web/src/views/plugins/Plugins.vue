@@ -154,8 +154,8 @@
       v-model:visible="removeVisible"
       :header="removeTarget?.header ?? ''"
       :message="removeTarget?.message ?? ''"
-      :impact-url="removeTarget?.impactUrl ?? ''"
-      :delete-url="removeTarget?.deleteUrl"
+      :target="removeTarget?.target"
+      :confirm-only="removeTarget?.confirmOnly"
       @deleted="removeTarget?.after()"
       @confirm="removeTarget?.after()"
     />
@@ -237,7 +237,8 @@ import { ShopIcon, CloudUploadIcon, AppIcon } from 'tdesign-icons-vue-next'
 import type { ResponseType } from 'tdesign-vue-next'
 import { pluginApi, pluginSourceApi, instanceApi, type MarketEntry } from '@/api/entities'
 import InstanceFormDialog from '@/components/InstanceFormDialog.vue'
-import DeleteImpactDialog from '@/components/DeleteImpactDialog.vue'
+import { DeleteImpactDialog } from '@/components'
+import type { DeletionTarget } from '@/api/entities'
 import OpProgressDialog, { type OpLog, type OpStep } from '@/components/OpProgressDialog.vue'
 import { capabilityDict, dict, label } from '@/utils/dict'
 import { notifyDeleteImpact } from '@/utils/impact'
@@ -502,8 +503,8 @@ function openInstanceForm(row: InstanceInfo | null) {
 
 // ---------- 删除确认（插件卸载 / 实例删除共用一个影响面弹窗） ----------
 
-// deleteUrl 缺省 = 弹窗只做确认，确认后由 after 自行执行（插件卸载走进度弹窗）
-interface RemoveTarget { header: string; message: string; impactUrl: string; deleteUrl?: string; after: () => void }
+// 插件卸载确认后由进度弹窗执行。
+interface RemoveTarget { header: string; message: string; target: DeletionTarget; confirmOnly?: boolean; after: () => void }
 const removeVisible = ref(false)
 const removeTarget = ref<RemoveTarget | null>(null)
 
@@ -511,8 +512,7 @@ function askRemoveInstance(row: InstanceInfo) {
   removeTarget.value = {
     header: t('common.delete') + ' · ' + row.name,
     message: t('instances.confirmDelete'),
-    impactUrl: `/admin/instances/${row.id}/impact`,
-    deleteUrl: `/admin/instances/${row.id}`,
+    target: { kind: 'instance', id: row.id },
     after: loadPluginInstances,
   }
   removeVisible.value = true
@@ -524,7 +524,8 @@ function askUninstall(p: PluginInfo) {
   removeTarget.value = {
     header: t('plugins.uninstall') + ' · ' + name,
     message: t('plugins.confirmUninstall', { name }),
-    impactUrl: `/admin/plugins/${p.name}/impact`,
+    target: { kind: 'plugin', id: p.name },
+    confirmOnly: true,
     after: async () => {
       await runOp(`${t('plugins.uninstall')} · ${name}`, ['stopping', 'removing'], async (enter, log) => {
         enter('stopping'); log(t('plugins.logStopping'))
