@@ -131,10 +131,33 @@ def build_inputs(project_file, android_test_abi=None):
     root, project, manifest = load_project(project_file)
     files = [Path(__file__), Path(project_file), inside(root, project['manifest'])]
     if project.get('frontend'):
-        files += frontend_inputs(inside(root, project['frontend']['directory']))
+        frontend = project['frontend']
+        directory = inside(root, frontend['directory'])
+        output = inside(directory, frontend['output'])
+        files += [path for path in frontend_inputs(directory) if not path.is_relative_to(output)]
+        if frontend.get('sdk'):
+            files.append(ROOT / 'sdk/extension/bridge.js')
+    for asset in project.get('assets', {}).values():
+        if isinstance(asset, str):
+            files.append(inside(root, asset))
+        else:
+            asset_source(root, asset)
+            files += [(root / value).resolve() for value in asset['inputs']]
     for _, module, target, environment, _ in targets(root, project['backend'], android_test_abi):
         files += go_inputs(module, target, environment)
+    generated = {asset_source(root, asset) for asset in project.get('assets', {}).values() if isinstance(asset, dict)}
+    files = [path for path in files if path.resolve() not in generated]
     return files, {'definition': project, 'manifest': manifest, 'compiler_host': sys.platform, 'android_test_abi': android_test_abi}
+
+
+def asset_source(root, asset):
+    if isinstance(asset, str):
+        return inside(root, asset)
+    if (not isinstance(asset, dict) or set(asset) != {'source', 'inputs'}
+            or not isinstance(asset['inputs'], list) or not asset['inputs']
+            or any(not isinstance(value, str) or not value for value in asset['inputs'])):
+        raise ValueError('Generated assets require source and non-empty producer inputs')
+    return inside(root, asset['source'])
 
 
 def build_source(project_file, destination, manifest=None, android_test_abi=None):
@@ -168,7 +191,7 @@ def build_source(project_file, destination, manifest=None, android_test_abi=None
         if name in ('manifest.json', 'signature.json') or target.exists():
             raise ValueError('Asset collides with a generated package file')
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(inside(root, source), target)
+        shutil.copyfile(asset_source(root, source), target)
     entries = {}
     for platform, module, target, environment, entry in builds:
         output = destination / entry

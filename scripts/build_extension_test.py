@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -6,6 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import extension_build
+from release_config import content_key
 
 
 spec = importlib.util.spec_from_file_location('extension_builder', Path(__file__).with_name('build-extension.py'))
@@ -14,6 +16,40 @@ spec.loader.exec_module(builder)
 
 
 class ExtensionBuilderTests(unittest.TestCase):
+    def test_cache_tracks_assets_bridge_and_producers_but_not_outputs(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(extension_build, 'targets', return_value=[]), \
+                patch.object(extension_build, 'ROOT', Path(directory).resolve()):
+            root = Path(directory).resolve()
+            bridge = root / 'sdk/extension/bridge.js'
+            bridge.parent.mkdir(parents=True)
+            bridge.write_text('bridge')
+            (root / 'ui').mkdir()
+            (root / 'manifest.json').write_text('{"id":"test"}')
+            (root / 'icon.svg').write_text('first')
+            (root / 'prepare.py').write_text('producer')
+            project = root / 'build.json'
+            project.write_text(json.dumps({
+                'format': 1, 'manifest': 'manifest.json', 'backend': {},
+                'frontend': {'directory': 'ui', 'output': 'out', 'sdk': 'bridge.js'},
+                'assets': {'icon.svg': 'icon.svg', 'generated': {'source': 'ui/generated', 'inputs': ['prepare.py']}}
+            }))
+            files, properties = extension_build.build_inputs(project)
+            cold_key = content_key(files, properties)
+            self.assertIn(root / 'icon.svg', files)
+            self.assertIn(root / 'prepare.py', files)
+            self.assertIn(extension_build.ROOT / 'sdk/extension/bridge.js', files)
+            (root / 'ui/generated').write_text('generated')
+            (root / 'ui/out').mkdir()
+            (root / 'ui/out/index.html').write_text('built')
+            warm, _ = extension_build.build_inputs(project)
+            self.assertEqual(set(files), set(warm))
+            self.assertEqual(cold_key, content_key(warm, properties))
+            for path in (root / 'icon.svg', root / 'prepare.py', bridge):
+                previous = content_key(files, properties)
+                path.write_text(path.read_text() + 'changed')
+                self.assertNotEqual(previous, content_key(files, properties))
+
     def test_android_release_only_includes_arm64_and_test_build_adds_x86(self):
         config = {'language': 'go', 'module': 'backend', 'package': './cmd', 'android': {'package': './android'}}
         with tempfile.TemporaryDirectory() as directory, \

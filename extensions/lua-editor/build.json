@@ -16,5 +16,8 @@
     "cgo": false,
     "android": { "package": "./android", "min_sdk": 24, "ndk": "28.2.13676358" }
   },
-  "assets": { "LICENSE": "package/LICENSE", "icon.svg": "package/icon.svg" }
+  "assets": {
+    "LICENSE": { "source": "package/LICENSE", "inputs": ["../../LICENSE", "prepare.mjs"] },
+    "icon.svg": { "source": "package/icon.svg", "inputs": ["prepare.mjs"] }
+  }
 }

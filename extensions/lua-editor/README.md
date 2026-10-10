@@ -32,6 +32,10 @@ python scripts/build-packages.py --platform windows/amd64 --only lua-editor --ou
 python scripts/build-extension.py --project extensions/lua-editor/build.json --out build/editor --development-key
 ```
 
+清单已经通过通用构建器统一生成：组件版本来自 `project.toml`，平台、二进制入口、执行方式及 Android 最低版本来自 `build.json`，文件摘要由签名打包阶段生成。源 `manifest.json` 中的权限、页面贡献、动作输入输出和存储表是需要人工评审的契约，无法仅从 Go 函数或前端代码可靠推导。新增扩展可复用同一构建入口；无需各自编写清单生成脚本。
+
+`assets` 的字符串值表示静态源文件，自动参与缓存指纹。生成资源使用 `{ "source": "package/icon.svg", "inputs": ["prepare.mjs"] }`，`inputs` 相对构建定义目录指向生产脚本及其读取的源文件（可引用仓库公共文件）；不把生成结果加入缓存。`frontend.sdk` 注入的公共桥也自动参与缓存。
+
 `pnpm --dir extensions/lua-editor build` 只构建前端，完整包须通过上述构建器补齐原生入口、签名并验签。包内不含私钥。开发签名复用忽略目录 `.cache/development-signing/` 下的身份；正式签名使用 `--key/--key-id/--trust` 或 `CPH_EXTENSION_PRIVATE_KEY/CPH_EXTENSION_KEY_ID/CPH_EXTENSION_TRUST_JSON`。
 
 签名身份必须具有 `native: true`，允许 `lua-editor` 和清单中全部 `workspace.read/write/execute`、`service.execute`、`storage.read/write` 权限；上传包不会自动增加信任根。由旧的纯前端版本升级时需授权新增权限。
