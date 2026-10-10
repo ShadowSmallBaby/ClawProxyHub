@@ -125,10 +125,10 @@
         <form-item v-for="f in settingFields" :key="f.key" :label="f.title" :description="f.description">
           <t-switch v-if="f.type === 'boolean'" v-model="settingsValues[f.key]" />
           <t-select v-else-if="f.options?.length" v-model="settingsValues[f.key]" clearable style="width: 100%">
-            <t-option v-for="o in f.options" :key="String(o)" :value="o" :label="String(o)" />
+            <t-option v-for="o in f.options" :key="String(o.value)" :value="o.value" :label="o.label" />
           </t-select>
-          <t-input-number v-else-if="f.type === 'number'" v-model="settingsValues[f.key]" theme="column" class="w-sm" />
-          <t-input v-else v-model="settingsValues[f.key]" :placeholder="f.default ? $t('plugins.phDefault', { d: f.default }) : $t('plugins.phDefaultNone')" />
+          <t-input-number v-else-if="f.type === 'number' || f.type === 'integer'" v-model="settingsValues[f.key]" :min="f.minimum" :max="f.maximum" :decimal-places="f.type === 'integer' ? 0 : undefined" theme="column" class="w-sm" />
+          <t-input v-else v-model="settingsValues[f.key]" :type="f.format === 'password' ? 'password' : 'text'" :placeholder="f.format !== 'password' && f.default ? $t('plugins.phDefault', { d: f.default }) : $t('plugins.phDefaultNone')" />
         </form-item>
       </t-form>
       <t-alert v-if="settingFields.length" theme="info" :message="$t('plugins.settingsHint')" style="margin-top: 12px" />
@@ -542,7 +542,11 @@ function askUninstall(p: PluginInfo) {
 
 // ---------- 插件设置 ----------
 
-interface SettingField { key: string; title: string; description: string; type: string; default: unknown; options: unknown[] }
+interface SettingField {
+  key: string; title: string; description: string; type: string; default: unknown
+  options: { value: string | number; label: string }[]
+  format?: string; minimum?: number; maximum?: number
+}
 
 const settingsVisible = ref(false)
 const settingsPlugin = ref<PluginInfo | null>(null)
@@ -556,12 +560,17 @@ async function openSettings(p: PluginInfo) {
   const props = resp.schema?.properties ?? {}
   settingFields.value = Object.entries(props).map(([key, def]: [string, any]) => ({
     key, title: def.title ?? key, description: def.description ?? '',
-    type: def.type ?? 'string', default: def.default ?? '', options: def.enum ?? [],
+    type: def.type ?? 'string', default: def.default ?? '',
+    options: def.oneOf?.length
+      ? def.oneOf.map((o: any) => ({ value: o.const, label: o.title ?? String(o.const) }))
+      : (def.enum ?? []).map((value: string | number) => ({ value, label: String(value) })),
+    format: def.format, minimum: def.minimum, maximum: def.maximum,
   }))
   const values = { ...(resp.values ?? {}) }
   // 未保存的字段用 schema 默认值预填（与实例设置弹窗一致，打开即回显默认值）
   for (const f of settingFields.value) {
     if (values[f.key] === undefined && f.default !== '') values[f.key] = f.default
+    if (f.options.length && (values[f.key] === '' || values[f.key] === null)) values[f.key] = undefined
   }
   settingsValues.value = values
   settingsVisible.value = true

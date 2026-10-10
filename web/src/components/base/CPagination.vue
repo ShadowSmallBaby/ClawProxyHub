@@ -35,7 +35,7 @@ const { isPhone } = useIsMobile()
 
 <style>
 .c-pagination {
-  margin-top: 12px;
+  padding-top: 12px;
   flex-shrink: 0;
 }
 </style>
