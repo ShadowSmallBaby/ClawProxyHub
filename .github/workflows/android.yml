@@ -78,7 +78,7 @@ jobs:
           go -C hosts/luahost test ./...
       - name: Build and lint app with instrumentation fixtures
         run: |
-          sh android/gradlew -p android --build-cache -PcphABI="$ANDROID_ABI" -PcphCompactApk=true :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug :app:packageAppFrontend
+          sh android/gradlew -p android --build-cache -PcphABI="$ANDROID_ABI" -PcphCompactApk=true :app:assembleDebug :app:assembleDebugAndroidTest :app:test :app:lintDebug :app:packageAppFrontend
       - uses: actions/upload-artifact@v4
         if: always()
         with:

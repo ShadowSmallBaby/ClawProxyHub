@@ -24,6 +24,10 @@ on:
         description: "组件更新选择，以逗号分隔"
         type: string
         default: "lua-runtime,lua-editor,frontend.app"
+      run_checks:
+        description: "运行单元测试、浏览器测试及 Android release lint"
+        type: boolean
+        default: false
       publish:
         description: "发布到 Release（须指定已有 tag）"
         type: boolean
@@ -117,6 +121,7 @@ jobs:
     env:
       BUILD_EDITOR: ${{ needs.resolve.outputs.mode == 'release' || contains(needs.resolve.outputs.components, 'lua-editor') }}
       BUILD_APP_UI: ${{ needs.resolve.outputs.mode == 'release' || contains(needs.resolve.outputs.components, 'frontend.app') }}
+      RUN_CHECKS: ${{ inputs.run_checks == true }}
       RELEASE_MODE: ${{ needs.resolve.outputs.mode }}
       CPH_EXTENSION_PRIVATE_KEY: ${{ secrets.CPH_EXTENSION_PRIVATE_KEY }}
       CPH_EXTENSION_KEY_ID: ${{ secrets.CPH_EXTENSION_KEY_ID }}
@@ -181,7 +186,7 @@ jobs:
         working-directory: web
         run: |
           pnpm install --frozen-lockfile
-          pnpm test
+          if [ "$RUN_CHECKS" = true ]; then pnpm test; fi
           if [ "$RELEASE_MODE" = release ]; then
             pnpm run build:profiles
           else
@@ -195,7 +200,7 @@ jobs:
           python scripts/build-packages.py --platform linux/amd64 --only lua-editor --out build/packages
 
       - name: Verify browser workflows
-        if: needs.resolve.outputs.mode == 'release'
+        if: needs.resolve.outputs.mode == 'release' && inputs.run_checks == true
         working-directory: web
         run: |
           pnpm exec playwright install --with-deps chromium
@@ -294,7 +299,7 @@ jobs:
         run: go test ./internal/database -count=1
 
       - name: Verify module profiles
-        if: needs.resolve.outputs.mode == 'release'
+        if: needs.resolve.outputs.mode == 'release' && inputs.run_checks == true
         env:
           CGO_ENABLED: "1"
         run: |
@@ -377,12 +382,17 @@ jobs:
           path: build/packages/
       - name: Prepare official signing identity
         run: python3 android/prepare_signing.py
+      - name: Test and lint Android app
+        if: needs.resolve.outputs.mode == 'release' && inputs.run_checks == true
+        env:
+          ANDROID_ABI: ${{ matrix.abi }}
+        run: sh android/gradlew -p android --build-cache -PcphABI="$ANDROID_ABI" -PcphReleaseSigning=true :app:test :app:lintRelease
       - name: Build signed application
         if: needs.resolve.outputs.mode == 'release'
         env:
           ANDROID_ABI: ${{ matrix.abi }}
         run: |
-          sh android/gradlew -p android --build-cache -PcphABI="$ANDROID_ABI" -PcphReleaseSigning=true :app:assembleRelease :app:testReleaseUnitTest :app:lintRelease :app:packageLuaHost :app:packageAppFrontend
+          sh android/gradlew -p android --build-cache -PcphABI="$ANDROID_ABI" -PcphReleaseSigning=true :app:assembleRelease :app:packageLuaHost :app:packageAppFrontend
           mkdir -p build/release
           apk=$(python3 scripts/project_config.py apk-name "$ANDROID_ABI")
           cp build/android/app/outputs/apk/release/app-release.apk "build/release/$apk"
