@@ -5,7 +5,7 @@ format = 1
 repository = "https://github.com/ShadowSmallBaby/ClawProxyHub"
 
 [components.core]
-version = "1.5.2"
+version = "2.0.0"
 
 [components.android]
 version = "1.0.0"
