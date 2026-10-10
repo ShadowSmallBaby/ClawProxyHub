@@ -48,7 +48,7 @@ go build -o cph ./cmd/cph
 ### Docker
 
 ```bash
-docker compose up -d   # 管理密码在 docker-compose.yml 中配置
+docker compose up -d   # 先在 .env 或进程环境中设置 CPH_ADMIN_PASSWORD
 ```
 
 可用 `CPH_IMAGE=账号/镜像:v1.5.2` 选择 Docker Hub 版本。`docker compose up -d --build` 从本地源码构建；Release CI 的镜像直接复用同次构建的 Linux 发行包，配置见[统一发行](internal/distribution/README.md#docker-镜像)。
@@ -66,7 +66,7 @@ docker compose up -d   # 管理密码在 docker-compose.yml 中配置
 4. **建分组**：把同实例账号划入分组（分组 = 单实例账号池）
 5. **（可选）绑代理**：账号或分组绑定出站代理（账号级优先），上游流量经代理
 6. **建路由**：对外模型别名（如 `deepseek-flash`）→ 分组 + 真实模型 + 权重
-7. **建密钥**：客户端调用凭据（明文只显示一次），可限定路由范围
+7. **建密钥**：创建客户端调用凭据，可限定路由范围；管理员可在密钥页查看明文
 8. **接入客户端**：
 
 ```bash
@@ -92,7 +92,7 @@ func main() { sdk.Serve(&myPlugin{}) }
 ```
 
 - 契约：`sdk/proto/cph.proto`（Handshake / Login 多步登录 / Refresh / ListModels / Chat 统一信封 / RunTask）
-- 通用上游适配：`sdk/openaiup`（OpenAI 方言）、`sdk/anthropicup`（Anthropic 方言）、`sdk/responsesup`（Responses 方言）；SSE 分帧助手 `sdk/sse`
+- 通用上游适配：`sdk/openaiup`（OpenAI 方言）、`sdk/anthropicup`（Anthropic 方言）、`sdk/responsesup`（Responses 方言）；SSE 分帧助手 `sdk/streamutil`
 - 宿主回调（日志 / 存储 / 代理查询）：实现 `sdk.HostAware` 接收 `*sdk.Host`
 - 参考实现：`examples/stub`（演示插件）与 [ClawProxyHubPlugins](https://github.com/ShadowSmallBaby/ClawProxyHubPlugins) 中的正式插件；**Lua 插件**通过已安装的 Lua Host 运行，无需编译脚本（见插件仓库 AGENTS.md §11）
 - 包格式 `.cphplugin`（zip 容器）：含 `manifest.json`（name / version / author / protocol_version / icon）+ `plugin-<os>-<arch>[.exe]`（Lua 插件为平台无关的 `main.lua`）；打包器与发布流程见插件仓库

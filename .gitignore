@@ -31,3 +31,7 @@ web/cph-web-app.zip
 
 # 本地环境
 .env
+.env.*
+!.env.example
+go.work
+go.work.sum

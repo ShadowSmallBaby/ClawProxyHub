@@ -1,4 +1,12 @@
 .git
+.env
+.env.*
+!.env.example
+go.work
+go.work.sum
+**/local.properties
+**/*.jks
+**/*.keystore
 .idea
 data
 data-test
@@ -14,6 +22,7 @@ extensions/lua-editor/node_modules
 extensions/lua-editor/package
 plugins
 android/.gradle
+android/.kotlin
 *.exe
 *.log
 **/__pycache__

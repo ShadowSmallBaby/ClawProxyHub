@@ -14,7 +14,7 @@ ClawProxyHub：自托管的 Claude/OpenAI 兼容代理网关。核心职责：�
 
 - **后端**：Go（go-plugin 多进程插件、SQLite、chi 路由）
 - **前端**：Vue 3 `<script setup>` + TypeScript + Vite + TDesign Vue Next + vue-i18n（zh/en）+ pinia
-- **插件**：go-plugin RPC，契约 protocol v2（核心接受 v2 区间内协商）；两种运行时：**Go 插件**（编译二进制）与 **Lua 插件**（脚本，使用已安装的 Lua Host 沙箱，`hosts/luahost` 独立 module）
+- **插件**：go-plugin RPC，契约 protocol v2（核心按 SDK 声明的最小/当前版本区间协商）；两种运行时：**Go 插件**（编译二进制）与 **Lua 插件**（脚本，使用已安装的 Lua Host 沙箱，`hosts/luahost` 独立 module）
 
 ## 目录约定
 
