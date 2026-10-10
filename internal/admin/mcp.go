@@ -12,6 +12,7 @@ func (s *Server) routeMCP(r authed) {
 	}
 	manager := mcpserver.NewManager(s.db, s.actions)
 	r.mux.Handle("POST /admin/mcp", manager)
+	r.mux.Handle("DELETE /admin/mcp", manager)
 	r.h("GET /admin/mcp/config", func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return

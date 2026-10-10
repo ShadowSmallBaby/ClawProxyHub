@@ -55,7 +55,13 @@ func TestManagedKeysAndLivePermissions(t *testing.T) {
 		t.Fatal("MCP key must be stored only as a digest")
 	}
 	request := func(token, body string) *httptest.ResponseRecorder {
+		init := httptest.NewRequest("POST", "http://localhost/admin/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}`))
+		init.Header.Set("Authorization", "Bearer "+token)
+		init.Header.Set("Content-Type", "application/json")
+		initialized := httptest.NewRecorder()
+		manager.ServeHTTP(initialized, init)
 		req := httptest.NewRequest("POST", "http://localhost/admin/mcp", strings.NewReader(body))
+		req.Header.Set("Mcp-Session-Id", initialized.Header().Get("Mcp-Session-Id"))
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", "application/json")
 		result := httptest.NewRecorder()
@@ -129,5 +135,104 @@ func TestManagedKeysAndLivePermissions(t *testing.T) {
 	db.Model(&model.User{}).Where("username=?", "admin").Update("role", "guest")
 	if request(next, list).Code != 401 {
 		t.Fatal("demoted user kept MCP access")
+	}
+}
+
+func TestManagedSharedKeySessions(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql, _ := db.DB()
+	defer sql.Close()
+	if err := db.Create(&model.User{Username: "admin", Role: "admin"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	registry := action.New(nil)
+	started := make(chan struct{}, 2)
+	err = registry.Register(action.Descriptor{ID: "core.wait", Owner: "core", Version: 1, Title: "Wait", Permission: "status.read", Effect: "read", TimeoutMS: 30000, Input: action.Schema{Type: "object"}, Output: action.Schema{Type: "object"}}, func(ctx context.Context, _ action.Principal, _ json.RawMessage) (any, error) {
+		started <- struct{}{}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(db, registry)
+	if err := manager.Configure(ctx, "admin", true, []string{"core.wait"}); err != nil {
+		t.Fatal(err)
+	}
+	token, err := manager.Rotate(ctx, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(method, session, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "http://localhost/admin/mcp", strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Mcp-Session-Id", session)
+		w := httptest.NewRecorder()
+		manager.ServeHTTP(w, r)
+		return w
+	}
+	initialize := func() string {
+		w := request("POST", "", `{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}`)
+		id := w.Header().Get("Mcp-Session-Id")
+		if w.Code != 200 || id == "" {
+			t.Fatalf("initialize: %d %s", w.Code, w.Body.String())
+		}
+		return id
+	}
+	first, second := initialize(), initialize()
+	if first == second {
+		t.Fatal("shared credential reused a session")
+	}
+	defer request("DELETE", first, "")
+	defer request("DELETE", second, "")
+	call := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"core.wait"}}`
+	doneA, doneB := make(chan struct{}), make(chan struct{})
+	go func() { request("POST", first, call); close(doneA) }()
+	go func() { request("POST", second, call); close(doneB) }()
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("same request ID did not start independently")
+		}
+	}
+	request("POST", first, `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`)
+	select {
+	case <-doneA:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation did not reach first session")
+	}
+	select {
+	case <-doneB:
+		t.Fatal("first session cancelled second")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := request("DELETE", second, ""); got.Code != 204 {
+		t.Fatal(got.Code)
+	}
+	select {
+	case <-doneB:
+	case <-time.After(2 * time.Second):
+		t.Fatal("DELETE did not cancel session")
+	}
+	if got := request("POST", second, call); got.Code != 404 {
+		t.Fatal("deleted session accepted")
+	}
+	if got := request("POST", "", call); got.Code != 400 {
+		t.Fatal("missing session accepted")
+	}
+	expired := initialize()
+	manager.mu.Lock()
+	state := manager.sessions[expired]
+	state.used = time.Now().Add(-25 * time.Hour)
+	manager.sessions[expired] = state
+	manager.mu.Unlock()
+	if got := request("POST", expired, call); got.Code != 404 {
+		t.Fatal("expired session accepted")
 	}
 }

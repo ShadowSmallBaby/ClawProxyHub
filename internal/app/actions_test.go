@@ -49,7 +49,11 @@ func TestActionsAgreeAcrossControlAndMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := mcp.Request(ctx, "POST", "/admin/mcp", "application/json", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"core.status","arguments":{}}}`))
+	_, session, err := mcp.MCP(ctx, "", bytes.NewBufferString(`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}`))
+	if err != nil || session == "" {
+		t.Fatalf("initialize: %q %v", session, err)
+	}
+	raw, _, err := mcp.MCP(ctx, session, bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"core.status","arguments":{}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,5 +75,8 @@ func TestActionsAgreeAcrossControlAndMCP(t *testing.T) {
 	a.db.Table("action_audits").Where("action_id = ? AND outcome = ?", "core.status", "ok").Count(&count)
 	if count != 2 {
 		t.Fatalf("both entries must audit: %d", count)
+	}
+	if err := mcp.CloseMCP(ctx, session); err != nil {
+		t.Fatal(err)
 	}
 }

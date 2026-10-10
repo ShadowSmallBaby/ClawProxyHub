@@ -97,3 +97,52 @@ func TestStdioCancellationReachesBackendWhenWorkSlotsAreFull(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStdioPreservesInitializedSession(t *testing.T) {
+	t.Setenv("CPH_TOKEN", "test-only-token")
+	seen := make(chan string, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "DELETE" {
+			if r.Header.Get("Mcp-Session-Id") != "test-session" {
+				t.Error("close lost session")
+			}
+			w.WriteHeader(204)
+			return
+		}
+		var req struct {
+			Method string          `json:"method"`
+			ID     json.RawMessage `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		if req.Method == "initialize" {
+			if r.Header.Get("Mcp-Session-Id") != "" {
+				t.Error("initialization reused session")
+			}
+			w.Header().Set("Mcp-Session-Id", "test-session")
+		} else if r.Header.Get("Mcp-Session-Id") != "test-session" {
+			t.Error("missing initialized session")
+		}
+		seen <- req.Method
+		if len(req.ID) == 0 {
+			w.WriteHeader(202)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{}}`, req.ID)
+	}))
+	defer server.Close()
+	input := `{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":1,"method":"tools/list"}
+`
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{"--url", server.URL, "mcp"}, strings.NewReader(input), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 3 {
+		t.Fatalf("forwarded %d requests", len(seen))
+	}
+}

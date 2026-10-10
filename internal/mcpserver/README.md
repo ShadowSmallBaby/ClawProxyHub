@@ -1,6 +1,6 @@
 # CLI 与 MCP
 
-MCP 在核心进程中运行，使用认证的 Streamable HTTP JSON 响应，地址为 `/admin/mcp`，协议版本 `2025-03-26`。支持 initialize、ping、tools/list、tools/call 和取消，不提供 resources、prompts 或 SSE 推送。
+MCP 在核心进程中运行，使用认证的 Streamable HTTP JSON 响应，地址为 `/admin/mcp`，协议版本 `2025-03-26`。支持 initialize、ping、tools/list、tools/call、取消和 DELETE 会话关闭，不提供 resources、prompts 或 SSE 推送。
 
 ## 管理与连接
 
@@ -34,3 +34,5 @@ cphctl --url http://127.0.0.1:8080 --token-file ./admin-token invoke core.tasks.
 ```
 
 普通管理命令使用管理员登录令牌或受限动作令牌；`mcp` 子命令使用专用 MCP 密钥。产品关闭功能扩展入口，`install/enable/disable/uninstall` 返回不可用。仅使用网页或 Android APP 时无需运行 cphctl。
+
+初始化成功返回 `Mcp-Session-Id`；后续请求和取消通知须携带该头，服务端将会话绑定到当前密钥。共享密钥的客户端分别初始化，各自的请求 ID 互不干扰。空闲 24 小时、核心重启或权限/密钥变更后需重新初始化；未知会话返回 404，缺少会话返回 400。客户端可 DELETE 同一端点结束会话并取消其中调用，CLI 桥自动转发并关闭会话；会话失效不会自动重放工具调用。

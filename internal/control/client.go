@@ -43,32 +43,58 @@ func New(address, token string) (*Client, error) {
 	return &Client{URL: strings.TrimRight(address, "/"), Token: strings.TrimSpace(token), HTTP: &http.Client{Timeout: 310 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 func (c *Client) Request(ctx context.Context, method, path, contentType string, body io.Reader) (json.RawMessage, error) {
+	raw, _, err := c.request(ctx, method, path, contentType, body, nil)
+	return raw, err
+}
+
+// MCP 会话头仅用于 MCP 端点，不影响管理 API 请求。
+func (c *Client) MCP(ctx context.Context, session string, body io.Reader) (json.RawMessage, string, error) {
+	headers := make(http.Header)
+	if session != "" {
+		headers.Set("Mcp-Session-Id", session)
+	}
+	raw, responseHeaders, err := c.request(ctx, "POST", "/admin/mcp", "application/json", body, headers)
+	return raw, responseHeaders.Get("Mcp-Session-Id"), err
+}
+
+func (c *Client) CloseMCP(ctx context.Context, session string) error {
+	headers := make(http.Header)
+	headers.Set("Mcp-Session-Id", session)
+	_, _, err := c.request(ctx, "DELETE", "/admin/mcp", "application/json", nil, headers)
+	return err
+}
+
+func (c *Client) request(ctx context.Context, method, path, contentType string, body io.Reader, headers http.Header) (json.RawMessage, http.Header, error) {
 	req, e := http.NewRequestWithContext(ctx, method, c.URL+path, body)
 	if e != nil {
-		return nil, e
+		return nil, nil, e
+	}
+	req.Header = headers.Clone()
+	if req.Header == nil {
+		req.Header = make(http.Header)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	res, e := c.HTTP.Do(req)
 	if e != nil {
-		return nil, e
+		return nil, nil, e
 	}
 	defer res.Body.Close()
 	raw, e := io.ReadAll(io.LimitReader(res.Body, 4<<20+1))
 	if e != nil {
-		return nil, e
+		return nil, nil, e
 	}
 	if len(raw) > 4<<20 {
-		return nil, fmt.Errorf("response too large")
+		return nil, nil, fmt.Errorf("response too large")
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, &HTTPError{res.StatusCode, string(raw)}
+		return nil, nil, &HTTPError{res.StatusCode, string(raw)}
 	}
 	if len(raw) > 0 && !json.Valid(raw) {
-		return nil, fmt.Errorf("backend returned invalid JSON")
+		return nil, nil, fmt.Errorf("backend returned invalid JSON")
 	}
-	return raw, nil
+	return raw, res.Header, nil
 }
 func (c *Client) Invoke(ctx context.Context, id string, input json.RawMessage) (json.RawMessage, error) {
 	if len(input) == 0 {

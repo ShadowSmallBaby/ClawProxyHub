@@ -166,7 +166,15 @@ func bridge(ctx context.Context, c *control.Client, in io.Reader, out io.Writer)
 	}()
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	defer wg.Wait()
+	var session string
+	defer func() {
+		wg.Wait()
+		if session != "" {
+			closeCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
+			defer done()
+			_ = c.CloseMCP(closeCtx, session)
+		}
+	}()
 	slots := make(chan struct{}, 32)
 	reply := func(raw []byte) {
 		mu.Lock()
@@ -195,10 +203,26 @@ func bridge(ctx context.Context, c *control.Client, in io.Reader, out io.Writer)
 				failure(nil, "invalid JSON-RPC")
 				continue
 			}
+			if req.Method == "initialize" {
+				if session != "" {
+					failure(req.ID, "bridge already initialized")
+					continue
+				}
+				raw, next, err := c.MCP(ctx, "", bytes.NewReader(line))
+				if err != nil {
+					failure(req.ID, err.Error())
+					continue
+				}
+				session = next
+				if len(raw) > 0 {
+					reply(raw)
+				}
+				continue
+			}
 			if len(req.ID) == 0 {
 				// 即使工作槽已满，取消通知也必须能抵达核心。
 				notifyCtx, done := context.WithTimeout(ctx, 5*time.Second)
-				_, _ = c.Request(notifyCtx, "POST", "/admin/mcp", "application/json", bytes.NewReader(line))
+				_, _, _ = c.MCP(notifyCtx, session, bytes.NewReader(line))
 				done()
 				continue
 			}
@@ -211,10 +235,10 @@ func bridge(ctx context.Context, c *control.Client, in io.Reader, out io.Writer)
 				continue
 			}
 			wg.Add(1)
-			go func(line []byte, req mcpserver.Request) {
+			go func(line []byte, req mcpserver.Request, session string) {
 				defer wg.Done()
 				defer func() { <-slots }()
-				raw, err := c.Request(ctx, "POST", "/admin/mcp", "application/json", bytes.NewReader(line))
+				raw, _, err := c.MCP(ctx, session, bytes.NewReader(line))
 				if err != nil {
 					if len(req.ID) > 0 {
 						failure(req.ID, err.Error())
@@ -224,7 +248,7 @@ func bridge(ctx context.Context, c *control.Client, in io.Reader, out io.Writer)
 				if len(raw) > 0 {
 					reply(raw)
 				}
-			}(line, req)
+			}(line, req, session)
 		}
 	}
 }

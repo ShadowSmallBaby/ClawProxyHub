@@ -1,12 +1,14 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -33,6 +35,13 @@ type credential struct {
 }
 type policyKey struct{}
 
+type sessionState struct {
+	credential string
+	used       time.Time
+	ctx        context.Context
+	cancel     context.CancelFunc
+}
+
 // Managed 与核心同进程，密钥及授权存数据库；变更与请求注册串行，撤销立即取消现有请求。
 type Managed struct {
 	db       *gorm.DB
@@ -41,10 +50,11 @@ type Managed struct {
 	mu       sync.Mutex
 	next     uint64
 	active   map[uint64]context.CancelFunc
+	sessions map[string]sessionState
 }
 
 func NewManager(db *gorm.DB, registry *action.Registry) *Managed {
-	m := &Managed{db: db, registry: registry, active: map[uint64]context.CancelFunc{}}
+	m := &Managed{db: db, registry: registry, active: map[uint64]context.CancelFunc{}, sessions: map[string]sessionState{}}
 	m.server = NewManaged(registry, func(ctx context.Context, _ action.Principal, id string) bool {
 		allowed, _ := ctx.Value(policyKey{}).([]string)
 		return slices.Contains(allowed, id)
@@ -86,6 +96,10 @@ func (m *Managed) state(ctx context.Context, subject string) (State, error) {
 	return state, err
 }
 func (m *Managed) cancelActive() {
+	for _, session := range m.sessions {
+		session.cancel()
+	}
+	clear(m.sessions)
 	for _, cancel := range m.active {
 		cancel()
 	}
@@ -171,6 +185,24 @@ func (m *Managed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	digest := sha256.Sum256([]byte(token))
 	hash := hex.EncodeToString(digest[:])
+	session := r.Header.Get("Mcp-Session-Id")
+	var initialize bool
+	if session == "" && r.Method == http.MethodPost {
+		raw, err := io.ReadAll(io.LimitReader(r.Body, action.MaxJSONBytes+1))
+		if err != nil || len(raw) > action.MaxJSONBytes {
+			http.Error(w, "MCP request too large", 413)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		var req Request
+		var params struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		if json.Unmarshal(raw, &req) == nil && req.JSONRPC == "2.0" && req.Method == "initialize" {
+			_, validID := requestID(req.ID)
+			initialize = validID && json.Unmarshal(req.Params, &params) == nil && params.ProtocolVersion != ""
+		}
+	}
 	m.mu.Lock()
 	var key credential
 	err := m.db.WithContext(r.Context()).Table("mcp_credentials").Where("token_hash = ?", hash).Take(&key).Error
@@ -188,7 +220,53 @@ func (m *Managed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "MCP service is disabled", 503)
 		return
 	}
+	now := time.Now()
+	for id, state := range m.sessions {
+		if now.Sub(state.used) > 24*time.Hour {
+			delete(m.sessions, id)
+			state.cancel()
+		}
+	}
+	if session == "" {
+		if !initialize || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") ||
+			(r.Header.Get("MCP-Protocol-Version") != "" && r.Header.Get("MCP-Protocol-Version") != Protocol) {
+			m.mu.Unlock()
+			http.Error(w, "initialize a MCP session first", 400)
+			return
+		}
+		if len(m.sessions) >= 1024 {
+			m.mu.Unlock()
+			http.Error(w, "too many MCP sessions", 503)
+			return
+		}
+		var random [32]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			m.mu.Unlock()
+			http.Error(w, "cannot create MCP session", 500)
+			return
+		}
+		session = hex.EncodeToString(random[:])
+		sessionCtx, sessionCancel := context.WithCancel(context.Background())
+		m.sessions[session] = sessionState{credential: hash, ctx: sessionCtx, cancel: sessionCancel}
+		w.Header().Set("Mcp-Session-Id", session)
+	} else if existing, ok := m.sessions[session]; !ok || existing.credential != hash {
+		m.mu.Unlock()
+		http.Error(w, "MCP session not found", 404)
+		return
+	}
+	if r.Method == http.MethodDelete {
+		m.sessions[session].cancel()
+		delete(m.sessions, session)
+		m.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	currentSession := m.sessions[session]
+	currentSession.used = now
+	m.sessions[session] = currentSession
 	ctx, cancel := context.WithCancel(context.WithValue(r.Context(), policyKey{}, state.AllowedActions))
+	stopSessionCancel := context.AfterFunc(currentSession.ctx, cancel)
+	defer stopSessionCancel()
 	m.next++
 	id := m.next
 	m.active[id] = cancel
@@ -210,5 +288,5 @@ func (m *Managed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	defer func() { cancel(); m.mu.Lock(); delete(m.active, id); m.mu.Unlock() }()
-	m.server.HTTP(w, r.WithContext(ctx), action.Principal{Subject: key.Username, Role: "admin"}, hash)
+	m.server.HTTP(w, r.WithContext(ctx), action.Principal{Subject: key.Username, Role: "admin"}, session)
 }
