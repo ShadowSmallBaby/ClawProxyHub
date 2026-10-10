@@ -4,13 +4,13 @@
 
 ## 技术栈
 
-Vue 3 `<script setup>` + TypeScript + Vite + TDesign Vue Next（全量注册）+ vue-i18n（zh/en）+ pinia + echarts（Dashboard）。桌面核心将 `build-web/` 经 `go:embed` 嵌入 Go 二进制；App 工作台资源交给原生宿主，配置定义于根 `build-config.json`。
+Vue 3 `<script setup>` + TypeScript + Vite + TDesign Vue Next（构建时按需导入）+ vue-i18n（zh/en）+ pinia + echarts（Dashboard）。桌面核心将 `build-web/` 经 `go:embed` 嵌入 Go 二进制；App 工作台资源交给原生宿主，配置定义于根 `build-config.json`。
 
 ## 目录结构
 
 ```
 src/
-  main.ts            入口（TDesign 全量注册 + theme.css）
+  main.ts            入口（应用初始化 + theme.css）
   App.vue
   api/               API 分域层（视图禁止直连 /admin）
     client.ts        仅核心请求器 + token 管理（JWT Bearer、401 跳登录）
@@ -64,4 +64,6 @@ npx vite dev           # 开发（5173，代理 /admin /v1 /assets 到 127.0.0.1
 
 支持 `web-full/app-full`，使用 `pnpm run build:profiles` 完成类型检查和两种产物构建。构建需 Python 3.11+ 读取根 `project.toml`。两者均保留网关、路由、账号和任务入口；Web 发行预配 Lua 编辑器，App 不预配。App 不携带业务插件管理页，插件操作由 Android 原生页负责。编辑器位于独立 `extensions/lua-editor`，主 Web 通过扩展贡献入口与沙箱桥调用，避免重复编入 CodeMirror。
 
-`vite.config.ts` manualChunks：vue / tdesign / echarts / vendor 独立 chunk。改业务代码不应触碰这些 chunk 的哈希；新增大型第三方依赖时评估是否归入 vendor。
+`vite.config.ts` 使用 `unplugin-vue-components` 的 TDesign resolver，只按模板使用导入 `t-*` 组件；本地组件仍经统一出口显式引用。
+
+`vite.config.ts` manualChunks：vue / echarts / vendor 独立 chunk，TDesign 跟随页面实际依赖自动拆分；新增大型第三方依赖时评估加载与缓存边界。
