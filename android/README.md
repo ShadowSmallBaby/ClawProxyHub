@@ -82,6 +82,7 @@ adb -s <serial> shell am instrument -w -e native fixture github.shadowbaby.clawp
 
 | 参数 | 内容 |
 | --- | --- |
+| `-e native binder` | 测试插件模拟原生初始化/关闭阻塞，验证限时返回、私有进程及槽位回收、重新加载 |
 | `-e onboarding true` | 初始化、自选凭据、Lua 上传与重启持久化 |
 | `-e workspace true` | Keystore、连接隔离、地址变更、仅远程模式与市场过滤 |
 | `-e market true` | 只读检查市场中的 Lua 包及设备运行时状态，不初始化核心或修改用户设置 |

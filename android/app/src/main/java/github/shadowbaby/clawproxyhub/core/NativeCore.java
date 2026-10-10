@@ -231,20 +231,27 @@ public final class NativeCore {
     zip.closeEntry();
   }
 
+  private static final ExecutorService calls =
+      new ThreadPoolExecutor(0, 40, 30, TimeUnit.SECONDS, new SynchronousQueue<>());
+
   private static final class Connection implements ServiceConnection {
     final String name;
     final int slot;
-    final CompletableFuture<Void> dead = new CompletableFuture<>();
     final boolean lua;
     final java.io.File bundle;
+    final String runtimeArchive;
     final String protocol;
     final CompletableFuture<IBinder> ready = new CompletableFuture<>();
+    final CompletableFuture<Void> dead = new CompletableFuture<>();
     final IBinder owner = new Binder();
-    IBinder service;
-    long remote;
+    final java.util.concurrent.atomic.AtomicBoolean closed =
+        new java.util.concurrent.atomic.AtomicBoolean();
+    volatile IBinder service;
     volatile boolean bound;
     boolean slotReleased;
-    final String runtimeArchive;
+    int pid;
+    long remote;
+    boolean failed;
 
     Connection(String name, boolean lua, java.io.File bundle, String runtimeArchive) {
       this.name = name;
@@ -258,6 +265,17 @@ public final class NativeCore {
               : "github.shadowbaby.clawproxyhub.plugin.v1";
     }
 
+    private <T> T call(Callable<T> action, long timeout) throws Exception {
+      Future<T> pending = calls.submit(action);
+      try {
+        return pending.get(timeout, TimeUnit.MILLISECONDS);
+      } catch (Exception error) {
+        failed = true;
+        pending.cancel(true);
+        throw error;
+      }
+    }
+
     long[] open(long id) throws Exception {
       Intent intent =
           new Intent()
@@ -267,51 +285,83 @@ public final class NativeCore {
                       lua
                           ? "github.shadowbaby.clawproxyhub.lua.LuaService"
                               + (runtimeArchive == null ? "" : "$Probe")
-                          : "github.shadowbaby.clawproxyhub.plugin.PluginService$Worker" + slot))
-              .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+                          : "github.shadowbaby.clawproxyhub.plugin.PluginService$Worker" + slot));
       bound = context.bindService(intent, this, Context.BIND_AUTO_CREATE);
       if (!bound) throw new IllegalStateException("plugin bind failed");
       service = ready.get(10, TimeUnit.SECONDS);
-      service.linkToDeath(
-          () -> {
-            dead.complete(null);
-            if (!bound) releaseWorker();
-          },
-          0);
-      ParcelFileDescriptor[] requests = ParcelFileDescriptor.createSocketPair(),
-          callbacks = ParcelFileDescriptor.createSocketPair();
+      pid =
+          call(
+              () -> {
+                Parcel request = Parcel.obtain(), reply = Parcel.obtain();
+                try {
+                  request.writeInterfaceToken(protocol);
+                  if (!service.transact(IBinder.FIRST_CALL_TRANSACTION + 2, request, reply, 0))
+                    throw new IllegalStateException("missing plugin worker identity");
+                  reply.readException();
+                  return reply.readInt();
+                } finally {
+                  request.recycle();
+                  reply.recycle();
+                }
+              },
+              5000);
+      if (pid <= 0 || pid == android.os.Process.myPid())
+        throw new SecurityException("plugin requires a private process");
+      ParcelFileDescriptor[] requests = ParcelFileDescriptor.createSocketPair();
       try (ParcelFileDescriptor a = requests[0];
-          ParcelFileDescriptor b = requests[1];
-          ParcelFileDescriptor c = callbacks[0];
-          ParcelFileDescriptor d = callbacks[1]) {
-        Parcel request = Parcel.obtain(), reply = Parcel.obtain();
-        try {
-          request.writeInterfaceToken(protocol);
-          request.writeStrongBinder(owner);
-          b.writeToParcel(request, 0);
-          d.writeToParcel(request, 0);
-          if (lua) {
-            try (ParcelFileDescriptor scripts =
-                ParcelFileDescriptor.open(bundle, ParcelFileDescriptor.MODE_READ_ONLY)) {
-              scripts.writeToParcel(request, 0);
-            }
-            if (runtimeArchive != null) request.writeString(runtimeArchive);
-          } else request.writeString(name);
-          if (!service.transact(IBinder.FIRST_CALL_TRANSACTION, request, reply, 0))
-            throw new IllegalStateException("unsupported plugin protocol");
-          reply.readException();
-          remote = reply.readLong();
+          ParcelFileDescriptor b = requests[1]) {
+        ParcelFileDescriptor[] callbacks = ParcelFileDescriptor.createSocketPair();
+        try (ParcelFileDescriptor c = callbacks[0];
+            ParcelFileDescriptor d = callbacks[1]) {
+          remote =
+              call(
+                  () -> {
+                    Parcel request = Parcel.obtain(), reply = Parcel.obtain();
+                    try {
+                      request.writeInterfaceToken(protocol);
+                      request.writeStrongBinder(owner);
+                      b.writeToParcel(request, 0);
+                      d.writeToParcel(request, 0);
+                      if (lua) {
+                        try (ParcelFileDescriptor scripts =
+                            ParcelFileDescriptor.open(
+                                bundle, ParcelFileDescriptor.MODE_READ_ONLY)) {
+                          scripts.writeToParcel(request, 0);
+                        }
+                        if (runtimeArchive != null) request.writeString(runtimeArchive);
+                      } else request.writeString(name);
+                      if (!service.transact(IBinder.FIRST_CALL_TRANSACTION, request, reply, 0))
+                        throw new IllegalStateException("unsupported plugin protocol");
+                      reply.readException();
+                      return reply.readLong();
+                    } finally {
+                      request.recycle();
+                      reply.recycle();
+                    }
+                  },
+                  10000);
           if (remote == 0) throw new IllegalStateException("empty plugin session");
           return new long[] {a.detachFd(), c.detachFd(), id};
-        } finally {
-          request.recycle();
-          reply.recycle();
         }
       }
     }
 
-    public void onServiceConnected(ComponentName name, IBinder binder) {
-      ready.complete(binder);
+    public synchronized void onServiceConnected(ComponentName name, IBinder binder) {
+      if (closed.get()) return;
+      service = binder;
+      try {
+        binder.linkToDeath(
+            () -> {
+              dead.complete(null);
+              if (!bound) releaseWorker();
+            },
+            0);
+        ready.complete(binder);
+      } catch (RemoteException error) {
+        dead.complete(null);
+        ready.completeExceptionally(error);
+        if (!bound) releaseWorker();
+      }
     }
 
     public void onServiceDisconnected(ComponentName name) {
@@ -333,35 +383,49 @@ public final class NativeCore {
       }
     }
 
-    void close() {
-      if (service != null && remote != 0 && service.isBinderAlive()) {
-        Parcel request = Parcel.obtain(), reply = Parcel.obtain();
+    synchronized void close() {
+      if (!closed.compareAndSet(false, true)) return;
+      if (service != null && remote != 0 && service.isBinderAlive() && !failed) {
         try {
-          request.writeInterfaceToken(protocol);
-          request.writeLong(remote);
-          service.transact(IBinder.FIRST_CALL_TRANSACTION + 1, request, reply, 0);
+          call(
+              () -> {
+                Parcel request = Parcel.obtain(), reply = Parcel.obtain();
+                try {
+                  request.writeInterfaceToken(protocol);
+                  request.writeLong(remote);
+                  if (!service.transact(IBinder.FIRST_CALL_TRANSACTION + 1, request, reply, 0))
+                    throw new IllegalStateException("unsupported plugin close");
+                  reply.readException();
+                  return null;
+                } finally {
+                  request.recycle();
+                  reply.recycle();
+                }
+              },
+              500);
         } catch (Exception ignored) {
-        } finally {
-          request.recycle();
-          reply.recycle();
+          failed = true;
         }
       }
       if (bound) {
         bound = false;
         context.unbindService(this);
       }
-      if (!lua
-          || runtimeArchive != null
-          || connections.values().stream().noneMatch(c -> c.lua && c.runtimeArchive == null)) {
-        if (service == null) releaseWorker();
-        else {
-          try {
-            dead.get(2, TimeUnit.SECONDS);
-          } catch (Exception ignored) {
-          }
-          if (dead.isDone()) releaseWorker();
+      boolean last =
+          !lua
+              || runtimeArchive != null
+              || connections.values().stream().noneMatch(c -> c.lua && c.runtimeArchive == null);
+      // 超时后终止整个私有进程，迟到调用及其 FD 一并撤销；共享 Lua 会话通过断开的 socket 感知失败。
+      if (service != null && (failed || last)) {
+        if (pid > 0 && pid != android.os.Process.myPid() && service.isBinderAlive())
+          android.os.Process.killProcess(pid);
+        try {
+          dead.get(2, TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+          /* 死亡回调继续负责回收。 */
         }
       }
+      if (service == null || dead.isDone() || !service.isBinderAlive()) releaseWorker();
       if (bundle != null) bundle.delete();
     }
   }

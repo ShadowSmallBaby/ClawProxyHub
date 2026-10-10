@@ -14,7 +14,7 @@ final class NativePluginChecks {
         Context context = test.getTargetContext();
         android.content.SharedPreferences preferences = context.getSharedPreferences("native-plugins", 0);
         java.util.Map<String, ?> saved = preferences.getAll();
-        boolean fixture = "fixture".equals(phase);
+        boolean fixture = "fixture".equals(phase) || "binder".equals(phase);
         File source = fixture ? File.createTempFile("native-test-", ".cphplugin", context.getCacheDir()) : new File(context.getCacheDir(), "plugin.cphplugin");
         try {
             if (fixture) {
@@ -26,6 +26,10 @@ final class NativePluginChecks {
             android.content.SharedPreferences.Editor edit = preferences.edit();
             for (String key : saved.keySet()) if (key.startsWith("current:")) edit.putBoolean("enabled:" + key.substring(8), false);
             if (!edit.commit()) throw new AssertionError("Cannot isolate plugin verification");
+            if ("binder".equals(phase)) {
+                new NativePluginStore(context).install(Uri.fromFile(source));
+                return NativeBinderChecks.run(context);
+            }
             return verify(test, fixture ? "lifecycle" : phase, fixture ? "androidtest" : expected, source);
         } finally {
             NativeCore.decode(NativeCore.stop()); CoreState.started = false;

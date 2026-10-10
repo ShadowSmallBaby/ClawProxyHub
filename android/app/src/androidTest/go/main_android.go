@@ -10,6 +10,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk"
 	"github.com/ShadowSmallBaby/ClawProxyHub/sdk/androidplugin"
@@ -39,6 +41,7 @@ func CPHInitializePlugin(directory *C.char) C.int {
 	if err := os.Setenv("TMPDIR", path); err != nil {
 		return 0
 	}
+	stall("stall-open")
 	return 1
 }
 
@@ -53,6 +56,18 @@ func CPHOpenPlugin(requestFD, callbackFD C.int) C.longlong {
 }
 
 //export CPHClosePlugin
-func CPHClosePlugin(id C.longlong) { androidplugin.Close(int64(id)) }
+func CPHClosePlugin(id C.longlong) {
+	stall("stall-close")
+	androidplugin.Close(int64(id))
+}
+
+// 仅测试库通过标记文件模拟无法响应取消的原生调用。
+func stall(marker string) {
+	if _, err := os.Stat(filepath.Join(os.Getenv("TMPDIR"), marker)); err == nil {
+		for {
+			time.Sleep(time.Second)
+		}
+	}
+}
 
 func main() {}

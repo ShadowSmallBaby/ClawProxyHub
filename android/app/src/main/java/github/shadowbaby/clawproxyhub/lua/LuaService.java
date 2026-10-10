@@ -43,6 +43,11 @@ public class LuaService extends Service {
                 throw new SecurityException("untrusted plugin host");
             }
             data.enforceInterface(PROTOCOL);
+            if (code == FIRST_CALL_TRANSACTION + 2) {
+                reply.writeNoException();
+                reply.writeInt(android.os.Process.myPid());
+                return true;
+            }
             if (code == FIRST_CALL_TRANSACTION) {
                 IBinder owner = data.readStrongBinder();
                 if (owner == null) throw new IllegalArgumentException("missing session owner");

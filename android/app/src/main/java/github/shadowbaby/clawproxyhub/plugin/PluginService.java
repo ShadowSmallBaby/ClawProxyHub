@@ -27,6 +27,11 @@ public class PluginService extends Service {
             if (code == INTERFACE_TRANSACTION) { reply.writeString(PROTOCOL); return true; }
             if (Binder.getCallingUid() != android.os.Process.myUid()) throw new SecurityException("Private application service");
             data.enforceInterface(PROTOCOL);
+            if (code == FIRST_CALL_TRANSACTION + 2) {
+                reply.writeNoException();
+                reply.writeInt(android.os.Process.myPid());
+                return true;
+            }
             if (code == FIRST_CALL_TRANSACTION) {
                 IBinder owner = data.readStrongBinder();
                 if (owner == null) throw new IllegalArgumentException("missing session owner");
